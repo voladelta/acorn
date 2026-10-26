@@ -25,7 +25,7 @@ pub const KEY_VAR: &str = "DEEPSEEK_API_KEY";
 pub struct Config {
     /// $ACORN_DIR: config.json, the computer helper.
     pub dir: PathBuf,
-    /// Where the chats live, a dir each by id, and the one Acorn opens.
+    /// Where the chats live, a dir each by id, and Acorn's.
     pub chats: PathBuf,
     pub chat: String,
     /// Where the agents' tools work: work/main (Acorn), work/<Name>.
@@ -93,10 +93,6 @@ impl Config {
             chat,
             dir,
         })
-    }
-
-    pub fn chat_dir(&self) -> PathBuf {
-        self.chats.join(&self.chat)
     }
 }
 

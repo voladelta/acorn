@@ -14,6 +14,7 @@ use crate::{Block, Kind, Served, clip, computer, config, machine};
 use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use tokio_util::sync::CancellationToken;
 
@@ -48,6 +49,8 @@ pub fn report_text(name: &str, text: &str) -> String {
 /// A caller's tools: Acorn's (`who` MAIN) or an agent's.
 pub struct Kit {
     engine: Weak<Engine>,
+    /// Its assistant's work dir.
+    work: PathBuf,
     who: String,
     hands: bool,
     /// What stops the turn the call serves (an agent's view waits on it).
@@ -56,21 +59,21 @@ pub struct Kit {
 
 impl Toolbox for Kit {
     fn specs(&self) -> Vec<Spec> {
-        tools::list(&self.who, self.hands)
+        tools::list(&self.work, &self.who, self.hands)
     }
 
     fn call(&self, name: String, input: Value, cancel: CancellationToken) -> BoxFuture<'static, Out> {
-        let (engine, who, hands, halt) = (self.engine.clone(), self.who.clone(), self.hands, self.halt.clone());
+        let (engine, cwd, hands, halt) = (self.engine.clone(), self.work.join(&self.who), self.hands, self.halt.clone());
         async move {
             let Some(engine) = engine.upgrade() else { return Out::fail("Acorn quit.") };
-            engine.tool(&who, hands, &name, input, cancel, halt).await
+            engine.tool(cwd, hands, &name, input, cancel, halt).await
         }
         .boxed()
     }
 }
 
 impl Engine {
-    async fn tool(self: Arc<Self>, who: &str, hands: bool, name: &str, input: Value, cancel: CancellationToken, halt: CancellationToken) -> Out {
+    async fn tool(self: Arc<Self>, cwd: PathBuf, hands: bool, name: &str, input: Value, cancel: CancellationToken, halt: CancellationToken) -> Out {
         let num = |k: &str, def: u64| input[k].as_u64().unwrap_or(def);
         match name {
             "zoom" => {
@@ -104,9 +107,24 @@ impl Engine {
                 let str = |k: &str| input[k].as_str().unwrap_or_default().to_string();
                 Out::ok(self.tell_agent(&str("name"), &str("message")).await)
             }
+            "create_assistant" => {
+                let str = |k: &str| input[k].as_str().unwrap_or_default().to_string();
+                let Some(effort) = Effort::parse(&str("effort")) else {
+                    let all: Vec<&str> = crate::pick::EFFORTS.iter().map(|e| e.as_str()).collect();
+                    return Out::fail(format!("No effort {}; one of {}.", input["effort"], all.join(", ")));
+                };
+                match crate::assistant::add(&str("name"), &str("instructions"), effort) {
+                    Ok(made) => {
+                        let said = format!("Created {}, at {} effort; it is in the sidebar.", made.name, effort.as_str());
+                        self.lock().all(Event::Assistant(made));
+                        Out::ok(said)
+                    }
+                    Err(why) => Out::fail(why),
+                }
+            }
             "computer" if hands => computer::act(&input, cancel).await,
             "computer" => self.computer(input["task"].as_str().unwrap_or_default()),
-            _ => machine::run(name, &input, who, cancel).await,
+            _ => machine::run(name, &input, cwd, cancel).await,
         }
     }
 
@@ -220,6 +238,7 @@ impl Chat {
     pub(super) fn kit(&self, agent: Option<&Agent>) -> Arc<dyn Toolbox> {
         Arc::new(Kit {
             engine: self.this.clone(),
+            work: self.me.work(),
             who: agent.map_or(MAIN, |a| a.name.as_str()).to_string(),
             hands: agent.is_some_and(|a| a.role == Role::Hands),
             halt: self.halt.clone(),
@@ -232,7 +251,7 @@ impl Chat {
             Ok(name) => name,
             Err(err) => return format!("(no agent: {err})"),
         };
-        let _ = std::fs::create_dir_all(config::get().work.join(&name));
+        let _ = std::fs::create_dir_all(self.me.work().join(&name));
         let agent = Agent { name: name.clone(), role, call: None, live: vec![], calls: vec![], stop: false, view, replies: vec![] };
         self.agents.insert(name.clone(), agent);
         let note = match role {
@@ -274,7 +293,7 @@ impl Chat {
         let log = Block::new(self.mem.agent_show(name), true);
         let pick = config::get().agents.unwrap_or_else(|| self.pick());
         let (kind, system, effort) = match agent.role {
-            Role::Sub(effort) => (Served::Agent, tools::system(&tools::sub()), effort.unwrap_or(pick.effort)),
+            Role::Sub(effort) => (Served::Agent, tools::system(&tools::sub(&self.me.work())), effort.unwrap_or(pick.effort)),
             Role::Hands => (Served::Computer, tools::system(HANDS), pick.effort),
         };
         let mut blocks = agent.view.clone();

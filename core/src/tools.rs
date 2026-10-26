@@ -1,8 +1,8 @@
 //! Tools
 //! =====
 //! Acorn's prompts and tools. Everyone gets zoom and date (OWN); Acorn
-//! itself spawns and tells agents (BOSS) and starts computer tasks
-//! (HAND); shell, read, write and edit (`machine`) run on this Mac, each
+//! itself spawns and tells agents and creates assistants (BOSS), and
+//! starts computer tasks (HAND); shell, read, write and edit (`machine`) run on this Mac, each
 //! caller in its own dir under the work dir. A computer task's agent gets
 //! only the computer tool. The agents themselves run in `chat::agents`.
 
@@ -11,10 +11,11 @@ use crate::machine::{self, spec};
 use crate::pick::EFFORTS;
 use crate::{config, memory};
 use serde_json::json;
+use std::path::Path;
 
 /// The prompt of Acorn's turns and compactions alike: a call is one or the
 /// other, as its message says.
-pub fn master() -> String {
+pub fn master(work: &Path) -> String {
     format!(
         "You are Acorn, an AI agent that works for one user in a single chat that never
 ends. Each call to you is a turn or a compaction: the view below is followed by
@@ -110,14 +111,14 @@ of at most {node} bytes, dropping the least important bits. Nothing else. Read
 that choice is irrelevant: don't think about it. Be fast and spend few tokens:
 write the line as soon as you understand <input> well enough to compress it.",
         wait = memory::WAIT,
-        mac = mac(),
+        mac = mac(work),
         node = memory::NODE,
     )
 }
 
 /// Where the tools run: this Mac, the work dir, the screen if allowed.
-fn mac() -> String {
-    let work = config::get().work.display();
+fn mac(work: &Path) -> String {
+    let work = work.display();
     let screen = if config::get().computer {
         "computer tasks use its screen, mouse and keyboard"
     } else {
@@ -129,7 +130,7 @@ fn mac() -> String {
 }
 
 /// A subagent's prompt: its part, then the view's and the Mac's docs.
-pub fn sub() -> String {
+pub fn sub(work: &Path) -> String {
     format!(
         "You are a subagent of Acorn, an AI agent that works for one user in a
 single chat that never ends. Acorn gave you a task. Do it yourself, with
@@ -169,7 +170,7 @@ an agent's whole chat.
 
 {mac}",
         wait = memory::WAIT,
-        mac = mac(),
+        mac = mac(work),
     )
 }
 
@@ -213,13 +214,14 @@ fn boss() -> Vec<Spec> {
     let efforts: Vec<&str> = EFFORTS.iter().map(|e| e.as_str()).collect();
     vec![
         spec("spawn", "Start one subagent per task, in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. A subagent sees the view and the user's instructions, but knows what you want only from its task.", json!({"tasks": {"type": "array", "items": {"type": "string"}}, "effort": {"type": "string", "enum": efforts, "description": "How hard they think; by default, as hard as you."}}), &["tasks"]),
+        spec("create_assistant", "Create a new assistant, when the user asks to create or hire one: an assistant of their own, beside you and Max in Acorn's sidebar, with a chat of its own that never ends and its own memory. It is you, Acorn, with its own name, reasoning effort and instructions: its system prompt, after yours. Write the instructions from what the user said (what it helps with, how it works and talks), or use the system prompt they gave word for word. It does not start working; the user opens it from the sidebar.", json!({"name": {"type": "string"}, "effort": {"type": "string", "enum": efforts, "description": "How hard it thinks: low is fast and cheap, max is smartest and slowest; high if the user didn't say."}, "instructions": {"type": "string", "description": "Its system prompt."}}), &["name", "effort", "instructions"]),
         spec("tell", "Send a message to an agent (a subagent or a computer task), by name. One at work reads it between its tool calls, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".", json!({"name": {"type": "string"}, "message": {"type": "string"}}), &["name", "message"]),
     ]
 }
 
 /// The tools that run on this Mac, as one caller's: in its own dir.
-fn kit(who: &str) -> Vec<Spec> {
-    let work = config::get().work.display().to_string();
+fn kit(work: &Path, who: &str) -> Vec<Spec> {
+    let work = work.display().to_string();
     machine::tools().into_iter().map(|t| Spec { info: format!("{} It runs on this Mac, in {work}/{who}.", t.info), ..t }).collect()
 }
 
@@ -228,18 +230,18 @@ fn hand() -> Spec {
 }
 
 /// What a caller may use: Acorn all; a subagent its own and the Mac's; a
-/// computer task its computer tool.
-pub fn list(who: &str, hands: bool) -> Vec<Spec> {
+/// computer task its computer tool. work: its assistant's work dir.
+pub fn list(work: &Path, who: &str, hands: bool) -> Vec<Spec> {
     if hands {
         return vec![crate::computer::spec()];
     }
     let mut specs = own();
     if who == MAIN {
         specs.extend(boss());
-        specs.extend(kit(who));
+        specs.extend(kit(work, who));
         specs.push(hand());
     } else {
-        specs.extend(kit(who));
+        specs.extend(kit(work, who));
     }
     specs
 }

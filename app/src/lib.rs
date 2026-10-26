@@ -1,45 +1,46 @@
 //! Acorn
 //! =====
-//! The window around Acorn's chat (`acorn_core`): the engine runs on the
-//! runtime's threads, the window on its own; the person's acts go to the
-//! model (`model::Model::act`), the engine's events too (`hear`), and both
-//! answer what to send the engine. The page: a header (the name, an
-//! import's progress, the ☰ menu), the chat, and a footer (the pick and
-//! today's cost, the images waiting, the message box, the tabs while
-//! agents work).
+//! The window around the assistants' chats (`acorn_core`): each
+//! assistant's engine runs on the runtime's threads, the window on its
+//! own; the person's acts go to the model (`model::Model::act`), the shown
+//! engine's events too (`hear`), and both answer what to send it. The
+//! page: the sidebar (`side`: the assistants), a header (the sidebar's
+//! button, the assistant's name, an import's progress, the ☰ menu), the
+//! chat, and a footer (today's cost, the images waiting, the message box,
+//! the tabs while agents work).
 
 mod call;
 mod look;
 mod model;
 mod rows;
 mod sheets;
+mod side;
 mod text;
 
+use acorn_core::assistant::Assistant;
 use acorn_core::chat::Engine;
 use acorn_core::import::Found;
-use acorn_core::pick::Move;
-use acorn_core::wire::{Command, Usage};
+use acorn_core::wire::{Command, Event, Usage};
 use look::*;
 use model::{Act, Model, Then};
 use nsh_base::input;
 use nsh_core::prelude::*;
-use std::sync::{LazyLock, OnceLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
-/// Where the window's commands go: the engine.
-static ENGINE: OnceLock<UnboundedSender<Command>> = OnceLock::new();
+/// Where the window's commands go: each assistant's engine, by id.
+static ENGINES: LazyLock<Mutex<HashMap<String, UnboundedSender<Command>>>> = LazyLock::new(Default::default);
+
+/// Where the engines' events go, each by its assistant's id: the window.
+static HEARD: OnceLock<UnboundedSender<(String, Event)>> = OnceLock::new();
 
 /// The engine's threads: its calls, tools and files never hold the
 /// window's.
 static RUNTIME: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Builder::new_multi_thread().enable_all().thread_name("acorn").build().expect("the engine's runtime"));
 
-fn send(cmd: Command) {
-    if let Some(tx) = ENGINE.get() {
-        let _ = tx.send(cmd);
-    }
-}
 
 /// A box over the page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,12 +51,17 @@ pub enum Sheet {
     Import,
 }
 
-/// What every part of the window shares: the model, the box over the
-/// page, the notes shown, what the usage and import boxes show, the
-/// clock their times read.
+/// What every part of the window shares: the model (of the chat shown),
+/// the assistants, the one shown, those at work, whether the sidebar
+/// shows, the box over the page, the notes shown, what the usage and
+/// import boxes show, the clock their times read.
 #[derive(Clone, Copy)]
 pub struct Ui {
     pub model: Signal<Model>,
+    pub assistants: Signal<Vec<Assistant>>,
+    pub shown: Signal<String>,
+    pub working: Signal<HashSet<String>>,
+    pub side: Signal<bool>,
     pub sheet: Signal<Sheet>,
     pub toast: Signal<Option<String>>,
     pub usage: Signal<Option<Vec<Usage>>>,
@@ -71,8 +77,39 @@ impl Ui {
         self.then(then);
     }
 
+    /// A command to the shown assistant's engine.
+    pub fn send(self, cmd: Command) {
+        let shown = self.shown.get_untracked();
+        if let Some(tx) = ENGINES.lock().unwrap().get(&shown) {
+            let _ = tx.send(cmd);
+        }
+    }
+
+    /// The assistant shown.
+    pub fn me(self) -> Assistant {
+        let shown = self.shown.get();
+        self.assistants.with(|all| all.iter().find(|a| a.id == shown).cloned()).unwrap_or_else(Assistant::acorn)
+    }
+
+    /// An assistant's chat shown, from scratch: its engine tells it all
+    /// anew. The one shown again: back to its chat.
+    pub fn show(self, id: String) {
+        if self.shown.get_untracked() == id {
+            self.act(Act::Goto(None));
+            return;
+        }
+        self.shown.set(id);
+        self.model.set(Model::default());
+        self.sheet.set(Sheet::None);
+        self.usage.set(None);
+        self.found.set(None);
+        self.send(Command::Attach);
+    }
+
     fn then(self, then: Then) {
-        then.cmds.into_iter().for_each(send);
+        for cmd in then.cmds {
+            self.send(cmd);
+        }
         if let Some(note) = then.notes.into_iter().last() {
             self.note(note);
         }
@@ -99,8 +136,13 @@ impl Ui {
 /// The window's root.
 #[component]
 pub fn App() -> impl IntoElement {
+    let assistants = acorn_core::assistant::all();
     let ui = Ui {
         model: signal_with(Model::default(), SignalEquals::Never),
+        assistants: signal(assistants.clone()),
+        shown: signal(assistants[0].id.clone()),
+        working: signal(HashSet::new()),
+        side: signal(true),
         sheet: signal(Sheet::None),
         toast: signal(None),
         usage: signal(None),
@@ -108,43 +150,55 @@ pub fn App() -> impl IntoElement {
         now: signal(acorn_core::now_ms()),
     };
     provide_context(ui);
-    start(ui);
+    hear(ui);
+    for me in assistants {
+        start(me);
+    }
+    ui.send(Command::Attach);
     set_interval(Duration::from_secs(60), move || ui.now.set(acorn_core::now_ms()));
     keys(ui);
     view()
         .flex_1()
+        .flex_row()
         .bg(paper())
         .text_color(ink())
         .on_file_drop(move |e: &FileDropEvent| sheets::dropped(ui, e))
-        .child(header(ui))
-        .child(rows::chat(ui))
-        .child(footer(ui))
+        .child(side::bar(ui))
+        .child(view().flex_1().child(header(ui)).child(rows::chat(ui)).child(footer(ui)))
         .child(sheets::sheet(ui))
 }
 
-/// The engine, started on the runtime's threads, its events heard here.
-fn start(ui: Ui) {
-    let (cmds, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (events, mut heard) = tokio::sync::mpsc::unbounded_channel();
-    if ENGINE.set(cmds).is_err() {
+/// The engines' events, heard as long as the window: whether each works,
+/// an assistant one made (listed, started), its notes (named), always;
+/// the rest, of the one shown.
+fn hear(ui: Ui) {
+    let (tx, mut heard) = tokio::sync::mpsc::unbounded_channel::<(String, Event)>();
+    if HEARD.set(tx).is_err() {
         return;
     }
-    let failed = events.clone();
-    RUNTIME.spawn(async move {
-        match Engine::start(events) {
-            Ok(engine) => {
-                engine.attach();
-                while let Some(cmd) = rx.recv().await {
-                    engine.command(cmd);
+    spawn(async move {
+        while let Some((id, ev)) = heard.recv().await {
+            if let Event::State(s) = &ev {
+                let works = s.busy || !s.agents.is_empty();
+                if works != ui.working.with_untracked(|w| w.contains(&id)) {
+                    ui.working.update(|w| {
+                        let _ = if works { w.insert(id.clone()) } else { w.remove(&id) };
+                    });
                 }
             }
-            Err(err) => {
-                let _ = failed.send(acorn_core::wire::Event::Note(format!("Acorn can't open its chat: {err:#}")));
+            if let Event::Assistant(made) = ev {
+                ui.assistants.update(|all| all.push(made.clone()));
+                start(made);
+                continue;
             }
-        }
-    });
-    spawn(async move {
-        while let Some(ev) = heard.recv().await {
+            if ui.shown.get_untracked() != id {
+                // a hidden one's note (it can't open its chat), still shown
+                if let Event::Note(text) = ev {
+                    let name = ui.assistants.with_untracked(|all| all.iter().find(|a| a.id == id).map(|a| a.name.clone())).unwrap_or(id);
+                    ui.note(format!("{name}: {text}"));
+                }
+                continue;
+            }
             let mut then = Then::default();
             ui.model.update(|m| then = m.hear(ev));
             ui.then(then);
@@ -152,9 +206,44 @@ fn start(ui: Ui) {
     });
 }
 
-/// The keys: Esc interrupts Acorn's turn (agents go on); Shift+Up and
-/// Shift+Down move the effort; Ctrl+Tab goes to the next tab; Cmd+Shift+F
-/// folds the chat, and again unfolds it.
+/// An assistant's engine, started on the runtime's threads (once), its
+/// events to the window, named by its id.
+pub fn start(me: Assistant) {
+    let (cmds, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (events, mut told) = tokio::sync::mpsc::unbounded_channel();
+    let Some(heard) = HEARD.get().cloned() else { return };
+    let id = me.id.clone();
+    {
+        let mut engines = ENGINES.lock().unwrap();
+        if engines.contains_key(&id) {
+            return;
+        }
+        engines.insert(id.clone(), cmds);
+    }
+    RUNTIME.spawn(async move {
+        while let Some(ev) = told.recv().await {
+            let _ = heard.send((id.clone(), ev));
+        }
+    });
+    let failed = events.clone();
+    RUNTIME.spawn(async move {
+        let name = me.name.clone();
+        match Engine::start(me, events) {
+            Ok(engine) => {
+                while let Some(cmd) = rx.recv().await {
+                    engine.command(cmd);
+                }
+            }
+            Err(err) => {
+                let _ = failed.send(Event::Note(format!("{name} can't open its chat: {err:#}")));
+            }
+        }
+    });
+}
+
+/// The keys: Esc interrupts the assistant's turn (agents go on); Ctrl+Tab
+/// goes to the next tab; Cmd+Shift+F folds the chat, and again unfolds
+/// it; Cmd+B hides the sidebar, and again shows it.
 fn keys(ui: Ui) {
     on_key("escape", move |_| {
         if ui.sheet.get_untracked() != Sheet::None {
@@ -163,8 +252,6 @@ fn keys(ui: Ui) {
             ui.act(Act::Send { text: String::new(), images: vec![] });
         }
     });
-    on_key("shift+up", move |_| ui.act(Act::Move(Move::Up)));
-    on_key("shift+down", move |_| ui.act(Act::Move(Move::Down)));
     on_key("ctrl+tab", move |_| {
         let tabs = ui.model.with_untracked(|m| m.tabs());
         let at = ui.model.with_untracked(|m| tabs.iter().position(|t| *t == m.page).map_or(0, |k| k + 1));
@@ -174,27 +261,31 @@ fn keys(ui: Ui) {
         let folded = ui.model.with_untracked(|m| m.fold.is_some());
         ui.act(Act::Fold(!folded));
     });
+    on_key("mod+b", move |_| ui.side.update(|s| *s = !*s));
 }
 
-/// The name (back to Acorn's chat), an import's progress, the menu.
+/// The sidebar's button, the assistant's name and effort (back to its
+/// chat), an import's progress, the menu.
 fn header(ui: Ui) -> impl IntoElement {
     let importing = move || ui.model.with(|m| m.state.as_ref().and_then(|s| s.importing.clone()));
+    let effort = move || ui.model.with(|m| m.pick().map(|p| format!("{} effort", p.label())).unwrap_or_default());
     view()
         .flex_row()
         .items_center()
-        .gap_2()
+        .gap_3()
         .h(px(52.0))
         .px_5()
         .border_b_1()
         .border_color(hair())
+        .child(chip(|| "◧".to_string(), move || ui.side.update(|s| *s = !*s)).tooltip(hint("Hide or show the assistants (⌘B)")))
         .child(
             view()
                 .flex_row()
-                .items_center()
+                .items_baseline()
                 .gap_2()
                 .on_press(move || ui.act(Act::Goto(None)))
-                .child(text("🌰").text_size(px(20.0)))
-                .child(text("Acorn").font_family(BRAND).text_size(px(20.0)).font_weight(FontWeight::SEMIBOLD)),
+                .child(text(move || ui.me().name).font_family(BRAND).text_size(px(18.0)).font_weight(FontWeight::SEMIBOLD))
+                .child(text(effort).text_size(px(12.5)).text_color(mid()).tooltip(hint(move || ui.model.with(|m| m.pick().map(|p| p.effort.hint()).unwrap_or_default())))),
         )
         .child(view().flex_1())
         .child(when(move || importing().is_some(), move || {
@@ -209,7 +300,7 @@ pub fn hint(t: impl IntoReactive<SharedString>) -> AnyElement {
 }
 
 /// A gray button of the header.
-fn chip(label: impl Fn() -> String + 'static, press: impl Fn() + 'static) -> impl IntoElement {
+fn chip(label: impl Fn() -> String + 'static, press: impl Fn() + 'static) -> View {
     view()
         .h(px(32.0))
         .px_3()
@@ -221,7 +312,7 @@ fn chip(label: impl Fn() -> String + 'static, press: impl Fn() + 'static) -> imp
         .child(text(label).text_size(px(13.5)).font_weight(FontWeight::MEDIUM))
 }
 
-/// The note shown, the pick and today's cost, the images waiting, the
+/// The note shown, today's cost, the images waiting, the
 /// message box, the tabs.
 fn footer(ui: Ui) -> impl IntoElement {
     let images = signal(Vec::<Vec<u8>>::new());
@@ -245,33 +336,21 @@ fn footer(ui: Ui) -> impl IntoElement {
                         .on_press(move || ui.toast.set(None))
                         .child(text(move || ui.toast.get().unwrap_or_default()).text_color(paper()).text_size(px(13.5)))
                 }))
-                .child(pick_row(ui))
+                .child(cost_row(ui))
                 .child(rows::pending(images))
                 .child(composer(ui, images))
                 .child(tabs(ui)),
         )
 }
 
-/// A rule, then the effort (a click moves it), then today's cost (a
-/// click: the last days).
-fn pick_row(ui: Ui) -> impl IntoElement {
-    let effort = move || ui.model.with(|m| m.pick().map(|p| p.label().to_string()).unwrap_or_default());
+/// Today's cost, at the right (a click: the last days).
+fn cost_row(ui: Ui) -> impl IntoElement {
     let today = move || ui.model.with(|m| m.state.as_ref().and_then(|s| s.today).filter(|t| t.n > 0).map(|t| format!("{} today", text::usd_show(t.usd))));
     view()
         .flex_row()
         .items_center()
         .gap_2()
-        .child(view().flex_1().h(px(1.0)).bg(hair()))
-        .child(
-            text(effort)
-                .text_size(px(12.5))
-                .text_color(mid())
-                .px_1()
-                .rounded(px(6.0))
-                .hover(|s| s.bg(block()))
-                .tooltip(hint(move || ui.model.with(|m| m.pick().map(|p| p.effort.hint()).unwrap_or_default())))
-                .on_press(move || ui.act(Act::Move(Move::Around))),
-        )
+        .child(view().flex_1())
         .child(when(move || today().is_some(), move || {
             text(move || today().unwrap_or_default())
                 .text_size(px(12.5))
@@ -281,7 +360,7 @@ fn pick_row(ui: Ui) -> impl IntoElement {
                     ui.model.with(|m| m.state.as_ref().and_then(|s| s.today).map(|t| format!("{}\nAll of today's calls: replies, summaries, agents. Click for the last days.", text::use_hint(&t))).unwrap_or_default())
                 }))
                 .on_press(move || {
-                    send(Command::Usage);
+                    ui.send(Command::Usage);
                     ui.sheet.set(Sheet::Usage);
                 })
         }))
@@ -326,7 +405,7 @@ fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
         .child(
             input()
                 .element_ref(&field)
-                .label("Message Acorn")
+                .label("Message")
                 .flex_1()
                 .multiline(true)
                 .auto_focus(true)
@@ -337,7 +416,7 @@ fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
                 .paste_behavior(PasteBehavior::Insert)
                 .on_paste(move |e: &PasteEvent| rows::pasted(images, e))
                 .readonly(move || !typing())
-                .placeholder(move || if typing() { "Message Acorn".to_string() } else { "Commands only: the ☰ menu".to_string() })
+                .placeholder(move || if typing() { format!("Message {}", ui.me().name) } else { "Commands only: the ☰ menu".to_string() })
                 .placeholder_color(move || color(soft()))
                 .text_color(ink())
                 .text_size(px(16.0))
@@ -362,11 +441,12 @@ fn tabs(ui: Ui) -> impl IntoElement {
     when(move || tabs.with(|t| t.len() > 1), move || {
         view().flex_row().gap_4().child(dynamic(move || {
             let here = ui.model.with(|m| m.page.clone());
+            let me = ui.me().name;
             tabs.get()
                 .into_iter()
                 .map(|name| {
                     let on = name == here;
-                    let label = format!("{} {}", if on { "●" } else { "◯" }, name.as_deref().unwrap_or(model::MAIN));
+                    let label = format!("{} {}", if on { "●" } else { "◯" }, name.as_deref().unwrap_or(&me));
                     let to = name.clone();
                     text(label)
                         .text_size(px(13.0))

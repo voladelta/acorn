@@ -1,14 +1,14 @@
 //! Sheets
 //! ======
 //! The boxes over the page: the ☰ menu (Import History, Usage, Export
-//! memory, Memory tree, fold, stop), the last days' usage, and Import
+//! memory, Memory tree, fold, stop), the last days' usage, Import
 //! History: the Claude and ChatGPT chats found on this Mac (and in the
 //! website exports dropped on the window), picked by session, by day and
 //! with or without tool calls, priced before they go.
 
 use crate::look::*;
 use crate::model::{self, Act};
-use crate::{Sheet, Ui, send};
+use crate::{Sheet, Ui};
 use acorn_core::import::{self, Want};
 use acorn_core::wire::Command;
 use nsh_base::{input, text_view};
@@ -59,7 +59,7 @@ fn menu(ui: Ui) -> impl IntoElement {
                 .child(item(
                     Box::new(|| "Usage".into()),
                     Box::new(move || {
-                        send(Command::Usage);
+                        ui.send(Command::Usage);
                         ui.sheet.set(Sheet::Usage);
                     }),
                 ))
@@ -67,18 +67,18 @@ fn menu(ui: Ui) -> impl IntoElement {
                     Box::new(|| "Export memory".into()),
                     Box::new(move || {
                         let file = acorn_core::config::home().join("Downloads").join(format!("acorn-memory-{}.json", stamp()));
-                        send(Command::Export(file));
+                        ui.send(Command::Export(file));
                     }),
                 ))
                 .child(item(
                     Box::new(|| "Memory tree".into()),
-                    Box::new(move || send(Command::Tree(std::env::temp_dir().join(format!("acorn-tree-{}.html", stamp()))))),
+                    Box::new(move || ui.send(Command::Tree(std::env::temp_dir().join(format!("acorn-tree-{}.html", stamp()))))),
                 ))
                 .child(item(
                     Box::new(move || if folded() { "Unfold all".into() } else { "Fold all".into() }),
                     Box::new(move || ui.act(Act::Fold(!folded()))),
                 ))
-                .child(item(Box::new(|| "Stop all work".into()), Box::new(|| send(Command::Stop(None))))),
+                .child(item(Box::new(|| "Stop all work".into()), Box::new(move || ui.send(Command::Stop(None))))),
         )
 }
 
@@ -139,7 +139,7 @@ fn usage(ui: Ui) -> impl IntoElement {
 /// Import History, its sessions looked for anew.
 fn open_import(ui: Ui) {
     ui.found.set(None);
-    send(Command::Find(Vec::new()));
+    ui.send(Command::Find(Vec::new()));
     ui.sheet.set(Sheet::Import);
 }
 
@@ -154,7 +154,7 @@ pub fn dropped(ui: Ui, e: &FileDropEvent) {
         .collect();
     if !files.is_empty() {
         ui.found.set(None);
-        send(Command::Find(files));
+        ui.send(Command::Find(files));
         ui.sheet.set(Sheet::Import);
     }
 }
@@ -184,7 +184,7 @@ fn import(ui: Ui) -> impl IntoElement {
     let want = signal(Want::default());
     let replan = move |w: Want| {
         want.set(w.clone());
-        send(Command::Plan(w));
+        ui.send(Command::Plan(w));
     };
     let exports = import::EXPORTS.iter().map(|(app, how)| format!("{app}: {how}")).collect::<Vec<_>>().join("; ");
     view()
@@ -206,7 +206,7 @@ fn import(ui: Ui) -> impl IntoElement {
                 .child(view().flex_row().justify_end().child(button(
                     move || if importing().is_some_and(|p| p.why.is_some()) { "Resume".into() } else { "Pause".into() },
                     false,
-                    move || send(Command::Go(importing().is_some_and(|p| p.why.is_some()))),
+                    move || ui.send(Command::Go(importing().is_some_and(|p| p.why.is_some()))),
                 )))
         }))
         .child(sub(format!(
@@ -296,9 +296,10 @@ fn found_view(ui: Ui, found: import::Found, want: Signal<Want>, replan: impl Fn(
                     || "Import".into(),
                     true,
                     move || {
-                        send(Command::Import(want.get_untracked()));
+                        ui.send(Command::Import(want.get_untracked()));
                         ui.note("Sending them to Acorn's memory…".into());
                     },
                 )),
         )
 }
+

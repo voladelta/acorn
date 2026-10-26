@@ -1,7 +1,8 @@
 //! Chat
 //! ====
-//! The agent: one chat that never ends (`memory`), at config `chats`/<id>,
-//! and the app that shows it, by `wire`'s commands and events.
+//! The agent: one chat that never ends (`memory`), an assistant's, at
+//! config `chats`/<id>, and the app that shows it, by `wire`'s commands
+//! and events.
 //!
 //! One turn at a time. A message is logged as it arrives; the running call
 //! takes it between tool calls if it goes whole beside its view, else the
@@ -20,6 +21,7 @@ mod usage;
 mod view;
 
 use crate::ai::{self, Handle, Used};
+use crate::assistant::Assistant;
 use crate::compactor;
 use crate::import;
 use crate::memory::{Memory, Msg, Part};
@@ -99,6 +101,8 @@ pub struct Engine {
 pub struct Chat {
     this: Weak<Engine>,
     pub id: String,
+    /// Whose chat it is: its effort, its prompt, its work dir.
+    pub me: Assistant,
     db: rusqlite::Connection,
     spend: Spend,
     pub mem: Memory,
@@ -145,10 +149,9 @@ impl Drop for Guard<'_> {
 }
 
 impl Engine {
-    /// The config's chat, opened, its events to `events`.
-    pub fn start(events: mpsc::UnboundedSender<Event>) -> Result<Arc<Engine>> {
-        let config = config::get();
-        let dir = config.chat_dir();
+    /// An assistant's chat, opened, its events to `events`.
+    pub fn start(me: Assistant, events: mpsc::UnboundedSender<Event>) -> Result<Arc<Engine>> {
+        let dir = config::get().chats.join(&me.id);
         std::fs::create_dir_all(&dir)?;
         let db = usage::db(&dir)?;
         let mem = Memory::load(&dir)?;
@@ -156,7 +159,8 @@ impl Engine {
         let engine = Arc::new_cyclic(|this| Engine {
             chat: Mutex::new(Chat {
                 this: this.clone(),
-                id: config.chat.clone(),
+                id: me.id.clone(),
+                me,
                 db,
                 spend: Spend::default(),
                 mem,
@@ -187,7 +191,7 @@ impl Engine {
         {
             let mut chat = engine.lock();
             // a saved pick not offered gave way: told once
-            let saved = chat.mem.pick.get("effort").and_then(|e| e.as_str()).map(str::to_string);
+            let saved = chat.mem.pick.get("effort").and_then(|e| e.as_str()).map(str::to_string).filter(|_| chat.me.effort.is_none());
             let pick = chat.pick();
             if saved.as_deref().is_some_and(|s| s != pick.label()) {
                 chat.mem.pick = serde_json::to_value(pick)?;
@@ -195,7 +199,10 @@ impl Engine {
                 chat.note(format!("{} isn't offered here, so the chat now runs on {} effort.", saved.unwrap(), pick.label()));
             }
             if chat.mem.count == 0 {
-                let hello = Msg { line: Some(HELLO_LINE.into()), ..Msg::new(Kind::Acorn, HELLO) };
+                let name = chat.me.name.clone();
+                let hello = HELLO.replacen("This is Acorn.", &format!("This is {name}."), 1);
+                let line = HELLO_LINE.replacen("hello: Acorn,", &format!("hello: {name},"), 1);
+                let hello = Msg { line: Some(line), ..Msg::new(Kind::Acorn, &hello) };
                 chat.mem.push(vec![hello])?;
             }
             let turn = chat.mem.turn();
@@ -236,6 +243,7 @@ impl Engine {
             }
             Command::Stop(name) => self.lock().stop_by_user(name),
             Command::Goal(goal) => self.lock().set_goal(goal),
+            Command::Attach => self.attach(),
             Command::Pick(pick) => self.lock().set_pick(pick),
             Command::Zoom(seg) => self.lock().zoom(seg),
             Command::Root => self.lock().root(),
@@ -336,11 +344,12 @@ impl Chat {
     }
 
     /// What every call of the chat starts with, a summary's too: its
-    /// system prompt, its pick.
+    /// system prompt (its assistant's personality after Acorn's), its pick.
     pub fn share(&self) -> ai::Ask {
+        let head = crate::tools::master(&self.me.work()) + &self.me.personality();
         ai::Ask {
             effort: self.pick().effort,
-            system: crate::tools::system(&crate::tools::master()),
+            system: crate::tools::system(&head),
             blocks: Vec::new(),
             imgs: Vec::new(),
             tools: None,
@@ -351,10 +360,13 @@ impl Chat {
         }
     }
 
-    /// What its calls run on: its pick saved, if offered, else the
-    /// config's.
+    /// What its calls run on: its assistant's effort; Acorn's, its pick
+    /// saved, if offered, else the config's.
     pub fn pick(&self) -> Pick {
-        Pick::read(&self.mem.pick).unwrap_or(config::get().pick)
+        match self.me.effort {
+            Some(effort) => Pick { effort },
+            None => Pick::read(&self.mem.pick).unwrap_or(config::get().pick),
+        }
     }
 
     /// An event to the app.

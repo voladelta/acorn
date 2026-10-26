@@ -11,12 +11,10 @@
 use crate::call::{self, Call};
 use crate::text;
 use acorn_core::import::Found;
-use acorn_core::pick::{Move, Pick};
+use acorn_core::pick::Pick;
 use acorn_core::wire::{Command, Entry, Event, Live, Node, Progress, Seg, State, TURN, Usage, Wait, live_push};
 use acorn_core::{Kind, Spend};
 use std::collections::HashMap;
-
-pub const MAIN: &str = "Acorn";
 
 /// The disclosure the chat shows (EU AI Act art. 50, California SB 243,
 /// New York GBL art. 47).
@@ -98,8 +96,6 @@ pub enum Row {
 pub enum Act {
     /// Enter: a message, or, empty, interrupt.
     Send { text: String, images: Vec<Vec<u8>> },
-    /// The pick moves.
-    Move(Move),
     /// A click on a block.
     Open(Seg),
     /// A click on an open block's bar.
@@ -190,6 +186,7 @@ impl Model {
             }
             Event::Usage(days) => then.usage = Some(days),
             Event::Sessions(found) => then.found = Some(found),
+            Event::Assistant(_) => {}
         }
         then
     }
@@ -229,11 +226,6 @@ impl Model {
                         self.fold = None;
                         then.cmds.push(Command::Say { text, images });
                     }
-                }
-            }
-            Act::Move(mv) => {
-                if let Some(to) = self.pick().and_then(|p| p.moved(mv, None)) {
-                    then.cmds.push(Command::Pick(to));
                 }
             }
             Act::Open(seg) => {
@@ -498,6 +490,5 @@ mod tests {
         assert!(matches!(m.act(Act::Send { text: " ".into(), images: vec![] }).cmds[..], [Command::Stop(_)]));
         assert!(matches!(m.act(Act::Send { text: "/goal ship it".into(), images: vec![] }).cmds[..], [Command::Goal(Some(_)), Command::Say { .. }]));
         assert_eq!(m.act(Act::Send { text: "/nope".into(), images: vec![] }).notes.len(), 1);
-        assert!(matches!(m.act(Act::Move(Move::Up)).cmds[..], [Command::Pick(Pick { effort: Effort::Max })]));
     }
 }

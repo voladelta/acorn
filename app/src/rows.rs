@@ -26,6 +26,11 @@ pub fn chat(ui: Ui) -> impl IntoElement {
         column().child(dynamic(move || item.get().unwrap_or_default().into_iter().map(|r| row(ui, r)).collect::<Vec<_>>()))
     })
     .footer(column().pb(px(28.0)).child(dynamic(move || tail.get().into_iter().map(|r| row(ui, r)).collect::<Vec<_>>())))
+    // each row its assistant's: another's chat never shows in its cells
+    .keys(move || {
+        let shown = ui.shown.get();
+        (0..items.with(Vec::len)).map(move |k| (shown.clone(), k))
+    })
     .follow_end(px(120.0))
     .estimated_item_size(px(80.0))
     .content_padding_top(px(24.0))
@@ -87,7 +92,7 @@ fn row(ui: Ui, it: Row) -> AnyElement {
 }
 
 fn message(ui: Ui, kind: Kind, who: String, body: String, call: Option<Call>, images: Vec<String>) -> AnyElement {
-    let pics = (!images.is_empty()).then(|| pictures(&images));
+    let pics = (!images.is_empty()).then(|| pictures(ui, &images));
     match kind {
         Kind::User => view()
             .self_end()
@@ -234,8 +239,8 @@ fn file(out: Out) -> View {
 }
 
 /// A message's images, each opened by a click.
-fn pictures(names: &[String]) -> View {
-    let dir = acorn_core::config::get().chat_dir().join("docs/images");
+fn pictures(ui: Ui, names: &[String]) -> View {
+    let dir = acorn_core::config::get().chats.join(ui.shown.get_untracked()).join("docs/images");
     view().flex_row().flex_wrap().gap_2().mt_2().child(
         names
             .iter()

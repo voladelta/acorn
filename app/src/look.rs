@@ -25,6 +25,7 @@ palette! {
     soft: 0x9a9a9a, 0x8a8a92; "Hints, placeholders."
     hair: 0xe6e6e6, 0x36363c; "Rules."
     paper: 0xffffff, 0x171719; "The page."
+    inset: 0xf7f7f7, 0x1d1d20; "The sidebar."
     lift: 0xffffff, 0x222226; "A box over the page: a sheet, the message box."
     block: 0xf2f2f2, 0x2c2c31; "A summary's, a tool's, a button's, code's fill."
     hover: 0xe8e8e8, 0x37373d; "Under the pointer."
@@ -57,6 +58,7 @@ pub fn tool_glyph(name: &str) -> &'static str {
         "edit" => "📝",
         "spawn" => "🤖",
         "tell" => "💬",
+        "create_assistant" => "🐿️",
         "computer" => "🖱️",
         _ => "🔧",
     }

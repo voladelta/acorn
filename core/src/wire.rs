@@ -117,6 +117,8 @@ pub enum Event {
     Usage(Vec<Usage>),
     /// Sessions found to import, and the import's plan of them.
     Sessions(crate::import::Found),
+    /// An assistant made (`create_assistant`), to list and start.
+    Assistant(crate::assistant::Assistant),
 }
 
 #[derive(Clone, Debug)]
@@ -127,6 +129,8 @@ pub enum Command {
     Stop(Option<String>),
     /// The goal set (/goal), or none (/halt).
     Goal(Option<String>),
+    /// The app (again) shows this chat: tell it all anew.
+    Attach,
     Pick(Pick),
     /// Open a part into its halves.
     Zoom(Seg),

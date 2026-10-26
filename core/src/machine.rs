@@ -51,9 +51,9 @@ pub fn tools() -> Vec<Spec> {
     ]
 }
 
-/// A tool of TOOLS, run in the dir of its agent (`who`) under the work dir.
-pub async fn run(name: &str, input: &Value, who: &str, cancel: CancellationToken) -> Out {
-    let cwd = config::get().work.join(who);
+/// A tool of TOOLS, run in the dir of its agent (`cwd`, under its
+/// assistant's work dir).
+pub async fn run(name: &str, input: &Value, cwd: PathBuf, cancel: CancellationToken) -> Out {
     if let Err(err) = fs::create_dir_all(&cwd) {
         return Out::fail(err.to_string());
     }
