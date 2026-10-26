@@ -78,7 +78,7 @@ impl Pick {
         Some(Pick { effort })
     }
 
-    /// As the chat saved it (view.json's `pick`); None: none, or not one
+    /// As the chat saved it (its state's `pick`); None: none, or not one
     /// offered here.
     pub fn read(x: &serde_json::Value) -> Option<Pick> {
         let model = x.get("model");

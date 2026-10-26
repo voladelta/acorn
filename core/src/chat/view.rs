@@ -152,7 +152,7 @@ impl Engine {
         };
         write!(out, "{{\"chat\": {},\n\"messages\": [", serde_json::to_string(&id)?)?;
         for from in (0..count).step_by(PIECE as usize) {
-            let mut chat = self.lock();
+            let chat = self.lock();
             for i in from..(from + PIECE).min(count) {
                 let Some(m) = chat.mem.message(i) else { continue };
                 let rec = serde_json::json!({"id": i, "kind": m.kind, "text": m.text, "date": m.date, "images": m.images, "more": m.more});
@@ -165,7 +165,7 @@ impl Engine {
         for l in 0..levels {
             let n = 1u64 << l;
             for from in (0..count / n).step_by(PIECE as usize) {
-                let mut chat = self.lock();
+                let chat = self.lock();
                 for i in from..(from + PIECE).min(count / n) {
                     let part = Part::new(l, i);
                     if let Some(text) = chat.mem.node(part) {
@@ -182,7 +182,8 @@ impl Engine {
             names
         };
         sep = "\n";
-        for name in ls("docs/agent").iter().filter_map(|f| f.strip_suffix(".jsonl")) {
+        let agents = self.lock().mem.agent_names();
+        for name in &agents {
             let Some(log) = self.lock().mem.agent(name) else { continue };
             let entries: Vec<_> = log.iter().map(|r| serde_json::json!({"id": r.i, "kind": r.kind, "text": r.text, "date": r.date})).collect();
             write!(out, "{sep}{}: {}", serde_json::to_string(name)?, serde_json::to_string(&entries)?)?;

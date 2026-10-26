@@ -11,23 +11,15 @@ use crate::wire::{Event, Usage};
 use crate::{Served, Spend};
 use chrono::{Local, TimeZone};
 use rusqlite::{OptionalExtension, params};
-use std::path::Path;
 
-/// The chat's db, chat.db in its dir (UniiChat's): the acts it did (none
-/// here), each request its calls made, what each turn used, by its last
-/// message.
-pub(super) fn db(dir: &Path) -> rusqlite::Result<rusqlite::Connection> {
-    let db = rusqlite::Connection::open(dir.join("chat.db"))?;
-    db.busy_timeout(std::time::Duration::from_secs(10))?;
+/// Its tables in chat.db (the memory's, `memory`): each request its calls
+/// made, what each turn used, by its last message.
+pub(super) fn tables(db: &rusqlite::Connection) -> rusqlite::Result<()> {
     db.execute_batch(
-        "pragma journal_mode = wal; pragma synchronous = normal;
-        create table if not exists acts  (id text primary key, ans text not null, at integer not null);
-        create index if not exists acts_big on acts (at) where ans <> '{}';
-        create table if not exists uses  (at integer not null, kind text not null, input integer not null, read integer not null, output integer not null, micros integer not null);
+        "create table if not exists uses  (at integer not null, kind text not null, input integer not null, read integer not null, output integer not null, micros integer not null);
         create index if not exists uses_at on uses (at);
         create table if not exists turns (msg integer primary key, use text not null);",
-    )?;
-    Ok(db)
+    )
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -50,7 +42,7 @@ impl Chat {
     pub(super) fn used(&mut self, kind: Served, used: Used) {
         let input = used.usage.input + used.usage.write;
         let row = params![used.at, kind.as_str(), input, used.usage.read, used.usage.output, used.micros];
-        if let Err(err) = self.db.execute("insert into uses values (?, ?, ?, ?, ?, ?)", row) {
+        if let Err(err) = self.mem.db.execute("insert into uses values (?, ?, ?, ?, ?, ?)", row) {
             eprintln!("acorn: usage: {err}");
         }
         if kind == Served::Chat && self.busy {
@@ -72,7 +64,7 @@ impl Chat {
             let spend = chat.turn_use(id).unwrap_or_default() + spend;
             let kept = Kept { n: spend.n, input: spend.input, read: spend.read, output: spend.output, usd: spend.usd, at: spend.at };
             let json = serde_json::to_string(&kept).unwrap_or_default();
-            if let Err(err) = chat.db.execute("insert or replace into turns values (?, ?)", params![id, json]) {
+            if let Err(err) = chat.mem.db.execute("insert or replace into turns values (?, ?)", params![id, json]) {
                 eprintln!("acorn: usage: {err}");
             }
             chat.all(Event::Use { id, spend });
@@ -81,7 +73,7 @@ impl Chat {
 
     /// What the turn ending at message id used (None: none ended there).
     pub(super) fn turn_use(&self, id: u64) -> Option<Spend> {
-        let json: String = self.db.query_row("select use from turns where msg = ?", [id], |r| r.get(0)).optional().ok()??;
+        let json: String = self.mem.db.query_row("select use from turns where msg = ?", [id], |r| r.get(0)).optional().ok()??;
         serde_json::from_str::<Kept>(&json).ok().map(Spend::from)
     }
 
@@ -89,7 +81,7 @@ impl Chat {
     pub(super) fn spend_since(&self, from: i64) -> Option<Spend> {
         let sql = "select count(*), sum(input), sum(read), sum(output), sum(micros), max(at) from uses where at >= ?";
         let spend = self
-            .db
+            .mem.db
             .query_row(sql, [from], |r| {
                 let micros: Option<i64> = r.get(4)?;
                 Ok(Spend {
@@ -117,7 +109,7 @@ impl Chat {
         let sql = "select date(at / 1000, 'unixepoch', 'localtime') day, kind, count(*), sum(input), sum(read), sum(output), sum(micros), max(at)
             from uses where at >= ? group by day, kind order by day desc, sum(micros) desc";
         let from = crate::now_ms() - days * 86_400_000;
-        let rows = self.db.prepare(sql).and_then(|mut q| {
+        let rows = self.mem.db.prepare(sql).and_then(|mut q| {
             q.query_map([from], |r| {
                 Ok(Usage {
                     day: r.get(0)?,

@@ -6,8 +6,8 @@
 //! `computer`). The app (the `acorn` crate) only shows it: it sends
 //! `Command`s and hears `Event`s (`wire`).
 //!
-//! The chat's files are UniiChat's, byte for byte (`memory`), so a chat
-//! UniiChat kept opens here as it was.
+//! A chat is kept in its chat.db (`memory`); what the user asked to keep
+//! for good, facts every assistant (or one) sees, in facts.db (`facts`).
 
 pub mod ai;
 pub mod assistant;
@@ -17,6 +17,7 @@ pub mod compactor;
 pub mod computer;
 pub mod config;
 pub mod disk;
+pub mod facts;
 pub mod import;
 pub mod machine;
 pub mod memory;

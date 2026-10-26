@@ -103,7 +103,6 @@ pub struct Chat {
     pub id: String,
     /// Whose chat it is: its effort, its prompt, its work dir.
     pub me: Assistant,
-    db: rusqlite::Connection,
     spend: Spend,
     pub mem: Memory,
     agents: std::collections::BTreeMap<String, Agent>,
@@ -153,15 +152,14 @@ impl Engine {
     pub fn start(me: Assistant, events: mpsc::UnboundedSender<Event>) -> Result<Arc<Engine>> {
         let dir = config::get().chats.join(&me.id);
         std::fs::create_dir_all(&dir)?;
-        let db = usage::db(&dir)?;
         let mem = Memory::load(&dir)?;
+        usage::tables(&mem.db)?;
         let work = mem.work.clone();
         let engine = Arc::new_cyclic(|this| Engine {
             chat: Mutex::new(Chat {
                 this: this.clone(),
                 id: me.id.clone(),
                 me,
-                db,
                 spend: Spend::default(),
                 mem,
                 agents: Default::default(),
@@ -278,7 +276,6 @@ impl Engine {
             for (call, _, _) in &chat.compactions {
                 call.stop();
             }
-            chat.mem.close();
         }
         crate::machine::end();
     }
@@ -344,9 +341,10 @@ impl Chat {
     }
 
     /// What every call of the chat starts with, a summary's too: its
-    /// system prompt (its assistant's personality after Acorn's), its pick.
+    /// system prompt (its assistant's personality after Acorn's, then the
+    /// facts it sees), its pick.
     pub fn share(&self) -> ai::Ask {
-        let head = crate::tools::master(&self.me.work()) + &self.me.personality();
+        let head = crate::tools::master(&self.me.work()) + &self.me.personality() + &crate::facts::prompt(&self.me.id);
         ai::Ask {
             effort: self.pick().effort,
             system: crate::tools::system(&head),
@@ -358,6 +356,24 @@ impl Chat {
             yields: None,
             user: Some(self.id.clone()),
         }
+    }
+
+    /// A message purged (`Memory::purge`): a chat's, the summaries' calls
+    /// cut first (none stores a line its words went into), then the app
+    /// shown the chat anew; or an agent's.
+    pub(super) fn purge(&mut self, agent: Option<&str>, id: u64) -> String {
+        if agent.is_none() {
+            for (call, _, _) in &self.compactions {
+                call.stop();
+            }
+        }
+        let said = self.mem.purge(agent, id).unwrap_or_else(|err| format!("The purge failed: {err}"));
+        if agent.is_none() {
+            self.seen.clear();
+            self.show();
+            self.pump();
+        }
+        said
     }
 
     /// What its calls run on: its assistant's effort; Acorn's, its pick

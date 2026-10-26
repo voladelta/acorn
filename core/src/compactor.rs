@@ -8,7 +8,9 @@
 //! shortest kept. The call asks till it is answered (a patient one: an
 //! outage only delays a node, never harms it); answered with no line (a
 //! refusal: its input's doing), its node is its source clipped. Of each
-//! side, JOBS build at once, in the order the messages came.
+//! side, JOBS build at once, in the order the messages came. A purge
+//! stops them all, and a line asked before one is not stored: its input or
+//! context may hold what was purged.
 
 use crate::ai::{self, Stop};
 use crate::chat::Chat;
@@ -47,9 +49,9 @@ pub fn pump(chat: &mut Chat) {
 /// A node built by its calls; cut (its side held, or Acorn quitting), it
 /// builds as it goes on.
 fn job(chat: &mut Chat, part: Part, text: String) {
-    let this = chat.this();
+    let (this, age) = (chat.this(), chat.mem.age);
     tokio::spawn(async move {
-        let built = build(&this, part, text).await;
+        let built = build(&this, part, text, age).await;
         let Some(engine) = this.upgrade() else { return };
         let mut chat = engine.lock();
         if let Err(why) = built {
@@ -65,7 +67,7 @@ fn job(chat: &mut Chat, part: Part, text: String) {
 /// line fits. Each try sends those blocks, never a try's words or
 /// thoughts; one after a line too long adds only its size and where the
 /// limit cuts it.
-async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: String) -> Result<(), String> {
+async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: String, age: u64) -> Result<(), String> {
     let (ask, served) = {
         let Some(engine) = this.upgrade() else { return Err("Acorn quit".into()) };
         let mut chat = engine.lock();
@@ -104,7 +106,11 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
         None => memory::cut(&memory::flat(&text)).to_string(),
     };
     let engine = this.upgrade().ok_or("Acorn quit")?;
-    engine.lock().mem.store(&[(part, line)]).map_err(|e| e.to_string())
+    let mut chat = engine.lock();
+    if chat.mem.age != age {
+        return Err("a purge came first; it builds anew".into());
+    }
+    chat.mem.store(&[(part, line)]).map_err(|e| e.to_string())
 }
 
 /// A summary's try: its call's end, the call kept (to cut it) till then.

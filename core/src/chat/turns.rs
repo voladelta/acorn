@@ -480,7 +480,7 @@ impl Chat {
 
     pub(super) fn save(&self) {
         if let Err(err) = self.mem.save() {
-            eprintln!("acorn: view.json: {err}");
+            eprintln!("acorn: state: {err}");
         }
     }
 

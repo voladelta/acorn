@@ -21,25 +21,28 @@
 //! A call gets one in BLOCK-line blocks, the last whole one marked for the
 //! cache (`ai`).
 //!
-//! Files: main/ (messages) and tree/ (nodes), JSON lines in a file per
-//! day; main.index and tree.index give each line's place by slot (16
-//! bytes: its offset as an f64, its day, its length); view.json keeps the
-//! views, the chat's pick, goal and work, written over. Pages `more` after
-//! the last that isn't are not in the chat. Memory holds only the views'
-//! nodes and those built above them; any other line is read by its index.
-//! Images are in docs/images/ by their hash; an agent's log in
-//! docs/agent/<Name>.jsonl. All of it is UniiChat's format.
+//! Files: chat.db (SQLite, WAL) holds the messages (`msgs`, log ''), each
+//! agent's log (`msgs`, log its name), the nodes by slot (`nodes`) and the
+//! views, the chat's pick, goal and work (`state`, written over). Pages
+//! `more` after the last that isn't are not in the chat. Memory holds only
+//! the views' nodes and those built above them; any other row is read as
+//! needed. Images are in docs/images/ by their hash.
+//!
+//! A purge erases a message for good (a secret pasted in): its text and
+//! images, and every node built from it, are deleted (`erase`); its node
+//! and those above build anew without it. Other nodes built while its
+//! summary was in the compactions' view may still echo it.
+
 
 use crate::clip;
 use crate::{Img, Kind, Served, config, disk, names};
 use anyhow::{Context, Result};
 use base64::Engine as _;
-use chrono::{DateTime, Local, NaiveDate, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
-use std::os::unix::fs::FileExt;
+use rusqlite::{Connection, OptionalExtension, Row, params};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 // Constants
@@ -50,9 +53,6 @@ pub const JOBS: usize = 64;
 /// The compactions' view merges past this (16-32 KB).
 const SEEN: usize = 32_000;
 const BLOCK: usize = 4;
-const SLOT: u64 = 16;
-/// The files kept open to read: the two indexes and the days read lately.
-const FDS: usize = 8;
 
 /// A request's images: 20 at full size, each IMAGE bytes at most; PIXELS,
 /// the most decoded: a larger image goes as is.
@@ -62,8 +62,18 @@ const IMAGE: usize = 1 << 20;
 const PIXELS: u64 = 1 << 28;
 
 pub const WAIT: &str = "(not summarized yet: zoom it)";
+/// A purged message's text.
+pub const PURGED: &str = "(purged)";
 const IMAGES: &str = "docs/images";
-const AGENTS: &str = "docs/agent";
+/// The chat's log in `msgs`; an agent's is its name.
+const CHAT: &str = "";
+
+const SCHEMA: &str = "pragma journal_mode = wal; pragma synchronous = normal; pragma secure_delete = on;
+create table if not exists msgs (log text not null, i integer not null, kind text not null, text text not null, date text not null,
+    images text not null, imported integer not null, line text, more integer not null, size integer not null, primary key (log, i)) without rowid;
+create table if not exists nodes (slot integer primary key, text text not null);
+create table if not exists agents (name text primary key) without rowid;
+create table if not exists state (id integer primary key check (id = 1), json text not null);";
 
 /// A compaction's task, before its <input>: one message to compress
 /// (level 0), or two lines to merge. The ruler, not a sample line: the
@@ -105,8 +115,7 @@ impl Part {
         1 << self.l
     }
 
-    /// Its place in tree.index: nodes in order, each parent between its
-    /// halves.
+    /// Its key: nodes in order, each parent between its halves.
     pub fn slot(self) -> u64 {
         (2 * self.i + 1) * self.n() - 1
     }
@@ -197,14 +206,6 @@ impl Msg {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct TreeRec {
-    l: u32,
-    i: u64,
-    text: String,
-    size: usize,
-}
-
 /// A view: its lines, the bytes of those built, a batch under way, the
 /// bytes past which it merges to half.
 #[derive(Clone, Debug, Default)]
@@ -227,25 +228,6 @@ impl View {
     }
 }
 
-/// A log: of messages (main) or of nodes (tree).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Stream {
-    Main,
-    Tree,
-}
-
-impl Stream {
-    fn name(self) -> &'static str {
-        match self {
-            Stream::Main => "main",
-            Stream::Tree => "tree",
-        }
-    }
-}
-
-/// How far a log is indexed: its last file's day (since 1970), its size.
-type End = (i64, u64);
-
 #[derive(Serialize, Deserialize, Default)]
 struct Kept {
     parts: Vec<(u32, u64)>,
@@ -253,38 +235,34 @@ struct Kept {
     batch: bool,
 }
 
-/// view.json: the chat's view, the compactions' (none: the chat's).
+/// The state row: the chat's view, the compactions', the pick, goal and
+/// work.
 #[derive(Serialize, Deserialize, Default)]
 struct Saved {
-    #[serde(flatten)]
     view: Kept,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    seen: Option<Kept>,
+    seen: Kept,
     #[serde(default)]
     pick: serde_json::Value,
     #[serde(default)]
     goal: Option<String>,
     #[serde(default)]
     work: Vec<String>,
-    #[serde(default)]
-    main: End,
-    #[serde(default)]
-    tree: End,
 }
 
-/// The chat's memory. count: the pages logged whole; open: those after,
-/// not whole yet; pick: the chat's, as last set (as saved: one not offered
-/// is told once); goal: the user's (/goal), till met or halted; work: what
-/// ran, as last saved; nodes: the texts of the views' nodes built and of
-/// those above them, by slot; agents: their logs' lengths; ready: the
-/// nodes not built whose halves are, by side and level, in order; busy:
-/// nodes building, by slot, with their side; sides: the side by the last
-/// message of nodes not built; hold: why each side is held (None: it
-/// builds); made: nodes built since last drained; fitted: the views were
-/// fit since last drained.
+/// The chat's memory. db: chat.db, shared with `chat::usage`; count: the
+/// pages logged whole; open: those after, not whole yet; pick: the chat's,
+/// as last set (as saved: one not offered is told once); goal: the user's
+/// (/goal), till met or halted; work: what ran, as last saved; nodes: the
+/// texts of the views' nodes built and of those above them, by slot;
+/// agents: their logs' lengths; ready: the nodes not built whose halves
+/// are, by side and level, in order; busy: nodes building, by slot, with
+/// their side; sides: the side by the last message of nodes not built;
+/// hold: why each side is held (None: it builds); made: nodes built since
+/// last drained; fitted: the views were fit since last drained; age: the
+/// purges so far (a node a call began before one is not stored).
 pub struct Memory {
     pub dir: PathBuf,
-    fds: Vec<(PathBuf, File)>,
+    pub db: Connection,
     pub count: u64,
     pub open: u64,
     pub pick: serde_json::Value,
@@ -295,13 +273,13 @@ pub struct Memory {
     pub view: View,
     pub seen: View,
     ready: [Vec<Vec<u64>>; 2],
-    ends: [End; 2],
     pub busy: HashMap<u64, usize>,
     sides: HashMap<u64, usize>,
     pub hold: [Option<String>; 2],
     pub done: bool,
     pub made: Vec<Part>,
     pub fitted: bool,
+    pub age: u64,
 }
 
 // Memory
@@ -310,10 +288,13 @@ pub struct Memory {
 impl Memory {
     pub fn load(dir: &Path) -> Result<Memory> {
         fs::create_dir_all(dir)?;
-        let saved = saved(dir);
+        let db = Connection::open(dir.join("chat.db"))?;
+        db.busy_timeout(std::time::Duration::from_secs(10))?;
+        db.execute_batch(SCHEMA)?;
+        let saved = saved(&db);
         let mut mem = Memory {
             dir: dir.to_path_buf(),
-            fds: Vec::new(),
+            db,
             count: 0,
             open: 0,
             pick: serde_json::Value::Null,
@@ -324,29 +305,26 @@ impl Memory {
             view: View { high: config::get().view, ..View::default() },
             seen: View { high: SEEN, ..View::default() },
             ready: [Vec::new(), Vec::new()],
-            ends: [(0, 0), (0, 0)],
             busy: HashMap::new(),
             sides: HashMap::new(),
             hold: [None, Some("paused".into())],
             done: false,
             made: Vec::new(),
             fitted: false,
+            age: 0,
         };
         if let Some(s) = &saved {
             mem.pick = s.pick.clone();
             mem.goal = s.goal.clone();
             mem.work = s.work.clone();
         }
-        mem.ends[0] = mem.index(Stream::Main, saved.as_ref().map_or((0, 0), |s| s.main))?;
-        mem.ends[1] = mem.index(Stream::Tree, saved.as_ref().map_or((0, 0), |s| s.tree))?;
-        mem.count = fs::metadata(dir.join("main.index"))?.len() / SLOT;
+        mem.count = mem.db.query_row("select coalesce(max(i) + 1, 0) from msgs where log = ''", [], |r| r.get(0))?;
         while mem.count > 0 && mem.message(mem.count - 1).is_some_and(|m| m.more) {
             mem.count -= 1;
         }
-        let kept = saved.as_ref().map(|s| &s.view);
-        let seen = saved.as_ref().map(|s| s.seen.as_ref().unwrap_or(&s.view));
-        mem.view = mem.opened(mem.view.high, kept);
-        mem.seen = mem.opened(SEEN, seen);
+        mem.db.execute("delete from msgs where log = '' and i >= ?", [mem.count])?;
+        mem.view = mem.opened(mem.view.high, saved.as_ref().map(|s| &s.view));
+        mem.seen = mem.opened(SEEN, saved.as_ref().map(|s| &s.seen));
         for part in roots(mem.count).into_iter().flat_map(|p| mem.todo(p)).collect::<Vec<_>>() {
             mem.ready(part, true);
         }
@@ -363,138 +341,46 @@ impl Memory {
         View { parts, size, batch: kept.is_some_and(|k| k.batch), high }
     }
 
-    /// view.json, written whole, then moved in place; flushed soon.
+    /// The state row, written over.
     pub fn save(&self) -> Result<()> {
         let kept = |v: &View| Kept { parts: v.parts.iter().map(|p| (p.l, p.i)).collect(), batch: v.batch };
-        let saved = Saved {
-            view: kept(&self.view),
-            seen: Some(kept(&self.seen)),
-            pick: self.pick.clone(),
-            goal: self.goal.clone(),
-            work: self.work.clone(),
-            main: self.ends[0],
-            tree: self.ends[1],
-        };
-        let file = self.dir.join("view.json");
-        let new = self.dir.join("view.json.new");
-        fs::write(&new, serde_json::to_vec(&saved)?)?;
-        fs::rename(&new, &file)?;
-        disk::wrote(&file);
+        let saved = Saved { view: kept(&self.view), seen: kept(&self.seen), pick: self.pick.clone(), goal: self.goal.clone(), work: self.work.clone() };
+        self.db.execute("insert or replace into state values (1, ?)", [serde_json::to_string(&saved)?])?;
         Ok(())
     }
 
     // Logs
     // ----
 
-    /// Indexes the log's lines past `from` (none, or no index: all, in an
-    /// index made anew); answers how far.
-    fn index(&mut self, stream: Stream, from: End) -> Result<End> {
-        let file = self.dir.join(format!("{}.index", stream.name()));
-        let mut end = if file.exists() { from } else { (0, 0) };
-        let logs = self.dir.join(stream.name());
-        fs::create_dir_all(&logs)?;
-        let fd = OpenOptions::new().read(true).write(true).create(true).truncate(end.0 == 0).open(&file)?;
-        let mut days: Vec<i64> = fs::read_dir(&logs)?
-            .filter_map(|e| e.ok()?.file_name().to_str().and_then(file_day))
-            .filter(|&day| day >= end.0)
-            .collect();
-        days.sort_unstable();
-        for day in days {
-            let at = if day == end.0 { end.1 } else { 0 };
-            end = (day, self.scan(stream, day, at, &fd)?);
-        }
-        Ok(end)
+    /// Message i of a log (CHAT, or an agent's); None: none.
+    fn read(&self, log: &str, i: u64) -> Option<Root> {
+        let mut q = self.db.prepare_cached("select * from msgs where log = ? and i = ?").ok()?;
+        q.query_row(params![log, i], from_row).optional().unwrap_or_else(|err| {
+            eprintln!("memory: message {i}: {err}");
+            None
+        })
     }
 
-    /// Indexes, into fd, the lines of a day's file from byte `at`; answers
-    /// the file's end. A line a crash cut short is skipped.
-    fn scan(&mut self, stream: Stream, day: i64, at: u64, fd: &File) -> Result<u64> {
-        use std::io::{Read, Seek, SeekFrom};
-        let file = self.path(stream, day);
-        let mut data = Vec::new();
-        let mut f = File::open(&file)?;
-        f.seek(SeekFrom::Start(at))?;
-        f.read_to_end(&mut data)?;
-        let mut k = 0;
-        while let Some(nl) = data[k..].iter().position(|&b| b == b'\n') {
-            let line = &data[k..k + nl];
-            if let Some(rec) = parse(line, &file) {
-                place(fd, stream, &rec, day, at + k as u64, nl as u64)?;
-            }
-            k += nl + 1;
-        }
-        if k < data.len() {
-            eprintln!("skipped the last line of {}: cut short", file.display());
-            OpenOptions::new().append(true).open(&file)?.write_all(b"\n")?;
-            return Ok(at + data.len() as u64 + 1);
-        }
-        Ok(at + k as u64)
-    }
-
-    /// The record at a slot of a log; None: none.
-    fn read<T: for<'a> Deserialize<'a>>(&mut self, stream: Stream, slot: u64) -> Option<T> {
-        let index = self.dir.join(format!("{}.index", stream.name()));
-        let mut rec = [0u8; SLOT as usize];
-        let got = self.fd(&index)?.read_at(&mut rec, slot * SLOT).ok()?;
-        let day = u32::from_le_bytes(rec[8..12].try_into().unwrap());
-        if got < SLOT as usize || day == 0 {
-            return None;
-        }
-        let at = f64::from_le_bytes(rec[0..8].try_into().unwrap()) as u64;
-        let len = u32::from_le_bytes(rec[12..16].try_into().unwrap()) as usize;
-        let mut line = vec![0u8; len];
-        let path = self.path(stream, day as i64);
-        self.fd(&path)?.read_exact_at(&mut line, at).ok()?;
-        serde_json::from_slice(&line).ok()
-    }
-
-    /// A file of the chat to read, kept open (the FDS read last).
-    fn fd(&mut self, path: &Path) -> Option<&File> {
-        match self.fds.iter().position(|(p, _)| p == path) {
-            Some(k) => {
-                let fd = self.fds.remove(k);
-                self.fds.push(fd);
-            }
-            None => {
-                let fd = File::open(path).ok()?;
-                if self.fds.len() >= FDS {
-                    self.fds.remove(0);
-                }
-                self.fds.push((path.to_path_buf(), fd));
+    /// Messages appended to a log, in one transaction.
+    fn log(&mut self, log: &str, roots: &[Root]) -> Result<()> {
+        let tx = self.db.transaction()?;
+        {
+            let mut q = tx.prepare_cached("insert into msgs values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")?;
+            for r in roots {
+                let images = serde_json::to_string(&r.images)?;
+                q.execute(params![log, r.i, r.kind.as_str(), r.text, r.date, images, r.imported, r.line, r.more, r.size])?;
             }
         }
-        self.fds.last().map(|(_, f)| f)
-    }
-
-    fn path(&self, stream: Stream, day: i64) -> PathBuf {
-        let date = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap() + chrono::Days::new(day as u64);
-        self.dir.join(stream.name()).join(format!("{}.jsonl", date.format("%Y-%m-%d")))
-    }
-
-    /// Records appended to the file of the local date, then indexed.
-    fn log<T: Serialize>(&mut self, stream: Stream, recs: &[T], slots: impl Fn(&T) -> u64) -> Result<()> {
-        let day = (Local::now().date_naive() - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
-        let lines: Vec<String> = recs.iter().map(serde_json::to_string).collect::<Result<_, _>>()?;
-        let file = self.path(stream, day);
-        let mut f = OpenOptions::new().append(true).create(true).open(&file)?;
-        let mut at = f.metadata()?.len();
-        f.write_all(lines.iter().map(|l| format!("{l}\n")).collect::<String>().as_bytes())?;
-        disk::wrote(&file);
-        let index = OpenOptions::new().write(true).open(self.dir.join(format!("{}.index", stream.name())))?;
-        for (rec, line) in recs.iter().zip(&lines) {
-            write_slot(&index, slots(rec), day, at, line.len() as u64)?;
-            at += line.len() as u64 + 1;
-        }
-        self.ends[stream as usize] = (day, at);
+        tx.commit()?;
         Ok(())
     }
 
     // Messages
     // --------
 
-    /// Message i, from its file; None: none.
-    pub fn message(&mut self, i: u64) -> Option<Root> {
-        if i < self.count { self.read(Stream::Main, i) } else { None }
+    /// Message i; None: none.
+    pub fn message(&self, i: u64) -> Option<Root> {
+        if i < self.count { self.read(CHAT, i) } else { None }
     }
 
     /// The pages logged; those `more` stay open, past the count, till one
@@ -504,7 +390,7 @@ impl Memory {
         let roots: Vec<Root> = msgs.into_iter().flat_map(pages).enumerate().map(|(k, m)| root(base + k as u64, m)).collect();
         let done = roots.iter().rposition(|r| !r.more).map_or(0, |k| k + 1);
         let ids = if done == 0 { 0 } else { self.open + done as u64 };
-        self.log(Stream::Main, &roots, |r| r.i)?;
+        self.log(CHAT, &roots)?;
         self.open = self.open + roots.len() as u64 - ids;
         let from = self.count;
         self.count += ids;
@@ -518,7 +404,7 @@ impl Memory {
     /// The first message, from `from` on, from which those to the end go
     /// whole in a call: the view's HIGH bytes, PICS images (the last
     /// always).
-    pub fn whole(&mut self, from: u64) -> u64 {
+    pub fn whole(&self, from: u64) -> u64 {
         let high = config::get().view;
         let (mut size, mut pics) = (0, 0);
         let mut k = self.count;
@@ -536,7 +422,7 @@ impl Memory {
 
     /// The pages [a, b) of a message as a model gets them: one text, their
     /// images.
-    pub fn say(&mut self, a: u64, b: u64) -> crate::Say {
+    pub fn say(&self, a: u64, b: u64) -> crate::Say {
         let mut say = crate::Say::default();
         for id in a..b {
             if let Some(root) = self.message(id) {
@@ -563,7 +449,7 @@ impl Memory {
     }
 
     /// What models get of message id's images: their copies, if any.
-    pub fn images(&mut self, id: u64) -> Vec<Img> {
+    pub fn images(&self, id: u64) -> Vec<Img> {
         let names = self.message(id).map(|m| m.images).unwrap_or_default();
         let dir = self.images_dir();
         names
@@ -588,12 +474,16 @@ impl Memory {
         self.nodes.contains_key(&part.slot())
     }
 
-    /// Node (l,i)'s text, kept or from its file; None: not built.
-    pub fn node(&mut self, part: Part) -> Option<String> {
+    /// Node (l,i)'s text, kept or from chat.db; None: not built.
+    pub fn node(&self, part: Part) -> Option<String> {
         if let Some(text) = self.nodes.get(&part.slot()) {
             return Some(text.clone());
         }
-        self.read::<TreeRec>(Stream::Tree, part.slot()).map(|r| r.text)
+        let mut q = self.db.prepare_cached("select text from nodes where slot = ?").ok()?;
+        q.query_row([part.slot()], |r| r.get(0)).optional().unwrap_or_else(|err| {
+            eprintln!("memory: node {}/{}: {err}", part.l, part.i);
+            None
+        })
     }
 
     /// The view under `part`, down from it, keeping the built nodes met:
@@ -614,7 +504,7 @@ impl Memory {
 
     /// What a node is made of: its message (its line, if logged with one),
     /// or its halves' lines; None: not all built.
-    pub fn source(&mut self, part: Part) -> Option<String> {
+    pub fn source(&self, part: Part) -> Option<String> {
         match part.halves() {
             None => self.message(part.i).map(|r| r.line.clone().unwrap_or_else(|| r.show())),
             Some([a, b]) => Some(format!("{}\n{}", flat(&self.node(a)?), flat(&self.node(b)?))),
@@ -723,8 +613,14 @@ impl Memory {
 
     /// Nodes built: logged in one write, kept.
     pub fn store(&mut self, parts: &[(Part, String)]) -> Result<()> {
-        let recs: Vec<TreeRec> = parts.iter().map(|(p, text)| TreeRec { l: p.l, i: p.i, text: text.clone(), size: text.len() }).collect();
-        self.log(Stream::Tree, &recs, |r| Part::new(r.l, r.i).slot())?;
+        let tx = self.db.transaction()?;
+        {
+            let mut q = tx.prepare_cached("insert or replace into nodes values (?, ?)")?;
+            for (part, text) in parts {
+                q.execute(params![part.slot(), text])?;
+            }
+        }
+        tx.commit()?;
         for (part, text) in parts {
             self.ready(*part, false);
             self.nodes.insert(part.slot(), text.clone());
@@ -803,7 +699,7 @@ impl Memory {
             }
         }
         if changed && let Err(err) = self.save() {
-            eprintln!("memory: view.json: {err}");
+            eprintln!("memory: state: {err}");
         }
         self.fitted = true;
     }
@@ -936,7 +832,7 @@ impl Memory {
         }
     }
 
-    pub fn date(&mut self, id: u64) -> String {
+    pub fn date(&self, id: u64) -> String {
         match self.message(id) {
             Some(root) => root.when(),
             None => format!("No message {id}."),
@@ -946,7 +842,7 @@ impl Memory {
     /// Where a page of the chat starts: the last message starting a turn
     /// (the user's or a report) the view holds whole; none: the first, or
     /// the end.
-    pub fn turn(&mut self) -> u64 {
+    pub fn turn(&self) -> u64 {
         let from = self.view.parts.iter().rposition(|p| p.l > 0).map_or(0, |k| k + 1);
         let whole: Vec<Part> = self.view.parts[from..].to_vec();
         let user = whole.iter().rev().find(|p| self.message(p.i).is_some_and(|m| matches!(m.kind, Kind::User | Kind::Work)));
@@ -954,7 +850,7 @@ impl Memory {
     }
 
     /// Level l's nodes built, in order.
-    pub fn level(&mut self, l: u32) -> Vec<(Part, String)> {
+    pub fn level(&self, l: u32) -> Vec<(Part, String)> {
         let n = 1u64 << l;
         (0..self.count / n).filter_map(|i| self.node(Part::new(l, i)).map(|t| (Part::new(l, i), t))).collect()
     }
@@ -967,37 +863,29 @@ impl Memory {
     // Agents
     // ------
 
-    fn agent_file(&self, name: &str) -> PathBuf {
-        self.dir.join(AGENTS).join(format!("{name}.jsonl"))
-    }
-
-    /// An agent's log, read whole; a name is letters and hyphens, never a
-    /// path.
+    /// An agent's log, read whole; None: no such agent.
     pub fn agent(&self, name: &str) -> Option<Vec<Root>> {
-        let ok = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphabetic() || c == '-');
-        let file = self.agent_file(name);
-        if !ok || !file.exists() {
+        let known: bool = self.db.query_row("select exists (select 1 from agents where name = ?)", [name], |r| r.get(0)).ok()?;
+        if !known {
             return None;
         }
-        let data = fs::read(&file).ok()?;
-        if !data.is_empty() && !data.ends_with(b"\n") {
-            let _ = OpenOptions::new().append(true).open(&file).and_then(|mut f| f.write_all(b"\n"));
-        }
-        Some(data.split(|&b| b == b'\n').filter_map(|line| parse(line, &file)).collect())
+        let mut q = self.db.prepare_cached("select * from msgs where log = ? order by i").ok()?;
+        let rows = q.query_map([name], from_row).ok()?;
+        Some(rows.filter_map(Result::ok).collect())
+    }
+
+    /// The agents' names, in order.
+    pub fn agent_names(&self) -> Vec<String> {
+        let names = self.db.prepare("select name from agents order by name").and_then(|mut q| q.query_map([], |r| r.get(0))?.collect());
+        names.unwrap_or_default()
     }
 
     pub fn agent_new(&mut self) -> Result<String> {
-        let dir = self.dir.join(AGENTS);
-        fs::create_dir_all(&dir)?;
         loop {
             let name = names::random();
-            match OpenOptions::new().write(true).create_new(true).open(self.agent_file(&name)) {
-                Ok(_) => {
-                    self.agents.insert(name.clone(), 0);
-                    return Ok(name);
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(err) => return Err(err.into()),
+            if self.db.execute("insert or ignore into agents values (?)", [&name])? == 1 {
+                self.agents.insert(name.clone(), 0);
+                return Ok(name);
             }
         }
     }
@@ -1006,13 +894,9 @@ impl Memory {
     pub fn agent_push(&mut self, name: &str, kind: Kind, text: &str) -> Result<u64> {
         let n = match self.agents.get(name) {
             Some(&n) => n,
-            None => self.agent(name).map_or(0, |log| log.len() as u64),
+            None => self.db.query_row("select count(*) from msgs where log = ?", [name], |r| r.get(0))?,
         };
-        let root = root(n, Msg::new(kind, text));
-        let file = self.agent_file(name);
-        let mut f = OpenOptions::new().append(true).create(true).open(&file).with_context(|| format!("agent {name}"))?;
-        f.write_all(format!("{}\n", serde_json::to_string(&root)?).as_bytes())?;
-        disk::wrote(&file);
+        self.log(name, &[root(n, Msg::new(kind, text))])?;
         self.agents.insert(name.to_string(), n + 1);
         Ok(n)
     }
@@ -1024,9 +908,122 @@ impl Memory {
         }
     }
 
-    /// Closes the files it reads.
-    pub fn close(&mut self) {
-        self.fds.clear();
+    // Purges
+    // ------
+
+    /// Erases a message for good: the chat's message id (each of its
+    /// pages), or message id of an agent's log (`agent`). Its text becomes
+    /// PURGED, its line and images go, and, in the chat, every node built
+    /// from it: those in a view open into their halves, and it and those
+    /// above build anew (a call building any node now is not stored: the
+    /// caller stops them). Then chat.db's freed pages are zeroed and its
+    /// WAL truncated. Answers what it erased.
+    pub fn purge(&mut self, agent: Option<&str>, id: u64) -> Result<String> {
+        let log = agent.unwrap_or(CHAT);
+        let (mut a, mut b) = (id, id);
+        match agent {
+            Some(name) if self.read(name, id).is_none() => return Ok(format!("No message {id} in {name}'s chat.")),
+            Some(_) => {}
+            None if id >= self.count => return Ok(format!("No message {id}.")),
+            None => {
+                while a > 0 && self.message(a - 1).is_some_and(|m| m.more) {
+                    a -= 1;
+                }
+                while b + 1 < self.count && self.message(b).is_some_and(|m| m.more) {
+                    b += 1;
+                }
+            }
+        }
+        let mut gone = HashSet::new();
+        if agent.is_none() {
+            for i in a..=b {
+                let mut part = Part::leaf(i);
+                while part.span().1 < self.count {
+                    if self.node(part).is_some() {
+                        gone.insert(part.slot());
+                    }
+                    part = part.up();
+                }
+            }
+        }
+        let mut images = Vec::new();
+        let tx = self.db.transaction()?;
+        for i in a..=b {
+            let Some(mut root) = tx.query_row("select * from msgs where log = ? and i = ?", params![log, i], from_row).optional()? else { continue };
+            images.append(&mut root.images);
+            root.text = PURGED.into();
+            root.line = None;
+            root.size = root.show().len();
+            tx.execute("update msgs set text = ?, images = '[]', line = null, size = ? where log = ? and i = ?", params![root.text, root.size, log, i])?;
+        }
+        for &slot in &gone {
+            tx.execute("delete from nodes where slot = ?", [slot])?;
+        }
+        tx.commit()?;
+        let mut said = match agent {
+            Some(name) => format!("Purged message {id} of {name}'s chat."),
+            None => {
+                self.unbuild(a, b, &gone);
+                let pages = if a == b { String::new() } else { format!(" (its pages {a} to {b})") };
+                format!("Purged message {id}{pages} and the {} summaries made from it; they are being written anew without it.", gone.len())
+            }
+        };
+        for name in images {
+            let used = self.db.query_row("select exists (select 1 from msgs where images like '%' || ? || '%')", [&name], |r| r.get::<_, bool>(0));
+            match used {
+                Ok(true) => {}
+                Ok(false) => {
+                    let dir = self.images_dir();
+                    for file in [dir.join(&name), dir.join(format!("{name}.jpg"))] {
+                        let _ = fs::remove_file(file);
+                    }
+                }
+                Err(err) => said += &format!(" Its image {name} was kept: {err}."),
+            }
+        }
+        if let Err(err) = erase(&self.db) {
+            said += &format!(" But its old bytes may stay in chat.db till the next purge: {err}.");
+        }
+        Ok(said)
+    }
+
+    /// The nodes `gone` (by slot) let go, the views' open into the halves
+    /// left, the leaves a..=b and those above them to build anew.
+    fn unbuild(&mut self, a: u64, b: u64, gone: &HashSet<u64>) {
+        self.age += 1;
+        self.nodes.retain(|slot, _| !gone.contains(slot));
+        for i in a..=b {
+            let mut part = Part::leaf(i).up();
+            while part.span().1 < self.count {
+                self.ready(part, false);
+                part = part.up();
+            }
+            self.ready(Part::leaf(i), true);
+        }
+        for k in 0..2 {
+            let view = if k == 0 { &self.view } else { &self.seen };
+            let parts: Vec<Part> = view.parts.clone().into_iter().flat_map(|p| self.open_up(p, gone)).collect();
+            let size = parts.iter().map(|&p| self.size(p)).sum();
+            let view = if k == 0 { &mut self.view } else { &mut self.seen };
+            (view.parts, view.size) = (parts, size);
+        }
+        self.fit(false);
+        if let Err(err) = self.save() {
+            eprintln!("memory: state: {err}");
+        }
+    }
+
+    /// A view's line, or, if gone, the lines under it left, kept.
+    fn open_up(&mut self, part: Part, gone: &HashSet<u64>) -> Vec<Part> {
+        match part.halves() {
+            Some(halves) if gone.contains(&part.slot()) => halves.into_iter().flat_map(|h| self.open_up(h, gone)).collect(),
+            _ => {
+                if let Some(text) = self.node(part) {
+                    self.nodes.insert(part.slot(), text);
+                }
+                vec![part]
+            }
+        }
     }
 }
 
@@ -1065,53 +1062,25 @@ impl Ord for Due {
 // Helpers
 // =======
 
-/// view.json; None: none, or unreadable.
-fn saved(dir: &Path) -> Option<Saved> {
-    serde_json::from_slice(&fs::read(dir.join("view.json")).ok()?).ok()
+/// The state row; None: none, or unreadable.
+fn saved(db: &Connection) -> Option<Saved> {
+    let json: String = db.query_row("select json from state where id = 1", [], |r| r.get(0)).optional().ok()??;
+    serde_json::from_str(&json).ok()
 }
 
-/// Whether a chat was cut at work (its view.json names what ran).
-pub fn was_working(dir: &Path) -> bool {
-    saved(dir).is_some_and(|s| !s.work.is_empty())
+/// Deleted rows erased from a db's file: rewritten whole (secure_delete
+/// zeroes only cells freed, not stale copies a page split left), its WAL
+/// truncated. It takes as long as the db is big.
+pub fn erase(db: &Connection) -> rusqlite::Result<()> {
+    db.execute_batch("vacuum; pragma wal_checkpoint(truncate)")
 }
 
-/// A day file's day since 1970, by its name.
-fn file_day(name: &str) -> Option<i64> {
-    let date = NaiveDate::parse_from_str(name.get(..10)?, "%Y-%m-%d").ok()?;
-    Some((date - NaiveDate::from_ymd_opt(1970, 1, 1)?).num_days())
-}
-
-/// A JSON line; None: not JSON.
-fn parse<T: for<'a> Deserialize<'a>>(line: &[u8], file: &Path) -> Option<T> {
-    match serde_json::from_slice(line) {
-        Ok(rec) => Some(rec),
-        Err(_) => {
-            if !line.is_empty() {
-                eprintln!("skipped a line of {}: not a record", file.display());
-            }
-            None
-        }
-    }
-}
-
-/// A record's line in its log's index; one with no index (an act's record
-/// UniiChat logged) has none.
-fn place(fd: &File, stream: Stream, rec: &serde_json::Value, day: i64, at: u64, len: u64) -> Result<()> {
-    let Some(i) = rec.get("i").and_then(|i| i.as_u64()) else { return Ok(()) };
-    let slot = match stream {
-        Stream::Main => i,
-        Stream::Tree => Part::new(rec.get("l").and_then(|l| l.as_u64()).unwrap_or(0) as u32, i).slot(),
-    };
-    write_slot(fd, slot, day, at, len)
-}
-
-fn write_slot(fd: &File, slot: u64, day: i64, at: u64, len: u64) -> Result<()> {
-    let mut buf = [0u8; SLOT as usize];
-    buf[0..8].copy_from_slice(&(at as f64).to_le_bytes());
-    buf[8..12].copy_from_slice(&(day as u32).to_le_bytes());
-    buf[12..16].copy_from_slice(&(len as u32).to_le_bytes());
-    fd.write_all_at(&buf, slot * SLOT)?;
-    Ok(())
+/// A message from its row in `msgs`.
+fn from_row(r: &Row) -> rusqlite::Result<Root> {
+    let bad = |k, e: serde_json::Error| rusqlite::Error::FromSqlConversionFailure(k, rusqlite::types::Type::Text, e.into());
+    let kind = serde_json::from_value(serde_json::Value::String(r.get(2)?)).map_err(|e| bad(2, e))?;
+    let images = serde_json::from_str(&r.get::<_, String>(5)?).map_err(|e| bad(5, e))?;
+    Ok(Root { i: r.get(1)?, kind, text: r.get(3)?, date: r.get(4)?, images, imported: r.get(6)?, line: r.get(7)?, more: r.get(8)?, size: r.get(9)? })
 }
 
 /// Now, as logged: "2026-10-26T12:03:05.123Z".

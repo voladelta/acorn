@@ -107,6 +107,33 @@ impl Engine {
                 let str = |k: &str| input[k].as_str().unwrap_or_default().to_string();
                 Out::ok(self.tell_agent(&str("name"), &str("message")).await)
             }
+            "remember" => {
+                let str = |k: &str| input[k].as_str().unwrap_or_default().to_string();
+                let (me, chat, msg) = {
+                    let chat = self.lock();
+                    (chat.me.id.clone(), chat.id.clone(), chat.mem.count.saturating_sub(1))
+                };
+                let fact = crate::facts::Fact { mine: str("for") == "me", subject: str("subject"), predicate: str("predicate"), value: str("value"), many: input["many"].as_bool().unwrap_or(false), chat, msg };
+                crate::facts::remember(&me, fact).map_or_else(|err| Out::fail(format!("Not kept: {err}")), Out::ok)
+            }
+            "forget" => {
+                let me = self.lock().me.id.clone();
+                let Some(id) = input["id"].as_u64() else { return Out::fail("Give id: the fact's number.") };
+                crate::facts::forget(&me, id).map_or_else(|err| Out::fail(format!("Not forgotten: {err}")), Out::ok)
+            }
+            "purge" => {
+                let mut chat = self.lock();
+                match &input["id"] {
+                    Value::String(name) if name.starts_with(|c: char| c.is_ascii_alphabetic()) => match input["n"].as_u64() {
+                        Some(n) => Out::ok(chat.purge(Some(name), n)),
+                        None => Out::fail("Give n: the index of the message in the agent's chat."),
+                    },
+                    id => {
+                        let id = id.as_u64().or_else(|| id.as_str().and_then(|s| s.parse().ok())).unwrap_or(u64::MAX);
+                        Out::ok(chat.purge(None, id))
+                    }
+                }
+            }
             "create_assistant" => {
                 let str = |k: &str| input[k].as_str().unwrap_or_default().to_string();
                 let Some(effort) = Effort::parse(&str("effort")) else {
@@ -293,7 +320,7 @@ impl Chat {
         let log = Block::new(self.mem.agent_show(name), true);
         let pick = config::get().agents.unwrap_or_else(|| self.pick());
         let (kind, system, effort) = match agent.role {
-            Role::Sub(effort) => (Served::Agent, tools::system(&tools::sub(&self.me.work())), effort.unwrap_or(pick.effort)),
+            Role::Sub(effort) => (Served::Agent, tools::system(&(tools::sub(&self.me.work()) + &crate::facts::prompt(&self.me.id))), effort.unwrap_or(pick.effort)),
             Role::Hands => (Served::Computer, tools::system(HANDS), pick.effort),
         };
         let mut blocks = agent.view.clone();
