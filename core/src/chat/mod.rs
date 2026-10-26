@@ -1,0 +1,412 @@
+//! Chat
+//! ====
+//! The agent: one chat that never ends (`memory`), at config `chats`/<id>,
+//! and the app that shows it, by `wire`'s commands and events.
+//!
+//! One turn at a time. A message is logged as it arrives; the running call
+//! takes it between tool calls if it goes whole beside its view, else the
+//! next call does, on the chat's pick. A quit or crash cuts all: a start
+//! resumes what ran, told so.
+//!
+//! The chat's state is one lock (`Engine::lock`), as one thread would hold
+//! it: every change is made whole between two awaits. What a change sets
+//! off (a summary built, the views fit) runs as the lock is let go
+//! (`Guard`), before anyone else takes it.
+
+mod agents;
+mod imports;
+mod turns;
+mod usage;
+mod view;
+
+use crate::ai::{self, Handle, Used};
+use crate::compactor;
+use crate::import;
+use crate::memory::{Memory, Msg, Part};
+use crate::pick::Pick;
+use crate::wire::{Command, Event, Live, Seg, TURN};
+use crate::{Kind, Served, Spend, config};
+use anyhow::Result;
+use parking_lot::{Mutex, MutexGuard};
+use std::collections::HashSet;
+use std::sync::{Arc, Weak};
+use tokio::sync::{mpsc, watch};
+use tokio_util::sync::CancellationToken;
+
+pub use agents::Agent;
+pub(crate) use imports::Batch;
+
+/// The first message: a new chat opens with it, its node written with it,
+/// so no compactor call summarizes it.
+pub const HELLO: &str = "Hello! This is Acorn.
+
+I'm like ChatGPT, but there is only **one chat** between us. *Forever.*
+
+Nothing we say is lost. I keep it all in a **memory tree**, with recent days in more detail.
+
+Ask me to build something. Or many things. Just keep asking. For days, weeks, years.
+
+Then, ask me anything about your past:
+
+> “What was that app I used to turn ads into cats?”
+
+I'll remember:
+
+> “Not an app: `ad2cat.py`, from a CatBoard post 7 years ago. Link's dead, but here's the script.”
+
+How? No new model. No magic. Just a regular chatbot with a neat memory system.";
+
+const HELLO_LINE: &str = "unii: hello: Acorn, one endless chat kept in a memory tree, recent days in more detail; build anything for years; recalls the past (ad2cat.py); a chatbot with a memory system.";
+
+/// A message logged: its pages [id, end).
+#[derive(Clone, Copy, Debug)]
+pub struct Span {
+    pub id: u64,
+    pub end: u64,
+}
+
+/// What the agent saw at its last call: the view before message `from`,
+/// then every message from it on.
+#[derive(Clone, Debug, Default)]
+pub struct Eye {
+    pub parts: Vec<Seg>,
+    pub from: u64,
+}
+
+/// A step that logs to the chat, held while an import logs (`hold`).
+type Held = Box<dyn FnOnce(&mut Chat) + Send>;
+
+/// The engine: the chat, its lock, and where its events go.
+pub struct Engine {
+    chat: Mutex<Chat>,
+    events: mpsc::UnboundedSender<Event>,
+    /// Told each time the views are fit (`settle` waits on it).
+    fitted: watch::Sender<u64>,
+    /// The posts logging, one after another (`writing`).
+    writes: tokio::sync::Mutex<()>,
+    /// The after-turn commands, one after another.
+    after: tokio::sync::Mutex<()>,
+}
+
+/// The chat. busy: a turn runs; call: the turn's call (its model asked:
+/// `asked`; tool calls without results: `open`); check: the turn's goal
+/// check; sent, wait: messages given and waiting; halt: what stops the
+/// turn (and why: `halted`); live: what streams; calls: tool calls
+/// awaiting their results, in order; spend: what the running turn's
+/// requests used; held: steps held while a post logs (None: none);
+/// seen: the parts the app was told of; compactions: the summaries'
+/// calls; found: the sessions a look found to import.
+pub struct Chat {
+    this: Weak<Engine>,
+    pub id: String,
+    db: rusqlite::Connection,
+    spend: Spend,
+    pub mem: Memory,
+    agents: std::collections::BTreeMap<String, Agent>,
+    busy: bool,
+    call: Option<Handle>,
+    check: Option<Handle>,
+    asked: bool,
+    open: usize,
+    sent: Vec<Span>,
+    wait: Vec<Span>,
+    halt: CancellationToken,
+    halted: Option<String>,
+    live: Vec<Live>,
+    calls: Vec<(String, String)>,
+    eye: Eye,
+    batch: Option<Batch>,
+    held: Option<Vec<Held>>,
+    seen: HashSet<Seg>,
+    compactions: Vec<(Handle, Part, Served)>,
+    found: Vec<import::Session>,
+}
+
+/// The chat, held: as it is let go, what its changes set off runs.
+pub struct Guard<'a>(MutexGuard<'a, Chat>);
+
+impl std::ops::Deref for Guard<'_> {
+    type Target = Chat;
+    fn deref(&self) -> &Chat {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Guard<'_> {
+    fn deref_mut(&mut self) -> &mut Chat {
+        &mut self.0
+    }
+}
+
+impl Drop for Guard<'_> {
+    fn drop(&mut self) {
+        self.0.settle();
+    }
+}
+
+impl Engine {
+    /// The config's chat, opened, its events to `events`.
+    pub fn start(events: mpsc::UnboundedSender<Event>) -> Result<Arc<Engine>> {
+        let config = config::get();
+        let dir = config.chat_dir();
+        std::fs::create_dir_all(&dir)?;
+        let db = usage::db(&dir)?;
+        let mem = Memory::load(&dir)?;
+        let work = mem.work.clone();
+        let engine = Arc::new_cyclic(|this| Engine {
+            chat: Mutex::new(Chat {
+                this: this.clone(),
+                id: config.chat.clone(),
+                db,
+                spend: Spend::default(),
+                mem,
+                agents: Default::default(),
+                busy: false,
+                call: None,
+                check: None,
+                asked: false,
+                open: 0,
+                sent: Vec::new(),
+                wait: Vec::new(),
+                halt: CancellationToken::new(),
+                halted: None,
+                live: Vec::new(),
+                calls: Vec::new(),
+                eye: Eye::default(),
+                batch: None,
+                held: None,
+                seen: HashSet::new(),
+                compactions: Vec::new(),
+                found: Vec::new(),
+            }),
+            events,
+            fitted: watch::channel(0).0,
+            writes: tokio::sync::Mutex::new(()),
+            after: tokio::sync::Mutex::new(()),
+        });
+        {
+            let mut chat = engine.lock();
+            // a saved pick not offered gave way: told once
+            let saved = chat.mem.pick.get("effort").and_then(|e| e.as_str()).map(str::to_string);
+            let pick = chat.pick();
+            if saved.as_deref().is_some_and(|s| s != pick.label()) {
+                chat.mem.pick = serde_json::to_value(pick)?;
+                chat.mem.save()?;
+                chat.note(format!("{} isn't offered here, so the chat now runs on {} effort.", saved.unwrap(), pick.label()));
+            }
+            if chat.mem.count == 0 {
+                let hello = Msg { line: Some(HELLO_LINE.into()), ..Msg::new(Kind::Acorn, HELLO) };
+                chat.mem.push(vec![hello])?;
+            }
+            let turn = chat.mem.turn();
+            chat.eye = chat.eye_from(turn);
+            chat.batch = chat.resumed();
+            chat.pump();
+            chat.progress();
+        }
+        let resumed = engine.clone();
+        tokio::spawn(async move { resumed.resume(work).await });
+        Ok(engine)
+    }
+
+    /// The chat, held.
+    pub fn lock(&self) -> Guard<'_> {
+        Guard(self.chat.lock())
+    }
+
+    fn tell(&self, ev: Event) {
+        let _ = self.events.send(ev);
+    }
+
+    /// The app (again) shows the chat: told it as it is now.
+    pub fn attach(&self) {
+        let mut chat = self.lock();
+        chat.seen.clear();
+        chat.tell_state();
+        chat.show();
+        chat.all(Event::Live { agent: None, live: chat.live.clone() });
+    }
+
+    /// A person's act, or a read.
+    pub fn command(self: &Arc<Self>, cmd: Command) {
+        let me = self.clone();
+        match cmd {
+            Command::Say { text, images } => {
+                tokio::spawn(async move { me.say(text, images).await });
+            }
+            Command::Stop(name) => self.lock().stop_by_user(name),
+            Command::Goal(goal) => self.lock().set_goal(goal),
+            Command::Pick(pick) => self.lock().set_pick(pick),
+            Command::Zoom(seg) => self.lock().zoom(seg),
+            Command::Root => self.lock().root(),
+            Command::Agent(name) => self.lock().agent_page(&name),
+            Command::Usage => {
+                let chat = self.lock();
+                chat.all(Event::Usage(chat.usage(30)));
+            }
+            Command::Find(exports) => {
+                tokio::spawn(async move { me.find(exports).await });
+            }
+            Command::Plan(want) => self.lock().plan(&want),
+            Command::Import(want) => {
+                tokio::spawn(async move { me.import(want).await });
+            }
+            Command::Go(on) => self.lock().go(on),
+            Command::Export(file) => {
+                tokio::spawn(async move { me.export(file).await });
+            }
+            Command::Tree(file) => {
+                tokio::spawn(async move { me.tree(file).await });
+            }
+        }
+    }
+
+    /// As Acorn quits: all work stops, and what it ran is left to resume.
+    pub fn quit(&self) {
+        {
+            let mut chat = self.lock();
+            chat.stop(None);
+            chat.mem.done = true;
+            for (call, _, _) in &chat.compactions {
+                call.stop();
+            }
+            chat.mem.close();
+        }
+        crate::machine::end();
+    }
+
+    /// Once the chat's messages before `end` are built (not an import's):
+    /// None; else why they won't be ("Stopped.": halt), so no turn or agent
+    /// waits on summaries no call is building.
+    pub async fn settle(&self, end: u64, halt: &CancellationToken) -> Option<String> {
+        let mut fitted = self.fitted.subscribe();
+        loop {
+            {
+                let chat = self.lock();
+                let built = chat.mem.first(0, 0) >= end;
+                let why = if halt.is_cancelled() { Some("Stopped.".to_string()) } else if built { None } else { chat.mem.hold[0].clone() };
+                if built || why.is_some() {
+                    return why;
+                }
+            }
+            tokio::select! {
+                _ = fitted.changed() => {}
+                _ = halt.cancelled() => {}
+            }
+        }
+    }
+
+    /// A post's logging, after the chat's earlier ones, holding its other
+    /// logging (`hold`) till it ends, so a long post's pages stay together.
+    async fn writing<T>(&self, write: impl AsyncFnOnce() -> T) -> T {
+        let _turn = self.writes.lock().await;
+        self.lock().held = Some(Vec::new());
+        let out = write().await;
+        let mut chat = self.lock();
+        let held = chat.held.take().unwrap_or_default();
+        chat.mem.open = 0;
+        for step in held {
+            step(&mut chat);
+        }
+        out
+    }
+
+    /// The work a quit cut goes on, told so: each agent, and Acorn's turn
+    /// by a note.
+    async fn resume(self: Arc<Self>, work: Vec<String>) {
+        if work.is_empty() {
+            return;
+        }
+        let text = format!("Acorn quit, cutting {}; nothing was lost: go on.", work.join(", "));
+        let msg = self.lock().push(None, Kind::Note, &text);
+        for w in work {
+            if w == TURN {
+                self.lock().take(msg);
+            } else {
+                let text = text.clone();
+                self.tell_agent(&w, &text).await;
+            }
+        }
+    }
+}
+
+impl Chat {
+    fn engine(&self) -> Arc<Engine> {
+        self.this.upgrade().expect("the engine outlives its chat")
+    }
+
+    /// What every call of the chat starts with, a summary's too: its
+    /// system prompt, its pick.
+    pub fn share(&self) -> ai::Ask {
+        ai::Ask {
+            effort: self.pick().effort,
+            system: crate::tools::system(&crate::tools::master()),
+            blocks: Vec::new(),
+            imgs: Vec::new(),
+            tools: None,
+            meter: None,
+            patient: false,
+            yields: None,
+            user: Some(self.id.clone()),
+        }
+    }
+
+    /// What its calls run on: its pick saved, if offered, else the
+    /// config's.
+    pub fn pick(&self) -> Pick {
+        Pick::read(&self.mem.pick).unwrap_or(config::get().pick)
+    }
+
+    /// An event to the app.
+    fn all(&self, ev: Event) {
+        if let Some(engine) = self.this.upgrade() {
+            engine.tell(ev);
+        }
+    }
+
+    /// What a held change set off: each summary built told (an import
+    /// counts its own), and, as the views were fit, its waiters woken and
+    /// an import's progress told.
+    fn settle(&mut self) {
+        for part in std::mem::take(&mut self.mem.made) {
+            self.made(part);
+        }
+        if std::mem::take(&mut self.mem.fitted) {
+            if let Some(engine) = self.this.upgrade() {
+                engine.fitted.send_modify(|n| *n += 1);
+            }
+            self.progress();
+        }
+    }
+
+    /// A step that logs to the chat: now, or once the post logging ends.
+    fn hold(&mut self, step: impl FnOnce(&mut Chat) + Send + 'static) {
+        match &mut self.held {
+            Some(held) => held.push(Box::new(step)),
+            None => step(self),
+        }
+    }
+
+    /// The compactor's next nodes started (`compactor`).
+    pub fn pump(&mut self) {
+        compactor::pump(self);
+    }
+
+    /// The meter of a kind of call.
+    pub fn meter(&self, kind: Served) -> ai::Meter {
+        let this = self.this.clone();
+        std::sync::Arc::new(move |used: Used| {
+            if let Some(engine) = this.upgrade() {
+                engine.lock().used(kind, used);
+            }
+        })
+    }
+
+    pub(crate) fn compactions(&mut self) -> &mut Vec<(Handle, Part, Served)> {
+        &mut self.compactions
+    }
+
+    pub(crate) fn this(&self) -> Weak<Engine> {
+        self.this.clone()
+    }
+}

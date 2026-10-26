@@ -1,0 +1,141 @@
+//! Acorn's engine
+//! ==============
+//! One chat that never ends (`chat`), kept forever in a memory tree
+//! (`memory`, built in the background by `compactor`), answered by an
+//! agent on DeepSeek (`ai`) with tools on this Mac (`tools`, `machine`,
+//! `computer`). The app (the `acorn` crate) only shows it: it sends
+//! `Command`s and hears `Event`s (`wire`).
+//!
+//! The chat's files are UniiChat's, byte for byte (`memory`), so a chat
+//! UniiChat kept opens here as it was.
+
+pub mod ai;
+pub mod chat;
+pub mod clip;
+pub mod compactor;
+pub mod computer;
+pub mod config;
+pub mod disk;
+pub mod import;
+pub mod machine;
+pub mod memory;
+pub mod names;
+pub mod pick;
+pub mod price;
+pub mod tools;
+pub mod wire;
+
+use serde::{Deserialize, Serialize};
+
+/// A message's kind: the user's, an agent's report ("[Name]\n..."), a
+/// thought (shown, never logged), Acorn's reply (logged as "unii", its
+/// name before, so the tree reads alike all along), a tool call, its
+/// result, a note (from before the chat, or why work ended).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    User,
+    Work,
+    Mind,
+    #[serde(rename = "unii")]
+    Acorn,
+    Tool,
+    Echo,
+    Note,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::User => "user",
+            Kind::Work => "work",
+            Kind::Mind => "mind",
+            Kind::Acorn => "unii",
+            Kind::Tool => "tool",
+            Kind::Echo => "echo",
+            Kind::Note => "note",
+        }
+    }
+}
+
+/// An image for a model: its mime type, its bytes in base64.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Img {
+    #[serde(rename = "type")]
+    pub mime: String,
+    pub data: String,
+}
+
+/// A message for the agent: its text, its images.
+#[derive(Clone, Debug, Default)]
+pub struct Say {
+    pub text: String,
+    pub imgs: Vec<Img>,
+}
+
+/// A text block of a call's message; `mark`: a cache entry ends after it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Block {
+    pub text: String,
+    pub mark: bool,
+}
+
+impl Block {
+    pub fn new(text: impl Into<String>, mark: bool) -> Block {
+        Block { text: text.into(), mark }
+    }
+}
+
+/// What a call serves: the chat's turn, a summary (the chat's, an
+/// import's), an agent, a computer-use agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Served {
+    Chat,
+    Compactor,
+    Import,
+    Agent,
+    Computer,
+}
+
+impl Served {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Served::Chat => "chat",
+            Served::Compactor => "compactor",
+            Served::Import => "import",
+            Served::Agent => "agent",
+            Served::Computer => "computer",
+        }
+    }
+}
+
+/// What requests used, summed: how many, tokens in (new, and read from
+/// DeepSeek's cache) and out, USD, when the last ended (ms).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Spend {
+    pub n: u64,
+    pub input: u64,
+    pub read: u64,
+    pub output: u64,
+    pub usd: f64,
+    pub at: i64,
+}
+
+impl std::ops::Add for Spend {
+    type Output = Spend;
+    fn add(self, b: Spend) -> Spend {
+        Spend {
+            n: self.n + b.n,
+            input: self.input + b.input,
+            read: self.read + b.read,
+            output: self.output + b.output,
+            usd: self.usd + b.usd,
+            at: self.at.max(b.at),
+        }
+    }
+}
+
+/// Milliseconds since 1970.
+pub fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}

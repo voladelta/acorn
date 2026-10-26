@@ -1,0 +1,27 @@
+[package]
+name = "acorn-core"
+description = "Acorn's engine: one endless chat, its memory tree, the agent and its tools"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+futures-util = "0.3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+libc = "0.2"
+parking_lot = "0.12"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"
