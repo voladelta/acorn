@@ -1,12 +1,14 @@
 //! Rows
 //! ====
 //! The chat as drawn: a list of the model's items (a part each), each its
-//! rows, then what streams. A block is a summary on the block's fill (a
-//! click opens it into its halves); an open block, its bar over its
-//! halves in a frame; the user's words in a bubble at the right; a report
-//! framed, its agent's name on its edge; Acorn's words bare, as Markdown;
-//! thinking and notes faint; a tool call on its fill, its emoji and name
-//! first; a result as a file's lines, numbered, a diff's in green and red.
+//! rows, then what streams. A block is a summary on the block's fill, its
+//! count of messages at its left (a click opens it into its halves); an
+//! open block, its bar over its halves in a frame; the user's words in a
+//! bubble at the right; a report framed, its agent's or assistant's name
+//! on its edge (a click: its page, or the thread); the assistant's words
+//! bare, as Markdown, a reply cut off ending so; thinking and notes faint;
+//! a tool call on its fill, its emoji and name first; a result as a
+//! file's lines, numbered, a diff's in green and red.
 
 use crate::call::Call;
 use crate::look::*;
@@ -14,6 +16,7 @@ use crate::model::{Act, Row};
 use crate::text::{self, Out};
 use crate::Ui;
 use acorn_core::Kind;
+use acorn_core::chat::hub;
 use nsh_base::{TextViewLinkPressEvent, text_view};
 use nsh_core::prelude::*;
 
@@ -62,7 +65,8 @@ fn row(ui: Ui, it: Row) -> AnyElement {
             .bg(block())
             .hover(|s| s.bg(hover()))
             .on_press(move || ui.act(Act::Open(seg)))
-            .child(text(format!("{}x", seg.1)).min_w(px(38.0)).text_size(px(11.5)).line_height(px(24.0)).font_weight(FontWeight::SEMIBOLD).text_color(mid()))
+            .tooltip(crate::hint(format!("{} messages, summarized: click to open", seg.1)))
+            .child(text(seg.1.to_string()).min_w(px(38.0)).text_size(px(11.5)).line_height(px(24.0)).font_weight(FontWeight::SEMIBOLD).text_color(mid()))
             .child(match call {
                 Some(call) => call_head(&call, true).flex_1().into_element(),
                 None => text(summary).flex_1().font_family(SERIF).text_size(px(15.0)).line_height(px(23.0)).into_element(),
@@ -114,7 +118,10 @@ fn message(ui: Ui, kind: Kind, who: String, body: String, call: Option<Call>, im
             .border(px(1.25))
             .border_color(edge())
             .rounded(px(14.0))
-            .child(text(who).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(mid()))
+            .child({
+                let name = who.clone();
+                text(who).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(mid()).cursor_pointer().on_press(move || ui.open_name(&name))
+            })
             .child(plain(ui, &body, 16.0))
             .into_element(),
         Kind::Tool => {
@@ -130,13 +137,25 @@ fn message(ui: Ui, kind: Kind, who: String, body: String, call: Option<Call>, im
                 .into_element()
         }
         Kind::Echo => view().gap_2().child(text::output(&body).into_iter().map(file).collect::<Vec<_>>()).into_element(),
-        Kind::Mind | Kind::Note => view()
-            .gap_1()
-            .child((!who.is_empty()).then(|| text(who).text_size(px(12.0)).font_weight(FontWeight::BOLD).text_color(soft())))
-            .child(markdown(ui, &body).text_size(px(14.5)).line_height(px(23.0)).text_color(mid()).italic())
-            .into_element(),
-        Kind::Acorn => view().child(markdown(ui, &body).text_size(px(16.0)).line_height(px(25.0))).child(pics).into_element(),
+        Kind::Mind | Kind::Note => {
+            let (said, cut) = text::cut_off(&body);
+            view()
+                .gap_1()
+                .child((!who.is_empty()).then(|| text(who).text_size(px(12.0)).font_weight(FontWeight::BOLD).text_color(soft())))
+                .child(markdown(ui, said).text_size(px(14.5)).line_height(px(23.0)).text_color(mid()).italic())
+                .child(cut.then(cut_mark))
+                .into_element()
+        }
+        Kind::Acorn => {
+            let (said, cut) = text::cut_off(&body);
+            view().child(markdown(ui, said).text_size(px(16.0)).line_height(px(25.0))).child(cut.then(cut_mark)).child(pics).into_element()
+        }
     }
+}
+
+/// Where a message cut in on what was being said or thought.
+fn cut_mark() -> Text {
+    text("— cut off").font_family(SERIF).italic().text_size(px(14.5)).text_color(mid())
 }
 
 /// Markdown, each agent's name a link to its page.
@@ -146,7 +165,7 @@ fn markdown(ui: Ui, body: &str) -> nsh_base::TextViewElement {
         .selectable(true)
         .text_color(ink())
         .on_link_press(move |e: &TextViewLinkPressEvent| match e.url.strip_prefix("agent:") {
-            Some(name) => ui.act(Act::Goto(Some(name.to_string()))),
+            Some(name) => ui.open_name(name),
             None => {
                 let _ = open_url(e.url.to_string());
             }
@@ -163,7 +182,7 @@ fn plain(ui: Ui, body: &str, size: f32) -> impl IntoElement {
             Some(close) => {
                 let name = tail[..close].to_string();
                 line = line.child(rest[..at].to_string());
-                line = line.child(text(format!("[{name}]")).underline().on_press(move || ui.act(Act::Goto(Some(name.clone())))));
+                line = line.child(text(format!("[{name}]")).underline().on_press(move || ui.open_name(&name)));
                 rest = &tail[close + 1..];
             }
             None => {
@@ -240,7 +259,7 @@ fn file(out: Out) -> View {
 
 /// A message's images, each opened by a click.
 fn pictures(ui: Ui, names: &[String]) -> View {
-    let dir = acorn_core::config::get().chats.join(ui.shown.get_untracked()).join("docs/images");
+    let dir = hub::dir(&ui.shown.get_untracked()).join("docs/images");
     view().flex_row().flex_wrap().gap_2().mt_2().child(
         names
             .iter()

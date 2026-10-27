@@ -20,10 +20,12 @@ pub const MAX_OUTPUT_TOKENS: u64 = 384_000;
 pub const IDLE: Duration = Duration::from_secs(1200);
 
 /// What a request sends after the system prompt: the user's text and
-/// images, the model's output as its API gave it, tool results.
+/// images, the model's output as its API gave it, its reply so far as
+/// a message cut it off, tool results.
 pub enum Item {
     User { parts: Vec<String>, imgs: Vec<Img> },
     Turn(Vec<Value>),
+    Said(String),
     Back(Vec<(String, Out)>),
 }
 
@@ -86,6 +88,7 @@ fn input(item: &Item) -> Vec<Value> {
             vec![json!({"role": "user", "content": content})]
         }
         Item::Turn(out) => out.clone(),
+        Item::Said(text) => vec![json!({"role": "assistant", "content": text})],
         Item::Back(backs) => backs
             .iter()
             .map(|(id, out)| {

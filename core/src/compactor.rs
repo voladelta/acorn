@@ -77,8 +77,7 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
         blocks.push(Block::new(format!("{}{text}\n</input>", memory::Memory::task(part)), false));
         let served = chat.mem.served(part);
         let yields = (served == Served::Import).then(|| chat.mem.dir.display().to_string());
-        let pick = config::get().compactor;
-        let ask = ai::Ask { effort: pick.effort, blocks, meter: Some(chat.meter(served)), patient: true, yields, ..chat.share() };
+        let ask = ai::Ask { effort: config::get().compactor, blocks, meter: Some(chat.meter(served)), patient: true, yields, ..chat.share() };
         (ask, served)
     };
     let mut lines: Vec<String> = Vec::new();

@@ -1,12 +1,14 @@
 //! Chat
 //! ====
-//! The agent: one chat that never ends (`memory`), an assistant's, at
-//! config `chats`/<id>, and the app that shows it, by `wire`'s commands
-//! and events.
+//! The agent: one chat that never ends (`memory`), an assistant's with
+//! the user, or its thread with another assistant who asked it something
+//! (`hub`), and the app that shows it, by `wire`'s commands and events.
+//! A thread is a chat like any: the asker is its user, and each reply
+//! goes back to the asker's chat as a message "[Name]".
 //!
 //! One turn at a time. A message is logged as it arrives; the running call
-//! takes it between tool calls if it goes whole beside its view, else the
-//! next call does, on the chat's pick. A quit or crash cuts all: a start
+//! takes it if it goes whole beside its view (the user's cutting in on its
+//! step), else the next call does, at its assistant's effort. A quit or crash cuts all: a start
 //! resumes what ran, told so.
 //!
 //! The chat's state is one lock (`Engine::lock`), as one thread would hold
@@ -15,6 +17,7 @@
 //! (`Guard`), before anyone else takes it.
 
 mod agents;
+pub mod hub;
 mod imports;
 mod turns;
 mod usage;
@@ -25,14 +28,13 @@ use crate::assistant::Assistant;
 use crate::compactor;
 use crate::import;
 use crate::memory::{self, Memory, Msg, Part};
-use crate::pick::Pick;
 use crate::wire::{Command, Event, Live, Seg, TURN};
-use crate::{Kind, Served, Spend, config};
+use crate::{Kind, Served, Spend};
 use anyhow::Result;
 use parking_lot::{Mutex, MutexGuard};
 use std::collections::HashSet;
 use std::sync::{Arc, Weak};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 pub use agents::Agent;
@@ -78,10 +80,12 @@ pub struct Eye {
 /// A step that logs to the chat, held while an import logs (`hold`).
 type Held = Box<dyn FnOnce(&mut Chat) + Send>;
 
-/// The engine: the chat, its lock, and where its events go.
+/// The engine: its chat's id, the chat, its lock, and where its events
+/// go.
 pub struct Engine {
+    id: String,
     chat: Mutex<Chat>,
-    events: mpsc::UnboundedSender<Event>,
+    events: hub::Heard,
     /// Told each time the views are fit (`settle` waits on it).
     fitted: watch::Sender<u64>,
     /// The posts logging, one after another (`writing`).
@@ -97,12 +101,17 @@ pub struct Engine {
 /// awaiting their results, in order; spend: what the running turn's
 /// requests used; held: steps held while a post logs (None: none);
 /// seen: the parts the app was told of; compactions: the summaries'
-/// calls; found: the sessions a look found to import.
+/// calls; found: the sessions a look found to import, and the import
+/// the turn asked for (`then`), begun as it ends; reply: what a thread's
+/// turn answers its asker; cut_in: the user cut in on the turn's call
+/// (its goal waits for them).
 pub struct Chat {
     this: Weak<Engine>,
     pub id: String,
     /// Whose chat it is: its effort, its prompt, its work dir.
     pub me: Assistant,
+    /// In a thread, who asks: its user.
+    pub with: Option<Assistant>,
     spend: Spend,
     pub mem: Memory,
     agents: std::collections::BTreeMap<String, Agent>,
@@ -123,6 +132,9 @@ pub struct Chat {
     seen: HashSet<Seg>,
     compactions: Vec<(Handle, Part, Served)>,
     found: Vec<import::Session>,
+    then: Option<import::Want>,
+    reply: Option<String>,
+    cut_in: bool,
 }
 
 /// The chat, held: as it is let go, what its changes set off runs.
@@ -148,18 +160,20 @@ impl Drop for Guard<'_> {
 }
 
 impl Engine {
-    /// An assistant's chat, opened, its events to `events`.
-    pub fn start(me: Assistant, events: mpsc::UnboundedSender<Event>) -> Result<Arc<Engine>> {
-        let dir = config::get().chats.join(&me.id);
+    /// A chat opened (`hub`), its events to `events`.
+    fn start(id: String, me: Assistant, with: Option<Assistant>, events: hub::Heard) -> Result<Arc<Engine>> {
+        let dir = hub::dir(&id);
         std::fs::create_dir_all(&dir)?;
         let mem = Memory::load(&dir)?;
         usage::tables(&mem.db)?;
         let work = mem.work.clone();
         let engine = Arc::new_cyclic(|this| Engine {
+            id: id.clone(),
             chat: Mutex::new(Chat {
                 this: this.clone(),
-                id: me.id.clone(),
+                id,
                 me,
+                with,
                 spend: Spend::default(),
                 mem,
                 agents: Default::default(),
@@ -180,6 +194,9 @@ impl Engine {
                 seen: HashSet::new(),
                 compactions: Vec::new(),
                 found: Vec::new(),
+                then: None,
+                reply: None,
+                cut_in: false,
             }),
             events,
             fitted: watch::channel(0).0,
@@ -188,15 +205,7 @@ impl Engine {
         });
         {
             let mut chat = engine.lock();
-            // a saved pick not offered gave way: told once
-            let saved = chat.mem.pick.get("effort").and_then(|e| e.as_str()).map(str::to_string).filter(|_| chat.me.effort.is_none());
-            let pick = chat.pick();
-            if saved.as_deref().is_some_and(|s| s != pick.label()) {
-                chat.mem.pick = serde_json::to_value(pick)?;
-                chat.mem.save()?;
-                chat.note(format!("{} isn't offered here, so the chat now runs on {} effort.", saved.unwrap(), pick.label()));
-            }
-            if chat.mem.count == 0 {
+            if chat.mem.count == 0 && chat.with.is_none() {
                 let name = chat.me.name.clone();
                 let hello = HELLO.replacen("This is Acorn.", &format!("This is {name}."), 1);
                 let line = HELLO_LINE.replacen("hello: Acorn,", &format!("hello: {name},"), 1);
@@ -220,7 +229,7 @@ impl Engine {
     }
 
     fn tell(&self, ev: Event) {
-        let _ = self.events.send(ev);
+        let _ = self.events.send((self.id.clone(), ev));
     }
 
     /// The app (again) shows the chat: told it as it is now.
@@ -239,31 +248,10 @@ impl Engine {
             Command::Say { text, images } => {
                 tokio::spawn(async move { me.say(text, images).await });
             }
-            Command::Stop(name) => self.lock().stop_by_user(name),
-            Command::Goal(goal) => self.lock().set_goal(goal),
             Command::Attach => self.attach(),
-            Command::Pick(pick) => self.lock().set_pick(pick),
             Command::Zoom(seg) => self.lock().zoom(seg),
             Command::Root => self.lock().root(),
             Command::Agent(name) => self.lock().agent_page(&name),
-            Command::Usage => {
-                let chat = self.lock();
-                chat.all(Event::Usage(chat.usage(30)));
-            }
-            Command::Find(exports) => {
-                tokio::spawn(async move { me.find(exports).await });
-            }
-            Command::Plan(want) => self.lock().plan(&want),
-            Command::Import(want) => {
-                tokio::spawn(async move { me.import(want).await });
-            }
-            Command::Go(on) => self.lock().go(on),
-            Command::Export(file) => {
-                tokio::spawn(async move { me.export(file).await });
-            }
-            Command::Tree(file) => {
-                tokio::spawn(async move { me.tree(file).await });
-            }
         }
     }
 
@@ -316,8 +304,8 @@ impl Engine {
         out
     }
 
-    /// The work a quit cut goes on, told so: each agent, and Acorn's turn
-    /// by a note.
+    /// The work a quit cut goes on, told so: each agent, and the turn by a
+    /// note.
     async fn resume(self: Arc<Self>, work: Vec<String>) {
         if work.is_empty() {
             return;
@@ -325,7 +313,8 @@ impl Engine {
         let text = format!("Acorn quit, cutting {}; nothing was lost: go on.", work.join(", "));
         let msg = self.lock().push(None, Kind::Note, &text);
         for w in work {
-            if w == TURN {
+            // "Acorn's turn": as a chat saved it before
+            if w == TURN || w == "Acorn's turn" {
                 self.lock().take(msg);
             } else {
                 let text = text.clone();
@@ -341,12 +330,13 @@ impl Chat {
     }
 
     /// What every call of the chat starts with, a summary's too: its
-    /// system prompt (its assistant's personality after Acorn's, then the
-    /// facts it sees), its pick.
+    /// system prompt (its assistant's personality after Acorn's, a
+    /// thread's asker, then the facts it sees), its assistant's effort.
     pub fn share(&self) -> ai::Ask {
-        let head = crate::tools::master(&self.me.work()) + &self.me.personality() + &crate::facts::prompt(&self.me.id);
+        let asks = self.with.as_ref().map(|a| a.asking()).unwrap_or_default();
+        let head = crate::tools::master(&self.me.work()) + &self.me.personality() + &asks + &crate::facts::prompt(&self.me.id);
         ai::Ask {
-            effort: self.pick().effort,
+            effort: self.me.effort,
             system: crate::tools::system(&head),
             blocks: Vec::new(),
             imgs: Vec::new(),
@@ -374,15 +364,6 @@ impl Chat {
             self.pump();
         }
         said
-    }
-
-    /// What its calls run on: its assistant's effort; Acorn's, its pick
-    /// saved, if offered, else the config's.
-    pub fn pick(&self) -> Pick {
-        match self.me.effort {
-            Some(effort) => Pick { effort },
-            None => Pick::read(&self.mem.pick).unwrap_or(config::get().pick),
-        }
     }
 
     /// An event to the app.

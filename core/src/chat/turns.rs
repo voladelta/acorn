@@ -1,11 +1,16 @@
 //! Turns
 //! =====
-//! A message is logged as it comes and taken: by the running call, between
-//! its tool calls, if it goes whole beside its view, else by the next. A
+//! A message is logged as it comes and taken: by the running call if it
+//! goes whole beside its view, else by the next. The user's cuts in on the
+//! call at work (`ai::agent`); an agent's report or a note waits for its
+//! step to end. A
 //! turn runs its calls till no message waits; each call first waits for
-//! the summaries of the messages before its own (`settle`). A goal (/goal)
-//! is checked as a turn would end, and its nudge keeps the turn going till
-//! it is met.
+//! the summaries of the messages before its own (`settle`). A goal (the
+//! `goal` tool) is checked as a turn would end, and its nudge keeps the
+//! turn going till it is met, unless the user cut in meanwhile: then the
+//! assistant answers them and waits. A thread's turn ends with its reply
+//! (every call's, or why there was none) sent to its asker; one that
+//! asked for an import begins it.
 
 use super::{Chat, Engine, Span};
 use crate::ai::{self, Event as AiEvent};
@@ -22,7 +27,7 @@ const HEAD: &str = "Turn: the user's new message:\n\n";
 /// turn or a compaction, made the model summarize the chat instead of
 /// answering), asked after the chat (the view, its latest messages whole)
 /// of its goal; unmet, the user's nudge.
-const GOAL: &str = "You check a goal. Below is a chat between a user and Acorn, an AI agent: its older messages as summary lines (id+n|text), then its latest messages whole, then the goal the user set with /goal. Answer yes if the chat shows the goal fully satisfied now, else no. Write that one word, nothing else.";
+const GOAL: &str = "You check a goal. Below is a chat between a user and an AI assistant: its older messages as summary lines (id+n|text), then its latest messages whole, then the goal the assistant set itself from the user's words. Answer yes if the chat shows the goal fully satisfied now, else no. Write that one word, nothing else.";
 const GOAL_ASK: &str = "\nThe goal:\n\n";
 const GOAL_NO: &str = "The goal isn't satisfied yet: keep working.";
 
@@ -49,26 +54,41 @@ impl Engine {
         .await;
     }
 
-    /// Calls while messages wait.
+    /// Calls while messages wait; then a thread's reply goes to its asker,
+    /// and an import asked for begins.
     async fn turn(self: Arc<Self>) {
         let mut go = true;
         while go && !self.lock().wait.is_empty() {
             go = self.clone().call().await;
         }
-        let mut chat = self.lock();
-        if chat.halt.is_cancelled()
-            && let Some(why) = chat.halted.take()
-        {
-            chat.note(why);
+        let (reply, then) = {
+            let mut chat = self.lock();
+            if chat.halt.is_cancelled()
+                && let Some(why) = chat.halted.take()
+            {
+                chat.note(why);
+            }
+            chat.call = None;
+            chat.sent.clear();
+            chat.wait.clear();
+            chat.busy = false;
+            chat.set_live(None, Vec::new());
+            chat.spent();
+            chat.after();
+            chat.change();
+            let reply = chat.reply.take().filter(|_| !chat.mem.done).zip(chat.with.clone());
+            (reply, chat.then.take())
+        };
+        if let Some((text, asks)) = reply {
+            let name = self.lock().me.name.clone();
+            match super::hub::chat(&asks) {
+                Ok(asker) => asker.lock().heard(&format!("[{name}]\n{text}")),
+                Err(why) => eprintln!("acorn: {name}'s reply to {}: {why}", asks.name),
+            }
         }
-        chat.call = None;
-        chat.sent.clear();
-        chat.wait.clear();
-        chat.busy = false;
-        chat.set_live(None, Vec::new());
-        chat.spent();
-        chat.after();
-        chat.change();
+        if let Some(want) = then {
+            self.import(want).await;
+        }
     }
 
     /// A call of the turn, once the summaries before its messages are
@@ -78,6 +98,7 @@ impl Engine {
             let mut chat = self.lock();
             chat.halt = CancellationToken::new();
             chat.halted = None;
+            chat.cut_in = false;
             chat.change();
             chat.halt.clone()
         };
@@ -90,7 +111,9 @@ impl Engine {
             from = Some(now);
             if let Some(why) = self.settle(now, &halt).await {
                 if !halt.is_cancelled() {
-                    self.lock().failed(&why);
+                    let mut chat = self.lock();
+                    chat.failed(&why);
+                    chat.answer(&format!("(no answer: {why})"));
                 }
                 return false;
             }
@@ -133,11 +156,14 @@ impl Engine {
             if !end.ok && !halt.is_cancelled() {
                 chat.failed(&end.text);
             }
+            if !halt.is_cancelled() {
+                chat.answer(&if end.ok { end.text.clone() } else { format!("(no answer: {})", end.text) });
+            }
             if !end.note.is_empty() {
                 chat.all(Event::Note(end.note.clone()));
             }
             match chat.mem.goal.clone() {
-                Some(goal) if end.ok && !halt.is_cancelled() && chat.wait.is_empty() => Some((chat.check_goal(&goal), goal)),
+                Some(goal) if end.ok && !halt.is_cancelled() && chat.wait.is_empty() && !chat.cut_in => Some((chat.check_goal(&goal), goal)),
                 _ => None,
             }
         };
@@ -149,8 +175,9 @@ impl Engine {
 
     /// A goal check's answer, as the turn's call's is: unmet (any answer
     /// but yes), the user's nudge goes to the turn as their message; met,
-    /// the goal ends. A check that fails, a stop, a message or a /halt
-    /// meanwhile end it with no nudge, so the turn ends; false: it ends.
+    /// the goal ends. A check that fails, a stop, a message or the goal
+    /// dropped meanwhile end it with no nudge, so the turn ends; false: it
+    /// ends.
     async fn checked(self: Arc<Self>, call: ai::Call, goal: String, halt: CancellationToken) -> bool {
         let handle = call.handle.clone();
         self.lock().check = Some(handle.clone());
@@ -168,7 +195,7 @@ impl Engine {
             let on = !halt.is_cancelled() && chat.mem.goal.as_deref() == Some(goal.as_str()) && chat.wait.is_empty();
             chat.check = None;
             if on && !end.ok {
-                chat.note(format!("No goal check: {}. The goal stays; /halt drops it.", end.text.trim_end_matches('.')));
+                chat.note(format!("No goal check: {}. The goal stays till it is dropped.", end.text.trim_end_matches('.')));
             } else if on && says_yes(&end.text) {
                 chat.mem.goal = None;
                 chat.save();
@@ -196,14 +223,16 @@ fn says_yes(text: &str) -> bool {
 }
 
 impl Chat {
-    /// A message logged: to the running call if whole beside its view, else
-    /// to the next.
+    /// A message logged: to the running call if whole beside its view (the
+    /// user's cutting in), else to the next.
     pub(super) fn take(&mut self, msg: Span) {
         if let Some(call) = self.call.clone()
             && self.mem.whole(msg.id) == msg.id
         {
             self.sent.push(msg);
-            call.send(self.mem.say(msg.id, msg.end));
+            let cut = self.mem.message(msg.id).is_some_and(|m| m.kind == Kind::User);
+            self.cut_in |= cut;
+            call.send(crate::Say { cut, ..self.mem.say(msg.id, msg.end) });
             return;
         }
         self.wait.push(msg);
@@ -221,8 +250,8 @@ impl Chat {
         self.mem.whole(first)
     }
 
-    /// The user's goal (/goal), asked of the chat's model, without tools, on
-    /// the chat as it is now.
+    /// The goal (the `goal` tool), asked of the chat's model, without
+    /// tools, on the chat as it is now.
     fn check_goal(&mut self, goal: &str) -> ai::Call {
         let at = self.mem.whole(0);
         let tail: String = (at..self.mem.count)
@@ -233,6 +262,19 @@ impl Chat {
         blocks.push(Block::new(format!("{tail}{GOAL_ASK}{goal}"), true));
         let ask = ai::Ask { system: GOAL.into(), blocks, meter: Some(self.meter(Served::Chat)), ..self.share() };
         ai::ask(ask, Arc::new(|_| {}))
+    }
+
+    /// A thread's call's answer, joined to the turn's reply (none outside
+    /// a thread).
+    fn answer(&mut self, text: &str) {
+        if self.with.is_none() || text.trim().is_empty() {
+            return;
+        }
+        let reply = self.reply.get_or_insert_default();
+        if !reply.is_empty() {
+            reply.push_str("\n\n");
+        }
+        reply.push_str(text.trim());
     }
 
     /// A failed turn's why, as a note.
@@ -418,8 +460,8 @@ impl Chat {
         });
     }
 
-    /// Acorn's turn only, with the spawns and tells it waits on; agents go
-    /// on. why: the note the turn's end logs, after the reply the stop cut.
+    /// The turn only, with the spawns and tells it waits on; agents go on.
+    /// why: the note the turn's end logs, after the reply the stop cut.
     pub(super) fn interrupt(&mut self, why: Option<String>) {
         if !self.halt.is_cancelled() {
             self.halted = why;
@@ -441,41 +483,24 @@ impl Chat {
         }
     }
 
-    /// The person stops all work, or what they name.
-    pub(super) fn stop_by_user(&mut self, name: Option<String>) {
-        let what: Vec<String> = self.running().into_iter().filter(|w| name.as_ref().is_none_or(|n| n == w)).collect();
-        if what.is_empty() {
-            return;
-        }
-        let why = format!("Stopped by the user: {}.", what.join(", "));
-        let turn = what.iter().any(|w| w == TURN);
-        if turn {
-            self.interrupt(Some(why.clone()));
-        }
-        for w in &what {
-            self.stop_agents(Some(w));
-        }
-        if !turn {
-            self.note(why);
-        }
-    }
-
+    /// The goal set, or dropped (None), and told.
     pub(super) fn set_goal(&mut self, goal: Option<String>) {
-        if goal == self.mem.goal {
-            return;
-        }
-        let halted = goal.is_none();
-        self.mem.goal = goal;
-        self.save();
-        if halted {
-            self.note("Goal halted by the user.");
+        if goal != self.mem.goal {
+            self.mem.goal = goal;
+            self.save();
+            self.tell_state();
         }
     }
 
-    pub(super) fn set_pick(&mut self, pick: crate::pick::Pick) {
-        self.mem.pick = serde_json::to_value(pick).unwrap_or_default();
-        self.save();
-        self.change();
+    /// A message from outside the chat (another assistant's reply), as an
+    /// agent's report is: logged, and taken, never cutting in.
+    pub(super) fn heard(&mut self, text: &str) {
+        let text = text.to_string();
+        self.hold(move |chat| {
+            let msg = chat.push(None, Kind::Work, &text);
+            chat.take(msg);
+            chat.change();
+        });
     }
 
     pub(super) fn save(&self) {
@@ -484,7 +509,7 @@ impl Chat {
         }
     }
 
-    /// What runs: Acorn's turn, the agents at work.
+    /// What runs: the turn, the agents at work.
     pub(super) fn running(&self) -> Vec<String> {
         let turn = self.busy.then(|| TURN.to_string());
         turn.into_iter().chain(self.working()).collect()

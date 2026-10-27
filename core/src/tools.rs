@@ -1,15 +1,20 @@
 //! Tools
 //! =====
-//! Acorn's prompts and tools. Everyone gets zoom and date (OWN); Acorn
-//! itself spawns and tells agents and creates assistants (BOSS), keeps
-//! facts and purges messages (KEEP), and
-//! starts computer tasks (HAND); shell, read, write and edit (`machine`) run on this Mac, each
-//! caller in its own dir under the work dir. A computer task's agent gets
-//! only the computer tool. The agents themselves run in `chat::agents`.
+//! Acorn's prompts and tools. The user acts only by words, so whatever the
+//! app does, an assistant does by a tool. Everyone gets zoom and date
+//! (OWN); an assistant spawns, tells and stops agents (BOSS) and starts
+//! computer tasks (HAND); in its chat with the user it also hires
+//! assistants and consults them (PEERS), keeps facts and purges messages
+//! (KEEP), and sets goals, reads usage, imports, exports and draws its
+//! memory (HOME); in a thread, where another assistant asks it something,
+//! it gets none of those. shell, read, write and edit (`machine`) run on
+//! this Mac, each caller in its own dir under the work dir. A computer
+//! task's agent gets only the computer tool. The agents themselves run in
+//! `chat::agents`.
 
 use crate::ai::Spec;
 use crate::machine::{self, spec};
-use crate::pick::EFFORTS;
+use crate::effort::EFFORTS;
 use crate::{config, memory};
 use serde_json::json;
 use std::path::Path;
@@ -63,16 +68,26 @@ ask. Never grep or search memories manually; zoom is your only
 allowed mechanism to navigate the tree. Summaries keep little of tool output, so
 say in your reply what you learned that will matter later.
 
-Messages the user sends while you work reach you between tool calls. Subagents
-and computer tasks run in the background; each one's report reaches you as a
+The user cuts in as a person would: a message they send while you work stops
+you at once, mid-reply or mid-tool-call. What you were saying ends \"[cut
+off]\", a tool call it cut answers so, and you read their message: answer it,
+and go back to the work only if it says to. \"Stop\" means stop. Subagents and
+computer tasks run in the background; each one's report reaches you as a
 message starting \"[Name]\", between your tool calls or as a new turn. Never wait
 for one (no sleep, no polling): go on, or end your turn and tell the user what
 is running.
 
-When the user tells you something to keep for good (who they are, a
-preference, a decision, a rule for your work), remember it as a fact; forget
-one they say is wrong. When they ask you to erase something from the chat,
-such as a password or key they pasted, purge its message.
+The user acts only through you: there are no buttons and no menus, so
+whatever they ask of Acorn, do with your tools. When the user tells you
+something to keep for good (who they are, a preference, a decision, a rule for
+your work), remember it as a fact; forget one they say is wrong. When they ask
+you to erase something from the chat, such as a password or key they pasted,
+purge its message, once they confirm: it can't be undone. When they name a
+finish line (\"keep at it until the tests pass\"), set it as your goal.
+
+You are one of the user's assistants, each a person with a name and a part to
+play. When another's part fits what is asked (an expert, a specialist), ask
+them, and tell the user what they said.
 
 {mac}
 
@@ -220,8 +235,28 @@ fn boss() -> Vec<Spec> {
     let efforts: Vec<&str> = EFFORTS.iter().map(|e| e.as_str()).collect();
     vec![
         spec("spawn", "Start one subagent per task, in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. A subagent sees the view and the user's instructions, but knows what you want only from its task.", json!({"tasks": {"type": "array", "items": {"type": "string"}}, "effort": {"type": "string", "enum": efforts, "description": "How hard they think; by default, as hard as you."}}), &["tasks"]),
-        spec("create_assistant", "Create a new assistant, when the user asks to create or hire one: an assistant of their own, beside you and Max in Acorn's sidebar, with a chat of its own that never ends and its own memory. It is you, Acorn, with its own name, reasoning effort and instructions: its system prompt, after yours. Write the instructions from what the user said (what it helps with, how it works and talks), or use the system prompt they gave word for word. It does not start working; the user opens it from the sidebar.", json!({"name": {"type": "string"}, "effort": {"type": "string", "enum": efforts, "description": "How hard it thinks: low is fast and cheap, max is smartest and slowest; high if the user didn't say."}, "instructions": {"type": "string", "description": "Its system prompt."}}), &["name", "effort", "instructions"]),
-        spec("tell", "Send a message to an agent (a subagent or a computer task), by name. One at work reads it between its tool calls, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".", json!({"name": {"type": "string"}, "message": {"type": "string"}}), &["name", "message"]),
+        spec("tell", "Send a message to an agent (a subagent or a computer task), by name. One at work stops what it is doing to read it, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".", json!({"name": {"type": "string"}, "message": {"type": "string"}}), &["name", "message"]),
+        spec("stop", "Stop an agent at work, by name, or all of yours with no name, when the user says so or its work is no longer wanted. It ends without a report.", json!({"name": {"type": "string"}}), &[]),
+    ]
+}
+
+fn peers() -> Vec<Spec> {
+    let efforts: Vec<&str> = EFFORTS.iter().map(|e| e.as_str()).collect();
+    vec![
+        spec("create_assistant", "Hire a new assistant, when the user asks for one: a person of their own, beside you in Acorn's sidebar, with a chat of its own that never ends and its own memory. It is you, Acorn, with its own name, about, reasoning effort and instructions: its system prompt, after yours. It does not start working; the user opens it from the sidebar.", json!({"name": {"type": "string"}, "about": {"type": "string", "description": "Who it is, in a few words, as the app shows it beside its name: \"Personal stylist\", \"Friendly neighbour who loves cracking jokes\". Never its effort."}, "effort": {"type": "string", "enum": efforts, "description": "How hard it thinks, as fits its part: low is fast and cheap, max is smartest and slowest; high if the user didn't say."}, "instructions": {"type": "string", "description": "Its system prompt, from what the user said (what it helps with, how it works and talks), or the one they gave word for word."}}), &["name", "about", "effort", "instructions"]),
+        spec("list_assistants", "The user's other assistants: each one's name and about.", json!({}), &[]),
+        spec("search_assistants", "The user's other assistants whose name, about or instructions match a query (\"clothes\", \"second opinion\"), best first.", json!({"query": {"type": "string"}}), &["query"]),
+        spec("ask_assistant", "Ask another of the user's assistants, by name, and return at once. It answers in its own thread with you, a chat of the two of you that never ends, as itself: its own part, effort and memory of what you asked before. Its reply reaches you as a message \"[Name] ...\". Asking again while it works cuts in, as the user does with you. Say all it needs: it sees your thread, not your chat with the user.", json!({"name": {"type": "string"}, "message": {"type": "string"}}), &["name", "message"]),
+    ]
+}
+
+fn home() -> Vec<Spec> {
+    vec![
+        spec("goal", "Set the goal you work to, when the user names a finish line (\"keep going until the tests pass\"): as each turn would end, a check reads the chat, and if the goal isn't met you go on. With no goal, drop the one set, when the user says to stop or it no longer holds. The user sees the goal while it is set.", json!({"goal": {"type": "string"}}), &[]),
+        spec("usage", "What the user's calls cost, by day and kind, every assistant's chats and threads together, the last days (7 by default). Show the user a short table, in dollars.", json!({"days": {"type": "integer"}}), &[]),
+        spec("import", "Bring the user's past AI chats into this chat's memory. find: look for them (Claude Code's and Codex's on this Mac, and the Claude or ChatGPT website exports at files, zips the user dropped or named), listing each session (id, app, day, messages, where) and the price of importing; tell the user. start: import what find found, from day since (YYYY-MM-DD), with tool calls or not, leaving out skip (session ids), once the user agrees to the price; it begins when your turn ends and runs a while. pause, resume: the import running.", json!({"do": {"type": "string", "enum": ["find", "start", "pause", "resume"]}, "files": {"type": "array", "items": {"type": "string"}}, "since": {"type": "string"}, "tools": {"type": "boolean"}, "skip": {"type": "array", "items": {"type": "string"}}}), &["do"]),
+        spec("export", "Save this chat's whole memory (messages, summaries, agents' chats, images) as one JSON file in the user's Downloads, and return its path.", json!({}), &[]),
+        spec("tree", "Draw this chat's memory tree as a web page, open it in the user's browser, and return its path.", json!({}), &[]),
     ]
 }
 
@@ -243,16 +278,22 @@ fn hand() -> Spec {
     spec("computer", "Start a task on the screen of the user's Mac, done with its mouse and keyboard by an agent that sees screenshots, and return its name at once. Its report reaches you as a message \"[Name] report\". It knows only the task, so say all it needs. One at a time.", json!({"task": {"type": "string"}}), &["task"])
 }
 
-/// What a caller may use: Acorn all; a subagent its own and the Mac's; a
-/// computer task its computer tool. work: its assistant's work dir.
-pub fn list(work: &Path, who: &str, hands: bool) -> Vec<Spec> {
+/// What a caller may use: an assistant with the user all; one answering
+/// in a thread (`thread`) its work tools alone; a subagent its own and
+/// the Mac's; a computer task its computer tool. work: its assistant's
+/// work dir.
+pub fn list(work: &Path, who: &str, hands: bool, thread: bool) -> Vec<Spec> {
     if hands {
         return vec![crate::computer::spec()];
     }
     let mut specs = own();
     if who == MAIN {
         specs.extend(boss());
-        specs.extend(keep());
+        if !thread {
+            specs.extend(peers());
+            specs.extend(keep());
+            specs.extend(home());
+        }
         specs.extend(kit(work, who));
         specs.push(hand());
     } else {

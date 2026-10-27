@@ -22,7 +22,7 @@ pub mod import;
 pub mod machine;
 pub mod memory;
 pub mod names;
-pub mod pick;
+pub mod effort;
 pub mod price;
 pub mod tools;
 pub mod wire;
@@ -68,11 +68,13 @@ pub struct Img {
     pub data: String,
 }
 
-/// A message for the agent: its text, its images.
+/// A message for the agent: its text, its images, and whether it cuts in
+/// on a call at work (the words of whoever the call works for).
 #[derive(Clone, Debug, Default)]
 pub struct Say {
     pub text: String,
     pub imgs: Vec<Img>,
+    pub cut: bool,
 }
 
 /// A text block of a call's message; `mark`: a cache entry ends after it.

@@ -26,18 +26,13 @@ palette! {
     hair: 0xe6e6e6, 0x36363c; "Rules."
     paper: 0xffffff, 0x171719; "The page."
     inset: 0xf7f7f7, 0x1d1d20; "The sidebar."
-    lift: 0xffffff, 0x222226; "A box over the page: a sheet, the message box."
+    lift: 0xffffff, 0x222226; "What floats over the page: the message box."
     block: 0xf2f2f2, 0x2c2c31; "A summary's, a tool's, a button's, code's fill."
     hover: 0xe8e8e8, 0x37373d; "Under the pointer."
     frame: 0xcccccc, 0x4c4c53; "A call's code's frame, a file's lines', the message box's."
     edge: 0x111111, 0x85858d; "A person's frame: the user's message, a report."
     add: 0x1a7f37, 0x55b874; "A diff's line added."
     del: 0xcf222e, 0xf8857c; "A diff's line dropped."
-}
-
-/// The page behind a box over it.
-pub fn veil() -> AdaptiveColor {
-    AdaptiveColor::new(rgba(0x0000004c), rgba(0x00000080))
 }
 
 pub const SERIF: &str = "Iowan Old Style";
@@ -58,7 +53,15 @@ pub fn tool_glyph(name: &str) -> &'static str {
         "edit" => "📝",
         "spawn" => "🤖",
         "tell" => "💬",
+        "stop" => "✋",
         "create_assistant" => "🐿️",
+        "list_assistants" | "search_assistants" => "👥",
+        "ask_assistant" => "🗣️",
+        "goal" => "🎯",
+        "usage" => "💵",
+        "import" => "📥",
+        "export" => "💾",
+        "tree" => "🌳",
         "computer" => "🖱️",
         _ => "🔧",
     }

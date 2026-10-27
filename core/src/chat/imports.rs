@@ -1,12 +1,14 @@
 //! Imports
 //! =======
-//! A person's past chats, found (`import::find`), planned as they pick,
-//! then logged as one: every page `more` but the last, so none is in the
+//! A person's past chats, found (`import::find`) and priced as the
+//! assistant asks (the `import` tool), then, once the turn that asked
+//! ends, logged as one: every page `more` but the last, so none is in the
 //! chat till all are. Their summaries build on their own side, which a
 //! pause holds; a quit leaves the batch's file, and the next start goes on
-//! with it. Refused amid a turn or another import.
+//! with it. Refused amid another turn or import.
 
 use super::{Chat, Engine};
+use crate::ai::Out;
 use crate::import::{self, Done, Want};
 use crate::memory::{JOBS, Msg, Part};
 use crate::wire::{Event, Progress};
@@ -19,6 +21,9 @@ const BATCH: &str = "import.json";
 
 /// How many messages are logged at once as an import goes in.
 const CHUNK: usize = 1024;
+
+/// How many sessions a find lists, at most.
+const LISTED: usize = 200;
 
 /// An import as kept: messages [a, b), those sent (not notes), USD spent;
 /// as run: by level what each node costs (micro-USD, `import::guess`) and
@@ -63,26 +68,57 @@ impl Batch {
 }
 
 impl Engine {
-    /// Sessions to import, looked for: told as a plan of all.
-    pub(super) async fn find(self: Arc<Self>, exports: Vec<PathBuf>) {
-        let found = tokio::task::spawn_blocking(move || import::find(&exports)).await.unwrap_or_else(|e| Err(e.to_string()));
-        match found {
-            Ok(sessions) => {
-                let mut chat = self.lock();
-                chat.found = sessions;
-                chat.plan(&Want::default());
+    /// The `import` tool: find, start (as the turn ends), pause, resume.
+    pub(super) async fn import_tool(self: &Arc<Self>, input: &serde_json::Value) -> Out {
+        let strs = |k: &str| -> Vec<String> { input[k].as_array().into_iter().flatten().filter_map(|v| v.as_str()).map(str::to_string).collect() };
+        match input["do"].as_str().unwrap_or_default() {
+            "find" => {
+                let home = crate::config::home();
+                let files: Vec<PathBuf> = strs("files").iter().map(|f| f.strip_prefix("~/").map_or_else(|| PathBuf::from(f), |r| home.join(r))).collect();
+                match tokio::task::spawn_blocking(move || import::find(&files)).await.unwrap_or_else(|e| Err(e.to_string())) {
+                    Ok(sessions) => {
+                        let mut chat = self.lock();
+                        chat.found = sessions;
+                        Out::ok(chat.listed())
+                    }
+                    Err(why) => Out::fail(why),
+                }
             }
-            Err(why) => self.tell(Event::Note(format!("Not imported: {why}"))),
+            "start" => {
+                let want = Want { off: strs("skip"), since: input["since"].as_str().unwrap_or_default().trim().into(), tools: input["tools"].as_bool().unwrap_or(false) };
+                let mut chat = self.lock();
+                if chat.found.is_empty() {
+                    return Out::fail("Nothing found yet: find first.");
+                }
+                if chat.batch.is_some() {
+                    return Out::fail("An import is under way already.");
+                }
+                let done = chat.imported();
+                let plan = import::plan(&chat.found, &want, &done, chat.mem.count);
+                if plan.msgs == 0 {
+                    return Out::fail("Nothing to import: no new messages as asked.");
+                }
+                chat.then = Some(want);
+                Out::ok(format!("It begins as your turn ends: {}, about {}.", import::count(plan.msgs, "new "), import::guess_usd(plan.usd)))
+            }
+            "pause" => Out::ok(self.lock().go(false)),
+            "resume" => Out::ok(self.lock().go(true)),
+            other => Out::fail(format!("No import do {other:?}: find, start, pause or resume.")),
         }
     }
 
-    /// The sessions picked, logged as one, summarized on the compactor.
+    /// The sessions picked, logged as one, summarized on the compactor; a
+    /// turn at work begins it as it ends.
     pub(super) async fn import(self: Arc<Self>, want: Want) {
         let (picked, a) = {
             let mut chat = self.lock();
-            if chat.busy || chat.batch.is_some() {
-                let who = if chat.busy { "Acorn is answering" } else { "An import is under way" };
-                chat.all(Event::Note(format!("{who}: import again once it ends.")));
+            if chat.busy {
+                // a turn began meanwhile: its end begins the import
+                chat.then = Some(want);
+                return;
+            }
+            if chat.batch.is_some() {
+                chat.all(Event::Note("An import is under way: import again once it ends.".into()));
                 return;
             }
             let done = chat.imported();
@@ -140,11 +176,26 @@ impl Engine {
 }
 
 impl Chat {
-    /// The sessions found, planned as wanted, told.
-    pub(super) fn plan(&mut self, want: &Want) {
+    /// The sessions found, as a model reads them: the import of all, then
+    /// a line each.
+    fn listed(&mut self) -> String {
         let done = self.imported();
-        let plan = import::plan(&self.found, want, &done, self.mem.count);
-        self.all(Event::Sessions(plan.found(want)));
+        let want = Want::default();
+        let found = import::plan(&self.found, &want, &done, self.mem.count).found(&want);
+        if found.rows.is_empty() {
+            return import::OLD.into();
+        }
+        let exports = import::EXPORTS.iter().map(|(app, how)| format!("{app}: {how}")).collect::<Vec<_>>().join("; ");
+        let mut lines = vec![
+            format!("Found {} sessions: {}, from {} on; importing all costs about {}.", found.rows.len(), import::count(found.msgs, "new "), found.first, import::guess_usd(found.usd)),
+            format!("(Website chats come as an export the user drops on the window: {exports}.)"),
+            "id | app | day | messages | where".into(),
+        ];
+        lines.extend(found.rows.iter().take(LISTED).map(|r| format!("{} | {} | {} | {} | {}", r.id, r.app, r.cells[0], r.cells[1], r.cells[2])));
+        if found.rows.len() > LISTED {
+            lines.push(format!("and {} more.", found.rows.len() - LISTED));
+        }
+        lines.join("\n")
     }
 
     /// The sessions the chat imported, read from its log.
@@ -239,10 +290,10 @@ impl Chat {
         self.change();
     }
 
-    /// The import paused, at once (its calls cut), or resumed.
-    pub(super) fn go(&mut self, on: bool) {
+    /// The import paused, at once (its calls cut), or resumed; said so.
+    pub(super) fn go(&mut self, on: bool) -> String {
         if self.batch.is_none() {
-            return self.all(Event::Note("No import is running.".into()));
+            return "No import is running.".into();
         }
         if on {
             self.mem.hold[1] = None;
@@ -258,5 +309,6 @@ impl Chat {
         self.tell_state();
         self.pump();
         self.change();
+        if on { "The import goes on.".into() } else { "The import is paused.".into() }
     }
 }

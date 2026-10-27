@@ -7,7 +7,6 @@
 //! message and summary is told once (`Event::Know`), before any part that
 //! shows it.
 
-use crate::pick::Pick;
 use crate::{Kind, Spend};
 
 /// The n messages from id on (n a power of two).
@@ -72,24 +71,15 @@ pub enum Wait {
 }
 
 /// The chat's state: a turn runs; what it waits on; the agents at work;
-/// what it runs on; an import's progress; what every call used today.
+/// the goal it works to; an import's progress; what every call used today.
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
     pub busy: bool,
     pub wait: Wait,
     pub agents: Vec<String>,
-    pub pick: Pick,
+    pub goal: Option<String>,
     pub importing: Option<Progress>,
     pub today: Option<Spend>,
-}
-
-/// A day's use of a kind of call: its day (YYYY-MM-DD, here), what the
-/// calls served, their sum.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Usage {
-    pub day: String,
-    pub kind: String,
-    pub spend: Spend,
 }
 
 #[derive(Clone, Debug)]
@@ -114,46 +104,25 @@ pub enum Event {
     Note(String),
     /// What a turn used, on its last message.
     Use { id: u64, spend: Spend },
-    Usage(Vec<Usage>),
-    /// Sessions found to import, and the import's plan of them.
-    Sessions(crate::import::Found),
     /// An assistant made (`create_assistant`), to list and start.
     Assistant(crate::assistant::Assistant),
 }
 
+/// What the app sends: the person's words, and looks. Every other act is
+/// said, and an assistant does it by a tool (`tools`).
 #[derive(Clone, Debug)]
 pub enum Command {
-    /// A message (empty: interrupt the turn).
+    /// A message; one sent while the assistant works cuts in.
     Say { text: String, images: Vec<Vec<u8>> },
-    /// Stop all work, or the agent named (TURN: Acorn's turn).
-    Stop(Option<String>),
-    /// The goal set (/goal), or none (/halt).
-    Goal(Option<String>),
     /// The app (again) shows this chat: tell it all anew.
     Attach,
-    Pick(Pick),
     /// Open a part into its halves.
     Zoom(Seg),
     /// The tree's roots.
     Root,
     /// An agent's log.
     Agent(String),
-    /// Usage, the last 30 days.
-    Usage,
-    /// Look for sessions to import (none: Claude Code's and Codex's own;
-    /// a file: a website's export).
-    Find(Vec<std::path::PathBuf>),
-    /// The sessions found, planned as wanted.
-    Plan(crate::import::Want),
-    /// Import what was found, as wanted.
-    Import(crate::import::Want),
-    /// The import running: on, or paused.
-    Go(bool),
-    /// The memory as JSON, to this file.
-    Export(std::path::PathBuf),
-    /// The whole tree as a page, to this file.
-    Tree(std::path::PathBuf),
 }
 
-/// Acorn's turn, as a stop names it among the agents at work.
-pub const TURN: &str = "Acorn's turn";
+/// The turn, as the work a quit cut names it among the agents.
+pub const TURN: &str = "your turn";

@@ -1,19 +1,24 @@
 //! Agent
 //! =====
 //! DeepSeek in Acorn's own loop. Each step sends every item and streams
-//! one output; tool calls run in order, a message sent mid-run follows the
-//! next results, and the call ends at a step with no tools and nothing
-//! sent. A request goes again, TRIES times at most, after its retry-after
-//! or a doubling wait, for a passing reason (busy: no connection, a retry
-//! status, a stream error, cut short or silent for IDLE), dropping what it
-//! streamed (`pace` keeps a busy model's room). A call ends answered
-//! (`Fail`: the model's answer failed, a refusal or a stop reason: its
-//! input's doing) or not: `Down`, the service's (a refusal of the request,
-//! as when the API key's credit is gone, or busy past TRIES); `Lost`, ours
-//! (a stop). The service's why goes to the log; the user reads only that
-//! the AI service is busy. A stop ends the call at once, its request cut.
-//! What each request used goes to its meter, a stream cut short counting
-//! what it read.
+//! one output; tool calls run in order, and the call ends at a step with
+//! no tools and nothing sent. A message that cuts in (`Say::cut`: the
+//! user's, or whoever the call works for) stops the step in flight, as a
+//! person spoken to stops and listens: what it streamed is logged "[cut
+//! off]", its reply so far goes back as said, a tool call it cut answers
+//! what it did and that it was cut, one it never ran that it wasn't, and
+//! the call goes on with the message. Any other message follows the step's
+//! results; a call that ends first leaves every message it heard (`left`). A request goes again, TRIES times
+//! at most, after its retry-after or a doubling wait, for a passing reason
+//! (busy: no connection, a retry status, a stream error, cut short or
+//! silent for IDLE), dropping what it streamed (`pace` keeps a busy
+//! model's room). A call ends answered (`Fail`: the model's answer failed,
+//! a refusal or a stop reason: its input's doing) or not: `Down`, the
+//! service's (a refusal of the request, as when the API key's credit is
+//! gone, or busy past TRIES); `Lost`, ours (a stop). The service's why
+//! goes to the log; the user reads only that the AI service is busy. A
+//! stop ends the call at once, its request cut. What each request used
+//! goes to its meter, a stream cut short counting what it read.
 
 use super::deepseek::{Got, Halt, IDLE, Item, MODEL, Step, URL};
 use super::{Ask, End, Event, On, Out, Spec, Stop, Used, cache, nap, pace};
@@ -32,17 +37,25 @@ pub const TRIES: u32 = 8;
 /// What a call the service never answered says.
 const BUSY: &str = "the AI service is busy or unavailable right now";
 
+/// What a tool call a message cut in on answers: cut while it ran (after
+/// what it did), or never run.
+const CUT: &str = "[cut off: a message came in while it ran]";
+const UNRUN: &str = "not run: a message came in first";
+
 static HTTP: LazyLock<reqwest::Client> =
     LazyLock::new(|| reqwest::Client::builder().user_agent("Acorn/0.1").build().expect("an HTTP client"));
 
-/// One try of a call: its steps till it ends.
+/// One try of a call: its steps till it ends; the messages it heard but
+/// never took, left.
 pub async fn run(ask: &Ask, on: &On, rx: &mut mpsc::UnboundedReceiver<Say>, cancel: &CancellationToken) -> End {
     let mut end = End::default();
-    if let Err(why) = turns(ask, on, rx, cancel, &mut end).await
+    let mut heard = Heard { rx, open: true, says: Vec::new() };
+    if let Err(why) = turns(ask, on, &mut heard, cancel, &mut end).await
         && end.text.is_empty()
     {
         end.text = why;
     }
+    end.left.append(&mut heard.says);
     if cancel.is_cancelled() {
         end.ok = false;
         end.text = "stopped".into();
@@ -50,7 +63,7 @@ pub async fn run(ask: &Ask, on: &On, rx: &mut mpsc::UnboundedReceiver<Say>, canc
     end
 }
 
-async fn turns(ask: &Ask, on: &On, rx: &mut mpsc::UnboundedReceiver<Say>, cancel: &CancellationToken, end: &mut End) -> Result<(), String> {
+async fn turns(ask: &Ask, on: &On, heard: &mut Heard<'_>, cancel: &CancellationToken, end: &mut End) -> Result<(), String> {
     let key = &config::get().key;
     if key.is_empty() {
         return Err(format!("no API key: set {}", config::KEY_VAR));
@@ -59,12 +72,24 @@ async fn turns(ask: &Ask, on: &On, rx: &mut mpsc::UnboundedReceiver<Say>, cancel
     let parts = ask.blocks.iter().filter(|b| !b.text.is_empty()).map(|b| b.text.clone()).collect();
     let mut items = vec![Item::User { parts, imgs: ask.imgs.clone() }];
     while !cancel.is_cancelled() {
+        let cut = cancel.child_token();
         let body = super::deepseek::body(ask, &items, &tools);
-        let step = step(ask, on, key, body, cancel).await;
+        let step = heard.till_cut(step(ask, on, key, body, &cut), &cut).await;
         for e in &step.entries {
             on(Event::Entry { kind: e.kind, text: e.text.clone(), of: e.of.clone() });
         }
-        if let Some(stop) = match step.halt {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        let mut backs = Vec::new();
+        // cut before it gave a whole output (one that raced the cut runs
+        // no tools: each answers it wasn't run)
+        if cut.is_cancelled() && step.halt == Halt::Lost {
+            let said: Vec<&str> = step.entries.iter().filter(|e| e.kind == Kind::Acorn).map(|e| e.text.as_str()).collect();
+            if !said.is_empty() {
+                items.push(Item::Said(said.join("\n\n")));
+            }
+        } else if let Some(stop) = match step.halt {
             Halt::Down => Some(Stop::Down),
             Halt::Lost => Some(Stop::Lost),
             Halt::Fail => Some(Stop::Fail),
@@ -75,25 +100,25 @@ async fn turns(ask: &Ask, on: &On, rx: &mut mpsc::UnboundedReceiver<Say>, cancel
             }
             end.stop = Some(stop);
             return Ok(());
-        }
-        items.push(Item::Turn(step.out));
-        let mut backs = Vec::new();
-        for u in step.uses {
-            if cancel.is_cancelled() {
-                return Ok(());
+        } else {
+            items.push(Item::Turn(step.out));
+            for u in step.uses {
+                let out = match cut.is_cancelled() {
+                    true => Out::fail(UNRUN),
+                    false => {
+                        let out = heard.till_cut(tool(ask, &tools, u.name, u.input, &cut), &cut).await;
+                        if cut.is_cancelled() { Out { text: format!("{}\n{CUT}", out.text), ..out } } else { out }
+                    }
+                };
+                if cancel.is_cancelled() {
+                    return Ok(());
+                }
+                let text = if out.fail { format!("error: {}", out.text) } else { out.text.clone() };
+                on(Event::Entry { kind: Kind::Echo, text, of: Some(u.id.clone()) });
+                backs.push((u.id, out));
             }
-            let out = tool(ask, &tools, u.name, u.input, cancel).await;
-            let text = if out.fail { format!("error: {}", out.text) } else { out.text.clone() };
-            on(Event::Entry { kind: Kind::Echo, text, of: Some(u.id.clone()) });
-            backs.push((u.id, out));
         }
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        let mut says = Vec::new();
-        while let Ok(say) = rx.try_recv() {
-            says.push(say);
-        }
+        let says = heard.all();
         if backs.is_empty() && says.is_empty() {
             end.ok = true;
             end.text = step.entries.iter().filter(|e| e.kind == Kind::Acorn).map(|e| e.text.as_str()).collect::<Vec<_>>().join("\n\n");
@@ -112,6 +137,45 @@ async fn turns(ask: &Ask, on: &On, rx: &mut mpsc::UnboundedReceiver<Say>, cancel
         }
     }
     Ok(())
+}
+
+/// The messages sent to a call as it runs: those heard so far wait in
+/// `says` for the step's end.
+struct Heard<'a> {
+    rx: &'a mut mpsc::UnboundedReceiver<Say>,
+    open: bool,
+    says: Vec<Say>,
+}
+
+impl Heard<'_> {
+    /// `work` run till it ends, hearing messages meanwhile; one that cuts
+    /// in cuts the step (`cut`), and `work` then ends what it cut short.
+    async fn till_cut<T>(&mut self, work: impl Future<Output = T>, cut: &CancellationToken) -> T {
+        tokio::pin!(work);
+        loop {
+            tokio::select! {
+                biased;
+                done = &mut work => return done,
+                say = self.rx.recv(), if self.open && !cut.is_cancelled() => match say {
+                    Some(say) => {
+                        if say.cut {
+                            cut.cancel();
+                        }
+                        self.says.push(say);
+                    }
+                    None => self.open = false,
+                },
+            }
+        }
+    }
+
+    /// Every message heard, and those sent since.
+    fn all(&mut self) -> Vec<Say> {
+        while let Ok(say) = self.rx.try_recv() {
+            self.says.push(say);
+        }
+        std::mem::take(&mut self.says)
+    }
 }
 
 /// A request, asked again while the service is busy. Asking again, it
@@ -296,13 +360,18 @@ fn retry_after(v: &str) -> Option<f64> {
     })
 }
 
-/// A step that failed: what streamed, marked where it was cut.
+/// A step that failed: what streamed, marked where it was cut (a stop's,
+/// or a message's that cut in, bare; a tool call cut so, never made, is
+/// dropped).
 fn fail(why: &str, seen: &[Live], halt: Halt) -> Step {
     let shown = if halt == Halt::Busy { BUSY } else { why };
-    let mark = format!("\n[cut off: {}]", &shown[..crate::clip::byte_at(shown, 300)]);
+    let mark = match halt {
+        Halt::Lost => "\n[cut off]".to_string(),
+        _ => format!("\n[cut off: {}]", &shown[..crate::clip::byte_at(shown, 300)]),
+    };
     let entries = seen
         .iter()
-        .filter(|l| !l.text.trim().is_empty())
+        .filter(|l| !l.text.trim().is_empty() && !(halt == Halt::Lost && l.kind == Kind::Tool))
         .map(|l| super::deepseek::Entry { kind: l.kind, text: format!("{}{mark}", l.text.trim()), of: None })
         .collect();
     Step { out: vec![], uses: vec![], entries, halt, why: why.to_string() }
@@ -317,8 +386,49 @@ async fn tool(ask: &Ask, tools: &[Spec], name: String, input: Value, cancel: &Ca
         return Out::fail("The input is not a JSON object.");
     }
     let out = toolbox.call(name, input, cancel.child_token()).await;
-    if cancel.is_cancelled() {
-        return Out::fail("(stopped)");
-    }
     if out.text.is_empty() { Out { text: "(no output)".into(), ..out } } else { out }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn say(text: &str, cut: bool) -> Say {
+        Say { text: text.into(), imgs: vec![], cut }
+    }
+
+    /// A message that cuts in cuts the step at once; one that doesn't
+    /// waits for the step's end; both are heard, in order.
+    #[tokio::test]
+    async fn a_message_cuts_in_and_others_wait() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut heard = Heard { rx: &mut rx, open: true, says: Vec::new() };
+        let cut = CancellationToken::new();
+        tx.send(say("[Scout] report", false)).unwrap();
+        tx.send(say("stop, wrong folder", true)).unwrap();
+        let step = heard.till_cut(async { cut.cancelled().await; "cut short" }, &cut).await;
+        assert_eq!(step, "cut short");
+        tx.send(say("and one more", false)).unwrap();
+        let texts: Vec<String> = heard.all().into_iter().map(|s| s.text).collect();
+        assert_eq!(texts, ["[Scout] report", "stop, wrong folder", "and one more"]);
+
+        let calm = CancellationToken::new();
+        tx.send(say("[Scout] report", false)).unwrap();
+        let step = heard.till_cut(async { tokio::task::yield_now().await; "done" }, &calm).await;
+        assert_eq!(step, "done");
+        assert!(!calm.is_cancelled(), "a report never cuts in");
+        drop(tx);
+        let step = heard.till_cut(async { tokio::task::yield_now().await; "done" }, &calm).await;
+        assert_eq!(step, "done", "a closed channel ends no step");
+    }
+
+    /// A step a stop or a message cut is marked bare, its text kept, a
+    /// tool call it cut mid-stream dropped.
+    #[test]
+    fn a_cut_step_keeps_what_it_said() {
+        let seen = vec![Live { kind: Kind::Acorn, text: "Moving the files to ".into() }, Live { kind: Kind::Tool, text: "shell {\"comm".into() }];
+        let step = fail("stopped", &seen, Halt::Lost);
+        assert_eq!(step.entries.len(), 1);
+        assert_eq!(step.entries[0].text, "Moving the files to\n[cut off]");
+    }
 }

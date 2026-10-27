@@ -270,6 +270,35 @@ pub fn ago_show(at: i64, now: i64) -> String {
     }
 }
 
+/// A file URI's path, its %XX escapes read.
+pub fn percent_decoded(s: &str) -> String {
+    let mut out = Vec::with_capacity(s.len());
+    let b = s.as_bytes();
+    let mut k = 0;
+    while k < b.len() {
+        match (b[k], s.get(k + 1..k + 3).and_then(|h| u8::from_str_radix(h, 16).ok())) {
+            (b'%', Some(v)) => {
+                out.push(v);
+                k += 3;
+            }
+            (c, _) => {
+                out.push(c);
+                k += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A reply a message cut in on: its text without the mark, and whether
+/// it was cut.
+pub fn cut_off(s: &str) -> (&str, bool) {
+    match s.strip_suffix("[cut off]") {
+        Some(said) => (said.trim_end(), true),
+        None => (s, false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

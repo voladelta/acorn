@@ -18,11 +18,13 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Bounded view** | The view the model reads stays under 2 MB (about 500k tokens, within DeepSeek's 1M context); past that, the oldest lines merge first |
 | **Zoom** | `zoom(id, n)` opens a line into the two it was made from; `zoom(id, 1)` gives a message whole, with its images |
 | **Agent tools** | Shell, read, write and edit on your Mac, in a work dir of the agent's own; subagents in parallel; computer use (screen, mouse, keyboard) when you allow it |
-| **Assistants** | Acorn, Max (Acorn at max effort) and assistants they create on request, each with its own chat, memory and work dir, in a sidebar |
+| **Assistants** | Acorn (general assistant), Max (thoughtful expert) and those they hire on request, each a person with a name and an about, its own chat, memory and work dir, in a sidebar |
+| **Cut in** | A message sent while an assistant talks or works stops it at once, as a person would stop and listen; it answers you, then goes on only if you say so |
+| **Consult** | Assistants ask each other (`list_assistants`, `search_assistants`, `ask_assistant`), each pair in a thread of its own that never ends |
 | **Facts** | `remember` and `forget` keep facts you state, for every assistant or one; each call's system prompt lists them |
 | **Purge** | `purge` erases a message (a pasted key or password) and every summary made from it, then wipes it from the database file |
 | **Import** | Your past Claude Code and Codex sessions on this Mac, and Claude and ChatGPT chats from their websites' exports, read into the chat |
-| **Goals** | `/goal <message>` keeps the agent working until a check says the goal is met; `/halt` drops it |
+| **Goals** | Name a finish line ("keep at it until the tests pass") and the assistant works until a check says it is met; the goal shows above the message box |
 
 ## How it works
 
@@ -68,21 +70,22 @@ cargo build --release -p acorn
    ```
 
 3. Type a message. Acorn answers in its chat; its tools run in `~/.acorn/work/main`.
-4. Open the ☰ menu for Import History, Usage, Export memory, Memory tree and Stop all work.
 
 ## Using it
 
+You act by words alone: there are no menus and no stop button. Clicks and keys only look.
+
 | Input | Effect |
 |---|---|
-| Message box | Talk to the assistant shown; images can be attached |
-| `/goal <message>` | Set a goal and send it; the agent goes on until a check finds it met |
-| `/halt` | Drop the goal |
-| Esc | Interrupt the assistant's turn (agents go on) |
+| Message box | Talk to the assistant you picked; images can be attached, files dropped on the window add their paths. Sent while it works, a message cuts in |
+| Sidebar | Pick an assistant (who it is shows beside its name) |
+| A name in a report | Open that agent's work, or the thread where that assistant answered |
+| Esc | Back to your chat from an agent's page, a thread or the overview |
 | Ctrl+Tab | Next tab (the chat, each agent at work) |
-| Cmd+Shift+F | Fold the chat into the tree's roots, and back |
+| Cmd+Shift+F | The overview: the chat in the fewest blocks, and back |
 | Cmd+B | Hide or show the sidebar |
 
-Ask for what you want in plain words: "remember that I deploy with fly", "forget fact #12", "purge message 4031, it has my token", "create an assistant called Ledger for bookkeeping, low effort".
+Ask for what you want in plain words: "stop", "stop Scout", "keep going until the build is green", "what did I spend this week?", "bring in my Claude Code chats since June", "export your memory", "show me your memory tree", "remember that I deploy with fly", "forget fact #12", "purge the message with my token", "ask Max what he thinks", "hire a personal stylist called Marrie".
 
 ### Tools the agent has
 
@@ -90,10 +93,14 @@ Ask for what you want in plain words: "remember that I deploy with fly", "forget
 |---|---|---|
 | `zoom`, `date` | everyone | Open a line of the view; a message's date |
 | `shell`, `read`, `write`, `edit` | assistants, subagents | Run on this Mac in the caller's own dir under the work dir |
-| `spawn`, `tell` | assistants | Start subagents in parallel; message one at work |
+| `spawn`, `tell`, `stop` | assistants | Start subagents in parallel; message one at work (it cuts in); stop one or all |
 | `computer` | assistants | Start a computer-use task (needs `computer` set to 1) |
-| `create_assistant` | assistants | Add an assistant to the sidebar |
-| `remember`, `forget`, `purge` | assistants | Keep and drop facts; erase a message |
+| `create_assistant` | with you | Hire an assistant: name, about, effort, instructions |
+| `list_assistants`, `search_assistants`, `ask_assistant` | with you | Find another assistant and ask it, in your two's thread; its reply comes back as a message |
+| `remember`, `forget`, `purge` | with you | Keep and drop facts; erase a message |
+| `goal`, `usage`, `import`, `export`, `tree` | with you | Set or drop the goal; read costs; import past chats; save the memory as JSON; open the tree as a page |
+
+An assistant answering another in a thread has its work tools only: it can't consult further, keep facts or change the user's settings.
 
 ## Configuration
 
@@ -105,9 +112,9 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `chat` | `default` | Acorn's own chat id (letters, digits, `_`, `-`) |
 | `chats` | `~/.chats` | Where the chats live, a dir each by id |
 | `work` | `$ACORN_DIR/work` | Where the agents' tools work |
-| `pick` | `high` | A chat's effort until it picks another: `none`, `low`, `high`, `max`, or `deepseek-flash:<effort>` |
+| `pick` | `high` | Acorn's effort: `none`, `low`, `high`, `max`, or `deepseek-flash:<effort>` (Max's is max; a hired one's is set when hired) |
 | `compactor` | `low` | The effort of every summary call |
-| `agents` | the chat's pick | The effort of subagents |
+| `agents` | their assistant's | The effort of subagents |
 | `view` | `2000000` | Bytes past which a view merges to half; capped at 2 MB |
 | `computer` | off | `1` lets computer tasks use the screen, mouse and keyboard |
 | `rules` | none | A file appended to every system prompt: who you are, how you want work done |
@@ -126,8 +133,9 @@ Computer use compiles a small Swift helper into `$ACORN_DIR` on first use; macOS
 | `~/.chats/<id>/chat.db` | A chat: messages, agent logs, the summary tree, the view and usage (SQLite, WAL) |
 | `~/.chats/<id>/docs/images/` | The chat's images, by hash |
 | `~/.chats/<id>/chat.db.wipe` | Present while a purge's wipe is owed |
+| `~/.chats/<id>/with/<asker>/` | The thread where assistant `<asker>` asks `<id>`, kept as a chat is |
 
-Export memory writes the whole memory as JSON to `~/Downloads/acorn-memory-<date>.json`; Memory tree writes the tree as an HTML page to the temp dir.
+`export` writes the whole memory as JSON to `~/Downloads/acorn-memory-<date-time>.json`; `tree` writes the tree as an HTML page to the temp dir and opens it.
 
 ## Privacy
 

@@ -5,9 +5,9 @@
 //! (its call, its goal check), and today's total told. A turn ending puts
 //! its sum on its last message.
 
-use super::Chat;
+use super::{Chat, hub};
 use crate::ai::Used;
-use crate::wire::{Event, Usage};
+use crate::wire::Event;
 use crate::{Served, Spend};
 use chrono::{Local, TimeZone};
 use rusqlite::{OptionalExtension, params};
@@ -36,6 +36,45 @@ impl From<Kept> for Spend {
     fn from(k: Kept) -> Spend {
         Spend { n: k.n, input: k.input, read: k.read, output: k.output, usd: k.usd, at: k.at }
     }
+}
+
+/// A day's use of a kind of call: its day (YYYY-MM-DD, here), what the
+/// calls served, their sum.
+pub(super) struct Usage {
+    day: String,
+    kind: String,
+    spend: Spend,
+}
+
+/// Every chat's use, the last `days` days (here), as a model reads it: a
+/// line a day and kind, newest first, then their total.
+pub(super) fn told(days: i64) -> String {
+    let mut all: std::collections::BTreeMap<(String, String), Spend> = Default::default();
+    for engine in hub::all() {
+        for u in engine.lock().usage(days) {
+            let at = all.entry((u.day, u.kind)).or_default();
+            *at = *at + u.spend;
+        }
+    }
+    if all.is_empty() {
+        return "No usage in these days.".into();
+    }
+    let kind = |k: &str| -> String {
+        match k {
+            "chat" => "replies",
+            "compactor" => "summaries",
+            "import" => "import summaries",
+            "agent" => "agents",
+            "computer" => "computer use",
+            k => k,
+        }
+        .to_string()
+    };
+    let line = |what: String, s: &Spend| format!("{what}: {} calls, {} tokens in ({} cached), {} out, ${:.4}", s.n, s.input + s.read, s.read, s.output, s.usd);
+    let total = all.values().fold(Spend::default(), |a, s| a + *s);
+    let mut lines: Vec<String> = all.iter().rev().map(|((day, k), s)| line(format!("{day} {}", kind(k)), s)).collect();
+    lines.push(line(format!("All {days} days"), &total));
+    lines.join("\n")
 }
 
 impl Chat {

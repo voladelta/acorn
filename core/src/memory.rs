@@ -23,7 +23,7 @@
 //!
 //! Files: chat.db (SQLite, WAL) holds the messages (`msgs`, log ''), each
 //! agent's log (`msgs`, log its name), the nodes by slot (`nodes`) and the
-//! views, the chat's pick, goal and work (`state`, written over). Pages
+//! views, the chat's goal and work (`state`, written over). Pages
 //! `more` after the last that isn't are not in the chat. Memory holds only
 //! the views' nodes and those built above them; any other row is read as
 //! needed. Images are in docs/images/ by their hash.
@@ -240,14 +240,11 @@ struct Kept {
     batch: bool,
 }
 
-/// The state row: the chat's view, the compactions', the pick, goal and
-/// work.
+/// The state row: the chat's view, the compactions', the goal and work.
 #[derive(Serialize, Deserialize, Default)]
 struct Saved {
     view: Kept,
     seen: Kept,
-    #[serde(default)]
-    pick: serde_json::Value,
     #[serde(default)]
     goal: Option<String>,
     #[serde(default)]
@@ -255,9 +252,8 @@ struct Saved {
 }
 
 /// The chat's memory. db: chat.db, shared with `chat::usage`; count: the
-/// pages logged whole; open: those after, not whole yet; pick: the chat's,
-/// as last set (as saved: one not offered is told once); goal: the user's
-/// (/goal), till met or halted; work: what ran, as last saved; nodes: the
+/// pages logged whole; open: those after, not whole yet; goal: the
+/// user's, till met or dropped; work: what ran, as last saved; nodes: the
 /// texts of the views' nodes built and of those above them, by slot;
 /// agents: their logs' lengths; ready: the nodes not built whose halves
 /// are, by side and level, in order; busy: nodes building, by slot, with
@@ -273,7 +269,6 @@ pub struct Memory {
     pub db: Connection,
     pub count: u64,
     pub open: u64,
-    pub pick: serde_json::Value,
     pub goal: Option<String>,
     pub work: Vec<String>,
     nodes: HashMap<u64, String>,
@@ -310,7 +305,6 @@ impl Memory {
             db,
             count: 0,
             open: 0,
-            pick: serde_json::Value::Null,
             goal: None,
             work: Vec::new(),
             nodes: HashMap::new(),
@@ -331,7 +325,6 @@ impl Memory {
             stuck: false,
         };
         if let Some(s) = &saved {
-            mem.pick = s.pick.clone();
             mem.goal = s.goal.clone();
             mem.work = s.work.clone();
         }
@@ -361,7 +354,7 @@ impl Memory {
     /// The state row, written over.
     pub fn save(&self) -> Result<()> {
         let kept = |v: &View| Kept { parts: v.parts.iter().map(|p| (p.l, p.i)).collect(), batch: v.batch };
-        let saved = Saved { view: kept(&self.view), seen: kept(&self.seen), pick: self.pick.clone(), goal: self.goal.clone(), work: self.work.clone() };
+        let saved = Saved { view: kept(&self.view), seen: kept(&self.seen), goal: self.goal.clone(), work: self.work.clone() };
         self.db.execute("insert or replace into state values (1, ?)", [serde_json::to_string(&saved)?])?;
         Ok(())
     }

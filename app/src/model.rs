@@ -5,27 +5,29 @@
 //! answer what to send back. The main chat shows what its agent sees: the
 //! view's parts as blocks ("nx"), from the turn on each message whole (1x)
 //! and its thoughts, then what streams or what the turn waits on. An
-//! agent's page is its log, kept live. The AI notice opens the chat and
-//! comes again before a message in another 3-hour window.
+//! agent's page is its log, kept live. The AI notice (a thread's caption)
+//! opens the chat and comes again before a message in another 3-hour
+//! window. The only act that changes anything is a message; the rest
+//! look.
 
 use crate::call::{self, Call};
 use crate::text;
-use acorn_core::import::Found;
-use acorn_core::pick::Pick;
-use acorn_core::wire::{Command, Entry, Event, Live, Node, Progress, Seg, State, TURN, Usage, Wait, live_push};
 use acorn_core::{Kind, Spend};
+use acorn_core::wire::{Command, Entry, Event, Live, Node, Progress, Seg, State, Wait, live_push};
 use std::collections::HashMap;
 
 /// The disclosure the chat shows (EU AI Act art. 50, California SB 243,
-/// New York GBL art. 47).
-pub const AI: &str = "Acorn is an AI, not a person, and can make mistakes.";
+/// New York GBL art. 47), of the assistant named.
+pub fn notice(name: &str) -> String {
+    format!("{name} is an AI, not a person, and can make mistakes.")
+}
 
 /// The AI notice's period (ms).
 const NOTICE: i64 = 3 * 60 * 60 * 1000;
 
-const WAIT: &str = "compressing…";
-const SUMS: &str = "compressing earlier messages…";
-const FOLD: &str = "The whole chat, folded into the fewest blocks.";
+const WAIT: &str = "summarizing…";
+const SUMS: &str = "summarizing earlier messages…";
+const FOLD: &str = "Overview: the whole chat in the fewest blocks. Esc goes back.";
 
 /// An import's minutes a micro-USD of its time (the compactor, measured on
 /// a real import: 990 s for 162,900).
@@ -38,13 +40,15 @@ pub struct Page {
     pub live: Vec<Live>,
 }
 
-/// The chat as the window knows it. fold: the tops shown (None: not
-/// folded); nodes and whole: the summaries and messages known; open: the
-/// blocks opened (true) or shut by hand; minds: the thoughts after each
-/// message; pages: the agents' asked for; page: the one shown (None:
-/// Acorn's).
+/// The chat as the window knows it. head: what it opens with (the AI
+/// notice, again in each new 3-hour window; a thread's caption, once);
+/// fold: the tops shown (None: not folded); nodes and whole: the
+/// summaries and messages known; open: the blocks opened (true) or shut
+/// by hand; minds: the thoughts after each message; pages: the agents'
+/// asked for; page: the one shown (None: the chat).
 #[derive(Clone, Debug)]
 pub struct Model {
+    pub head: (String, bool),
     pub state: Option<State>,
     pub parts: Vec<Seg>,
     pub turn: u64,
@@ -61,6 +65,7 @@ pub struct Model {
 impl Default for Model {
     fn default() -> Model {
         Model {
+            head: (String::new(), false),
             state: None,
             parts: Vec::new(),
             turn: u64::MAX,
@@ -79,7 +84,8 @@ impl Default for Model {
 /// What a page draws, top to bottom.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
-    /// A block: nx, its summary (call: a tool call's, word for word).
+    /// A block: of n messages, its summary (call: a tool call's, word for
+    /// word).
     Sum { seg: Seg, text: String, call: Option<Call> },
     /// A block open: its bar, its halves.
     Box { seg: Seg, text: String, rows: Vec<Row> },
@@ -92,15 +98,15 @@ pub enum Row {
     Cap(String),
 }
 
-/// A person's act.
+/// A person's act: a message, or a look.
 pub enum Act {
-    /// Enter: a message, or, empty, interrupt.
+    /// Enter: a message (it cuts in on work).
     Send { text: String, images: Vec<Vec<u8>> },
     /// A click on a block.
     Open(Seg),
-    /// A click on an open block's bar.
+    /// A click on an open block's bar: collapsed.
     Shut(Seg),
-    /// Fold all, unfold all.
+    /// The overview, or back from it.
     Fold(bool),
     /// A tab, a name, the logo (None: Acorn).
     Goto(Option<String>),
@@ -112,8 +118,6 @@ pub enum Act {
 pub struct Then {
     pub cmds: Vec<Command>,
     pub notes: Vec<String>,
-    pub usage: Option<Vec<Usage>>,
-    pub found: Option<Found>,
 }
 
 impl Model {
@@ -184,8 +188,6 @@ impl Model {
                     entry.spend = Some(spend);
                 }
             }
-            Event::Usage(days) => then.usage = Some(days),
-            Event::Sessions(found) => then.found = Some(found),
             Event::Assistant(_) => {}
         }
         then
@@ -195,37 +197,11 @@ impl Model {
         let mut then = Then::default();
         match act {
             Act::Send { text, images } => {
-                // a `/word` is no command (the window has its own), but
-                // /goal (a message, sent as typed, set as the goal) and
-                // /halt
                 let text = text.trim().to_string();
-                let word = text.strip_prefix('/').map(|w| w.split(char::is_whitespace).next().unwrap_or_default()).filter(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_alphabetic()));
-                if self.page.is_some() {
-                    return then;
-                }
-                if text.is_empty() && images.is_empty() {
-                    if self.busy() {
-                        then.cmds.push(Command::Stop(Some(TURN.into())));
-                    }
-                    return then;
-                }
-                match word {
-                    Some("halt") => then.cmds.push(Command::Goal(None)),
-                    Some("goal") => {
-                        let goal = text["/goal".len()..].trim().to_string();
-                        if goal.is_empty() {
-                            then.notes.push("/goal needs one: /goal <message>.".into());
-                        } else {
-                            self.fold = None;
-                            then.cmds.push(Command::Goal(Some(goal.clone())));
-                            then.cmds.push(Command::Say { text: goal, images });
-                        }
-                    }
-                    Some(w) => then.notes.push(format!("/{w} is no command; nothing was sent. The ☰ menu has the commands.")),
-                    None => {
-                        self.fold = None;
-                        then.cmds.push(Command::Say { text, images });
-                    }
+                if !text.is_empty() || !images.is_empty() {
+                    self.page = None;
+                    self.fold = None;
+                    then.cmds.push(Command::Say { text, images });
                 }
             }
             Act::Open(seg) => {
@@ -263,14 +239,6 @@ impl Model {
         }
     }
 
-    pub fn busy(&self) -> bool {
-        self.state.as_ref().is_some_and(|s| s.busy)
-    }
-
-    pub fn pick(&self) -> Option<Pick> {
-        self.state.as_ref().map(|s| s.pick)
-    }
-
     pub fn agents(&self) -> &[String] {
         self.state.as_ref().map_or(&[], |s| &s.agents)
     }
@@ -287,16 +255,18 @@ impl Model {
         std::iter::once(None).chain(names.into_iter().map(Some)).collect()
     }
 
-    /// Whether messages go from the box: only on Acorn's page.
-    pub fn typing(&self) -> bool {
-        self.page.is_none()
-    }
-
     // Rows
     // ----
 
+    /// A chat's model, empty, opening with `head`, again in each new
+    /// 3-hour window if `again`.
+    pub fn headed(head: String, again: bool) -> Model {
+        Model { head: (head, again), ..Model::default() }
+    }
+
     /// The page shown, as items (each a part's rows, or an agent's entry).
     pub fn body(&self) -> Vec<Vec<Row>> {
+        let (head, again) = (self.head.0.as_str(), self.head.1);
         if let Some(name) = &self.page {
             let page = self.pages.get(name);
             let at = if self.agents().contains(name) { "at work" } else { "done" };
@@ -308,11 +278,11 @@ impl Model {
             let rows = tops.iter().map(|&(id, n)| self.part_rows(id, n, u64::MAX, false));
             return std::iter::once(vec![Row::Cap(FOLD.into())]).chain(rows).collect();
         }
-        let mut items = vec![vec![Row::Cap(AI.into())]];
+        let mut items = vec![vec![Row::Cap(head.into())]];
         for (k, &part) in self.parts.iter().enumerate() {
             let mut rows = self.part_rows(part.0, part.1, self.turn, true);
-            if self.due(part, k.checked_sub(1).map(|k| self.parts[k])) {
-                rows.insert(0, Row::Cap(AI.into()));
+            if again && self.due(part, k.checked_sub(1).map(|k| self.parts[k])) {
+                rows.insert(0, Row::Cap(head.into()));
             }
             items.push(rows);
         }
@@ -375,7 +345,7 @@ impl Model {
         if !self.open.get(&(id, n)).copied().unwrap_or(talks) {
             return vec![self.sum_row(id, n)];
         }
-        let text = if n == 1 { "fold".to_string() } else { format!("▾ {n}x · fold") };
+        let text = if n == 1 { "collapse".to_string() } else { format!("▾ {n} messages · collapse") };
         let rows = if n > 1 {
             let half = n / 2;
             let mut rows = self.part_rows(id, half, t, talk);
@@ -427,46 +397,9 @@ pub fn progress_show(p: &Progress) -> String {
     if p.why.is_some() { format!("{phase} · paused") } else { phase }
 }
 
-/// The days' use (newest first): a table a day, then a total; kinds as a
-/// person counts them.
-pub fn usage_md(days: &[Usage]) -> String {
-    if days.is_empty() {
-        return "No usage yet.".into();
-    }
-    let kind = |k: &str| match k {
-        "chat" => "replies",
-        "compactor" => "summaries",
-        "import" => "import summaries",
-        "agent" => "agents",
-        "computer" => "computer use",
-        k => k,
-    }
-    .to_string();
-    let cells = |name: String, u: &Spend| {
-        format!("| {name} | {} | {} | {} | {} | {} |", u.n, text::tokens_show(u.input + u.read), text::tokens_show(u.read), text::tokens_show(u.output), text::usd_show(u.usd))
-    };
-    let mut lines = vec!["| | Calls | In | Cached | Out | Cost |".to_string(), "|---|--:|--:|--:|--:|--:|".to_string()];
-    let mut seen: Vec<&str> = Vec::new();
-    for d in days {
-        if !seen.contains(&d.day.as_str()) {
-            seen.push(&d.day);
-        }
-    }
-    for day in seen {
-        let of: Vec<&Usage> = days.iter().filter(|d| d.day == day).collect();
-        let sum = of.iter().fold(Spend::default(), |a, d| a + d.spend);
-        lines.push(cells(format!("**{day}**"), &sum));
-        lines.extend(of.iter().map(|d| cells(format!("  {}", kind(&d.kind)), &d.spend)));
-    }
-    let all = days.iter().fold(Spend::default(), |a, d| a + d.spend);
-    lines.push(cells("**All**".into(), &all));
-    lines.join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acorn_core::pick::Effort;
 
     fn entry(kind: Kind, text: &str) -> Entry {
         Entry { kind, text: text.into(), date: "2026-10-26T10:00:00.000Z".into(), images: vec![], spend: None }
@@ -474,21 +407,27 @@ mod tests {
 
     #[test]
     fn the_chat_shows_blocks_then_the_turn_whole() {
-        let mut m = Model::default();
+        let mut m = Model::headed(notice("Doug"), true);
         m.hear(Event::Know { whole: vec![(0, entry(Kind::User, "hi")), (1, entry(Kind::Tool, "shell {\"command\":\"ls\"}"))], nodes: vec![] });
         m.hear(Event::View { parts: vec![(0, 1), (1, 1)], turn: 1 });
-        let body = m.body();
-        assert_eq!(body[0], vec![Row::Cap(AI.into())]);
+        let body = Model { head: (notice("Doug"), true), ..m }.body();
+        assert_eq!(body[0], vec![Row::Cap("Doug is an AI, not a person, and can make mistakes.".into())]);
         assert!(matches!(&body[1][0], Row::Box { .. }), "a user's message before the turn opens");
         assert!(matches!(&body[2][0], Row::Msg { call: Some(c), .. } if c.name == "shell"));
     }
 
+    /// Words are the one act: sent at work they go as any (the engine cuts
+    /// in), from an agent's page or the overview they bring the chat back,
+    /// and nothing at all sends nothing.
     #[test]
-    fn acts_say_what_to_send() {
+    fn a_message_is_the_only_act() {
         let mut m = Model::default();
-        m.hear(Event::State(State { busy: true, wait: Wait::None, agents: vec![], pick: Pick { effort: Effort::High }, importing: None, today: None }));
-        assert!(matches!(m.act(Act::Send { text: " ".into(), images: vec![] }).cmds[..], [Command::Stop(_)]));
-        assert!(matches!(m.act(Act::Send { text: "/goal ship it".into(), images: vec![] }).cmds[..], [Command::Goal(Some(_)), Command::Say { .. }]));
-        assert_eq!(m.act(Act::Send { text: "/nope".into(), images: vec![] }).notes.len(), 1);
+        m.hear(Event::State(State { busy: true, wait: Wait::None, agents: vec!["FireAnt".into()], goal: Some("tests pass".into()), importing: None, today: None }));
+        assert!(m.act(Act::Send { text: " ".into(), images: vec![] }).cmds.is_empty(), "an empty Enter stops nothing");
+        m.act(Act::Goto(Some("FireAnt".into())));
+        m.act(Act::Fold(true));
+        assert!(matches!(m.act(Act::Send { text: "stop".into(), images: vec![] }).cmds[..], [Command::Say { .. }]));
+        assert_eq!((m.page.as_deref(), m.fold.is_some()), (None, false), "back to the chat, where the reply comes");
+        assert!(matches!(m.act(Act::Send { text: "/goal ship it".into(), images: vec![] }).cmds[..], [Command::Say { .. }]), "no slash words: words");
     }
 }

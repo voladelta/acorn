@@ -7,7 +7,7 @@
 //! opened from the Finder has no shell's variables); no program the agent
 //! runs inherits it (`machine`).
 
-use crate::pick::{Effort, Pick};
+use crate::effort::Effort;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -34,12 +34,12 @@ pub struct Config {
     pub rules: Option<PathBuf>,
     /// A shell command run after each turn.
     pub after: String,
-    /// What a chat runs on until it picks another.
-    pub pick: Pick,
+    /// What Acorn thinks at.
+    pub pick: Effort,
     /// What every compaction runs on, a chat's and an import's alike.
-    pub compactor: Pick,
-    /// What subagents run on (none: the chat's pick).
-    pub agents: Option<Pick>,
+    pub compactor: Effort,
+    /// What subagents run on (none: their assistant's effort).
+    pub agents: Option<Effort>,
     pub view: usize,
     /// Whether the agent may use this Mac's screen, mouse and keyboard.
     pub computer: bool,
@@ -109,10 +109,10 @@ pub fn home() -> PathBuf {
 }
 
 /// `model:effort` or `effort`, the only model being deepseek-flash.
-fn run(key: &str, text: &str) -> Result<Pick, String> {
+fn run(key: &str, text: &str) -> Result<Effort, String> {
     let (model, effort) = text.split_once(':').map_or((None, text), |(m, e)| (Some(m), e));
     if model.is_some_and(|m| m != crate::ai::deepseek::MODEL) {
         return Err(format!("{key} is no model:effort offered here: {text}"));
     }
-    Effort::parse(effort).map(|effort| Pick { effort }).ok_or_else(|| format!("{key} is no effort offered here: {text}"))
+    Effort::parse(effort).ok_or_else(|| format!("{key} is no effort offered here: {text}"))
 }

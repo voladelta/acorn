@@ -3,11 +3,11 @@
 //! An agent (a subagent, or a computer task) has a name and a log; each
 //! call gets its context and its whole log, so a told agent goes on even
 //! after a quit; its replies reach the chat as one "[Name]" message.
-//! Every caller's tools (`Kit`) run here, Acorn's and the agents'.
+//! Every caller's tools (`Kit`) run here, the assistant's and the agents'.
 
 use super::{Chat, Engine};
 use crate::ai::{self, Handle, Out, Spec, Toolbox};
-use crate::pick::Effort;
+use crate::effort::Effort;
 use crate::tools::{self, HANDS, HANDS_NOTE, MAIN, SUB_AT, SUB_NOTE};
 use crate::wire::{Event, Live};
 use crate::{Block, Kind, Served, clip, computer, config, machine};
@@ -53,13 +53,15 @@ pub struct Kit {
     work: PathBuf,
     who: String,
     hands: bool,
+    /// Its chat is a thread (`hub`): no tools of the user's.
+    thread: bool,
     /// What stops the turn the call serves (an agent's view waits on it).
     halt: CancellationToken,
 }
 
 impl Toolbox for Kit {
     fn specs(&self) -> Vec<Spec> {
-        tools::list(&self.work, &self.who, self.hands)
+        tools::list(&self.work, &self.who, self.hands, self.thread)
     }
 
     fn call(&self, name: String, input: Value, cancel: CancellationToken) -> BoxFuture<'static, Out> {
@@ -75,6 +77,7 @@ impl Toolbox for Kit {
 impl Engine {
     async fn tool(self: Arc<Self>, cwd: PathBuf, hands: bool, name: &str, input: Value, cancel: CancellationToken, halt: CancellationToken) -> Out {
         let num = |k: &str, def: u64| input[k].as_u64().unwrap_or(def);
+        let str = |k: &str| input[k].as_str().unwrap_or_default().trim().to_string();
         match name {
             "zoom" => {
                 let mut chat = self.lock();
@@ -95,7 +98,7 @@ impl Engine {
                     e => match e.as_str().and_then(Effort::parse) {
                         Some(effort) => Some(effort),
                         None => {
-                            let all: Vec<&str> = crate::pick::EFFORTS.iter().map(|e| e.as_str()).collect();
+                            let all: Vec<&str> = crate::effort::EFFORTS.iter().map(|e| e.as_str()).collect();
                             return Out::fail(format!("No effort {}; one of {}.", e.as_str().unwrap_or(&e.to_string()), all.join(", ")));
                         }
                     },
@@ -103,12 +106,35 @@ impl Engine {
                 let tasks: Vec<String> = input["tasks"].as_array().into_iter().flatten().map(|t| t.as_str().map_or_else(|| t.to_string(), str::to_string)).collect();
                 Out::ok(self.spawn(tasks, effort, &halt).await)
             }
-            "tell" => {
-                let str = |k: &str| input[k].as_str().unwrap_or_default().to_string();
-                Out::ok(self.tell_agent(&str("name"), &str("message")).await)
+            "tell" => Out::ok(self.tell_agent(&str("name"), &str("message")).await),
+            "stop" => {
+                let mut chat = self.lock();
+                let name = Some(str("name")).filter(|n| !n.is_empty());
+                let at = chat.working().into_iter().filter(|w| name.as_ref().is_none_or(|n| n == w)).collect::<Vec<_>>();
+                chat.stop_agents(name.as_deref());
+                match (at.is_empty(), name) {
+                    (true, Some(name)) => Out::fail(format!("No agent {name} at work.")),
+                    (true, None) => Out::ok("No agent was at work."),
+                    _ => Out::ok(format!("Stopped {}.", at.join(", "))),
+                }
             }
+            "goal" => {
+                let goal = Some(str("goal")).filter(|g| !g.is_empty());
+                let said = match &goal {
+                    Some(goal) => format!("Goal set: {goal}. A check reads the chat as each turn would end, and you go on till it's met."),
+                    None => "Goal dropped.".into(),
+                };
+                self.lock().set_goal(goal);
+                Out::ok(said)
+            }
+            "usage" => Out::ok(super::usage::told(num("days", 7).clamp(1, 366) as i64)),
+            "import" => self.import_tool(&input).await,
+            "export" => self.export().await.map_or_else(Out::fail, |file| Out::ok(format!("Saved as {}.", file.display()))),
+            "tree" => self.tree().await.map_or_else(Out::fail, |file| Out::ok(format!("Opened in the browser: {}.", file.display()))),
+            "list_assistants" => Out::ok(self.lock().peers(None)),
+            "search_assistants" => Out::ok(self.lock().peers(Some(&str("query")))),
+            "ask_assistant" => self.ask(&str("name"), &str("message")),
             "remember" => {
-                let str = |k: &str| input[k].as_str().unwrap_or_default().to_string();
                 let (me, chat, msg) = {
                     let chat = self.lock();
                     (chat.me.id.clone(), chat.id.clone(), chat.mem.count.saturating_sub(1))
@@ -135,14 +161,14 @@ impl Engine {
                 }
             }
             "create_assistant" => {
-                let str = |k: &str| input[k].as_str().unwrap_or_default().to_string();
                 let Some(effort) = Effort::parse(&str("effort")) else {
-                    let all: Vec<&str> = crate::pick::EFFORTS.iter().map(|e| e.as_str()).collect();
+                    let all: Vec<&str> = crate::effort::EFFORTS.iter().map(|e| e.as_str()).collect();
                     return Out::fail(format!("No effort {}; one of {}.", input["effort"], all.join(", ")));
                 };
-                match crate::assistant::add(&str("name"), &str("instructions"), effort) {
+                match crate::assistant::add(&str("name"), &str("about"), &str("instructions"), effort) {
                     Ok(made) => {
-                        let said = format!("Created {}, at {} effort; it is in the sidebar.", made.name, effort.as_str());
+                        let said = format!("Hired {}, {}; they are in the sidebar.", made.name, made.about);
+                        let _ = super::hub::chat(&made);
                         self.lock().all(Event::Assistant(made));
                         Out::ok(said)
                     }
@@ -179,7 +205,7 @@ impl Engine {
         Out::ok(format!("Started {name}. Its report will reach you as a message."))
     }
 
-    /// A message to an agent: one at work reads it between its tool calls;
+    /// A message to an agent: one at work stops what it does and reads it;
     /// an idle one goes on from its chat.
     pub(super) async fn tell_agent(self: &Arc<Self>, name: &str, message: &str) -> String {
         let role = {
@@ -188,8 +214,8 @@ impl Engine {
             let (call, role) = (agent.call.clone(), agent.role);
             if let Some(call) = call {
                 chat.push(Some(name), Kind::User, message);
-                call.send(crate::Say { text: message.into(), imgs: vec![] });
-                return format!("Sent. {name} reads it between its tool calls, and its report answers it.");
+                call.send(crate::Say { text: message.into(), imgs: vec![], cut: true });
+                return format!("Sent. {name} stops what it was doing to read it, and its report answers it.");
             }
             if role == Role::Hands
                 && let Some(why) = chat.screen()
@@ -216,6 +242,28 @@ impl Engine {
         drop(chat);
         tokio::spawn(self.clone().run(name.to_string()));
         format!("Sent. {name}'s reply will reach you as a message.")
+    }
+
+    /// Another assistant asked, in their thread (`hub`): its reply comes
+    /// back as a message.
+    fn ask(self: &Arc<Self>, name: &str, message: &str) -> Out {
+        let me = self.lock().me.clone();
+        let Some(them) = crate::assistant::all().into_iter().find(|a| a.name.eq_ignore_ascii_case(name)) else {
+            return Out::fail(format!("No assistant {name}; list_assistants names them."));
+        };
+        if them.id == me.id {
+            return Out::fail("That's you.");
+        }
+        if message.is_empty() {
+            return Out::fail("Ask something: message is empty.");
+        }
+        match super::hub::thread(&them, &me) {
+            Ok(thread) => {
+                thread.command(crate::wire::Command::Say { text: message.into(), images: vec![] });
+                Out::ok(format!("Asked {}. Their reply will reach you as a message \"[{}]\".", them.name, them.name))
+            }
+            Err(why) => Out::fail(why),
+        }
     }
 
     /// The chat's view, once its summaries are built; else why there is
@@ -268,6 +316,7 @@ impl Chat {
             work: self.me.work(),
             who: agent.map_or(MAIN, |a| a.name.as_str()).to_string(),
             hands: agent.is_some_and(|a| a.role == Role::Hands),
+            thread: self.with.is_some(),
             halt: self.halt.clone(),
         })
     }
@@ -312,16 +361,16 @@ impl Chat {
         self.agents.get_mut(name)
     }
 
-    /// A call of an agent, on the config's `agents` or else the chat's pick,
+    /// A call of an agent, on the config's `agents` or else its assistant's,
     /// at its effort if it has one (a computer task's sees no view, and only
     /// its computer tool).
     fn agent_ask(&self, name: &str) -> Option<ai::Ask> {
         let agent = self.agents.get(name)?;
         let log = Block::new(self.mem.agent_show(name), true);
-        let pick = config::get().agents.unwrap_or_else(|| self.pick());
+        let pick = config::get().agents.unwrap_or(self.me.effort);
         let (kind, system, effort) = match agent.role {
-            Role::Sub(effort) => (Served::Agent, tools::system(&(tools::sub(&self.me.work()) + &crate::facts::prompt(&self.me.id))), effort.unwrap_or(pick.effort)),
-            Role::Hands => (Served::Computer, tools::system(HANDS), pick.effort),
+            Role::Sub(effort) => (Served::Agent, tools::system(&(tools::sub(&self.me.work()) + &crate::facts::prompt(&self.me.id))), effort.unwrap_or(pick)),
+            Role::Hands => (Served::Computer, tools::system(HANDS), pick),
         };
         let mut blocks = agent.view.clone();
         blocks.push(log);
@@ -356,6 +405,26 @@ impl Chat {
                 call.stop();
             }
         }
+    }
+
+    /// The user's other assistants, each its name and about; those a query
+    /// matches (each word in its name, about or instructions), best first.
+    fn peers(&self, query: Option<&str>) -> String {
+        let words: Vec<String> = query.unwrap_or_default().split_whitespace().map(str::to_lowercase).collect();
+        let mut them: Vec<(usize, crate::assistant::Assistant)> = crate::assistant::all()
+            .into_iter()
+            .filter(|a| a.id != self.me.id)
+            .map(|a| {
+                let hay = format!("{} {} {}", a.name, a.about, a.instructions).to_lowercase();
+                (words.iter().filter(|w| hay.contains(w.as_str())).count(), a)
+            })
+            .filter(|(hits, _)| words.is_empty() || *hits > 0)
+            .collect();
+        them.sort_by_key(|(hits, _)| std::cmp::Reverse(*hits));
+        if them.is_empty() {
+            return if words.is_empty() { "No other assistants yet.".into() } else { "None matches.".into() };
+        }
+        them.iter().map(|(_, a)| if a.about.is_empty() { a.name.clone() } else { format!("{}: {}", a.name, a.about) }).collect::<Vec<_>>().join("\n")
     }
 
     /// An agent's page: its log, and what streams.

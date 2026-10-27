@@ -17,7 +17,7 @@ pub mod cache;
 pub mod deepseek;
 pub mod pace;
 
-use crate::pick::Effort;
+use crate::effort::Effort;
 use crate::price::Usage;
 use crate::{Block, Img, Kind, Say};
 use futures_util::future::BoxFuture;

@@ -1,13 +1,15 @@
 //! Side
 //! ====
 //! The sidebar, as the nsh gallery's: Acorn's name, then the assistants
-//! (Acorn, Max, then those they made, oldest first: `create_assistant`),
-//! each a row; the one shown has a bar and a fill, one at work a dot.
-//! Cmd+B (or the button atop it) hides it.
+//! (Acorn, Max, then those they hired, oldest first: `create_assistant`),
+//! each a row, who it is in its tooltip; the one you talk to has a bar and
+//! a fill, one at work (with you, or answering another) a dot. Cmd+B (or
+//! the button atop it) hides it.
 
 use crate::look::*;
 use crate::Ui;
 use acorn_core::assistant::Assistant;
+use acorn_core::chat::hub;
 use nsh_core::prelude::*;
 
 /// Its width, shown.
@@ -50,16 +52,17 @@ pub fn bar(ui: Ui) -> impl IntoElement {
 }
 
 /// An assistant: its mark (Acorn's, an acorn; another's, its initial),
-/// its name (the one shown in ink, the rest muted), a dot while it works.
+/// its name (the one you talk to in ink, the rest muted), a dot while it
+/// works.
 fn row(ui: Ui, a: Assistant) -> impl IntoElement {
     let id = a.id.clone();
     let on = {
         let id = id.clone();
-        move || ui.shown.get() == id
+        move || ui.talk.get() == id
     };
     let works = {
         let id = id.clone();
-        move || ui.working.with(|w| w.contains(&id))
+        move || ui.working.with(|w| w.iter().any(|chat| hub::whose(chat) == id))
     };
     let mark = if a.is_acorn() {
         text("🌰").text_size(px(15.0)).into_element()
@@ -67,7 +70,7 @@ fn row(ui: Ui, a: Assistant) -> impl IntoElement {
         let initial = a.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
         text(initial).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(mid()).into_element()
     };
-    let tip = a.effort.map_or_else(|| "Acorn: the one endless chat".to_string(), |e| format!("{} · {} effort", a.name, e.as_str()));
+    let tip = if a.about.is_empty() { a.name.clone() } else { format!("{} · {}", a.name, a.about) };
     let (on2, on3, on4) = (on.clone(), on.clone(), on.clone());
     view()
         .flex_row()
@@ -80,7 +83,7 @@ fn row(ui: Ui, a: Assistant) -> impl IntoElement {
         .hover(|s| s.bg(hover()))
         .cursor_pointer()
         .tooltip(crate::hint(tip))
-        .on_press(move || ui.show(id.clone()))
+        .on_press(move || if ui.talk.get_untracked() == id { ui.back() } else { ui.talk_to(id.clone()) })
         .child(view().absolute().left(px(0.0)).top(px(9.0)).w(px(3.0)).h(px(18.0)).rounded(px(1.5)).bg(ink()).opacity(move || if on2() { 1.0_f32 } else { 0.0 }))
         .child(view().size(px(22.0)).rounded(px(6.0)).bg(move || if on3() { paper() } else { block() }).items_center().justify_center().child(mark))
         .child(

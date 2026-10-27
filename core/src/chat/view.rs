@@ -23,7 +23,7 @@ impl Chat {
             false if self.busy && !self.wait.is_empty() && self.mem.first(0, 0) < self.from() => Wait::Summaries,
             false => Wait::None,
         };
-        State { busy: self.busy, wait, agents: self.working(), pick: self.pick(), importing: self.importing(), today: self.today() }
+        State { busy: self.busy, wait, agents: self.working(), goal: self.mem.goal.clone(), importing: self.importing(), today: self.today() }
     }
 
     pub(super) fn tell_state(&mut self) {
@@ -130,18 +130,20 @@ fn blocks(part: Part, (a, b): Seg) -> Vec<Seg> {
 /// out: the chat goes on between.
 const PIECE: u64 = 512;
 
+/// Now, as a file's name tells it: the date and time here.
+fn stamp() -> String {
+    chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string()
+}
+
 impl Engine {
-    /// The memory as JSON: the chat's id, the messages, the summaries, the
-    /// agents' logs, then every image, each in base64.
-    pub(super) async fn export(self: Arc<Self>, file: PathBuf) {
+    /// The memory as JSON, in the user's Downloads: the chat's id, the
+    /// messages, the summaries, the agents' logs, then every image, each
+    /// in base64.
+    pub(super) async fn export(self: &Arc<Self>) -> Result<PathBuf, String> {
+        let file = crate::config::home().join("Downloads").join(format!("acorn-memory-{}.json", stamp()));
         let me = self.clone();
         let wrote = tokio::task::spawn_blocking(move || me.dump(&file).map(|_| file)).await;
-        let note = match wrote {
-            Ok(Ok(file)) => format!("Saved the memory as {}.", file.display()),
-            Ok(Err(err)) => format!("The memory was not saved: {err}."),
-            Err(err) => format!("The memory was not saved: {err}."),
-        };
-        self.tell(Event::Note(note));
+        wrote.map_err(|err| err.to_string())?.map_err(|err| format!("The memory was not saved: {err}."))
     }
 
     fn dump(&self, file: &std::path::Path) -> anyhow::Result<()> {
@@ -202,18 +204,15 @@ impl Engine {
         Ok(())
     }
 
-    /// The whole tree as a page: a section for the view, the messages and
-    /// each level; opened in the browser.
-    pub(super) async fn tree(self: Arc<Self>, file: PathBuf) {
+    /// The whole tree as a page in the temp dir: a section for the view,
+    /// the messages and each level; opened in the browser.
+    pub(super) async fn tree(self: &Arc<Self>) -> Result<PathBuf, String> {
+        let file = std::env::temp_dir().join(format!("acorn-tree-{}.html", stamp()));
         let me = self.clone();
         let made = tokio::task::spawn_blocking(move || me.page(&file).map(|_| file)).await;
-        match made {
-            Ok(Ok(file)) => {
-                let _ = tokio::process::Command::new("open").arg(&file).status().await;
-            }
-            Ok(Err(err)) => self.tell(Event::Note(format!("No tree page: {err}."))),
-            Err(err) => self.tell(Event::Note(format!("No tree page: {err}."))),
-        }
+        let file = made.map_err(|err| err.to_string())?.map_err(|err| format!("No tree page: {err}."))?;
+        let _ = tokio::process::Command::new("open").arg(&file).status().await;
+        Ok(file)
     }
 
     fn page(&self, file: &std::path::Path) -> anyhow::Result<()> {
