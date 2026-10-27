@@ -21,6 +21,12 @@ use tokio_util::sync::CancellationToken;
 /// How many of a thread's latest lines the user's chat sees each turn.
 const THREAD_LINES: usize = 8;
 
+/// A thread's lines named, and who speaks in them: its user is the
+/// assistant who asked, never the user.
+fn thread_head(asks: &str) -> String {
+    format!("## With {asks} (there, user is {asks}, who asked, and unii is you)")
+}
+
 /// What an agent is: a subagent (at an effort of its own, or the run's),
 /// or the hands of a computer task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -278,19 +284,21 @@ impl Engine {
     /// locks its asker's chat to answer, so the two never wait on each
     /// other.
     pub(super) fn threads(&self) -> Option<Block> {
+        if self.id.contains('/') {
+            return None;
+        }
         let mine = format!("{}/", self.id);
         let said: Vec<String> = super::hub::all()
             .into_iter()
             .filter(|e| e.id.starts_with(&mine))
             .filter_map(|e| {
                 let chat = e.lock();
-                let lines = chat.mem.view_lines();
-                let latest = &lines[lines.len().saturating_sub(THREAD_LINES)..];
-                let asks = &chat.with.as_ref()?.name;
-                (!latest.is_empty()).then(|| format!("## With {asks}\n{}\n", latest.join("\n")))
+                let latest = chat.mem.view_lines(THREAD_LINES);
+                let head = thread_head(&chat.with.as_ref()?.name);
+                (!latest.is_empty()).then(|| format!("{head}\n{}\n", latest.join("\n")))
             })
             .collect();
-        (!said.is_empty() && !self.id.contains('/')).then(|| {
+        (!said.is_empty()).then(|| {
             Block::new(format!("Your threads, where other assistants asked you for the user (each one's latest lines; its ids are the thread's, not this chat's; zoom(\"Name\") gives one whole):\n{}\n", said.join("\n")), false)
         })
     }
@@ -300,8 +308,8 @@ impl Engine {
     fn thread_lines(&self, name: &str) -> Option<String> {
         let asks = crate::assistant::all().into_iter().find(|a| a.name.eq_ignore_ascii_case(name))?;
         let thread = super::hub::get(&format!("{}/{}", self.id, asks.id))?;
-        let lines = thread.lock().mem.view_lines();
-        Some(lines.join("\n"))
+        let lines = thread.lock().mem.view_lines(usize::MAX);
+        Some(format!("{}\n{}", thread_head(&asks.name), lines.join("\n")))
     }
 
     /// The chat's view, once its summaries are built; else why there is

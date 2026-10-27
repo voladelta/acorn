@@ -1,6 +1,7 @@
 //! A chat's memory in chat.db: logged, built and opened again as it was;
 //! a message purged with every node built from it, its secret gone from
-//! disk; facts kept, shadowed and forgotten across assistants.
+//! disk; facts kept, shadowed and forgotten across assistants; a view's
+//! last lines, the latest messages there before they are summarized.
 
 use acorn_core::memory::{self, Memory, Msg, Part, PURGED};
 use acorn_core::{Kind, facts};
@@ -150,4 +151,13 @@ fn memory_in_sqlite() {
     facts::forget("main", id).unwrap();
     assert!(!on_disk(&home.path().join("home"), SECRET), "a fact forgotten is erased");
     assert!(facts::prompt("nobody").contains("Helix") && !facts::prompt("nobody").contains("emacs"));
+
+    // a view's last lines: messages not summarized yet as their kind and text
+    let mut thread = Memory::load(&home.path().join("chats/max/with/main")).unwrap();
+    for (kind, text) in [(Kind::User, "first"), (Kind::User, "is the deploy safe?"), (Kind::Acorn, "no:\nthe key leaks")] {
+        thread.push(vec![Msg::new(kind, text)]).unwrap();
+    }
+    thread.fit(false);
+    assert_eq!(thread.view_lines(2), ["1+1|user: is the deploy safe?", "2+1|unii: no: the key leaks"]);
+    assert_eq!(thread.view_lines(usize::MAX).len(), 3);
 }

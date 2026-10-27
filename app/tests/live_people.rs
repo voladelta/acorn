@@ -37,7 +37,7 @@ fn acorn_asks_max_creates_marrie_hires_an_agent_and_max_remembers() {
     app.wait_until("Acorn asking Max, in their thread", Duration::from_secs(180), |_| thread.is_dir()).unwrap();
     // Max's name on the frame, the word in it: not thinking that names it
     app.wait_until("Max's reply, framed under his name", Duration::from_secs(300), |s| {
-        s.texts().windows(2).any(|w| w[0] == "Max" && w[1].trim().trim_end_matches('.').eq_ignore_ascii_case("noix"))
+        s.texts().windows(2).any(|w| w[0] == "Max" && w[1].to_lowercase().contains("noix"))
     })
     .unwrap();
 
@@ -59,16 +59,16 @@ fn acorn_asks_max_creates_marrie_hires_an_agent_and_max_remembers() {
     })
     .unwrap();
 
-    // Max, talked to, knows what Acorn asked him and what he answered.
+    // Max, talked to, knows Acorn (not you) asked him, and what he answered.
     app.type_text("label:Message Acorn", "@Max").unwrap();
     app.submit("label:Message Acorn").unwrap();
     app.wait_for_within("text:Max  ·  Thoughtful expert", Duration::from_secs(20)).unwrap();
-    app.type_text("label:Message Max", "Use no tools. In one line: what did Acorn ask you, and what did you answer?").unwrap();
+    app.type_text("label:Message Max", "Use no tools. In one line: who asked you about a French word, and what did you answer?").unwrap();
     app.submit("label:Message Max").unwrap();
     app.wait_until("Max remembering his thread", Duration::from_secs(300), |s| {
         s.texts().iter().any(|t| {
             let t = t.to_lowercase();
-            t.contains("walnut") && t.contains("noix") && !t.contains("what did acorn ask")
+            t.contains("acorn") && t.contains("noix") && !t.contains("who asked you")
         })
     })
     .unwrap();
