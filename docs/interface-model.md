@@ -1,13 +1,14 @@
 # Interface model: Acorn (the app)
 
-Status: built (uncommitted) · Last updated: 2026-10-27
+Status: built · Last updated: 2026-10-27
 
 **As built, where it differs from the text below:**
 - Consult goes one level deep: an assistant answering in a thread has its work tools only (no `ask_assistant`, facts, goal, import or hiring), so asks can't loop.
 - `usage` sums every chat and thread; the footer's cost is the shown chat's today.
 - No `/goal` alias: slash words are gone. Dropping files on the window adds their paths to the message being written ("import this").
 - Esc goes back to your chat from an agent's page, a thread or the overview.
-- A hired assistant without an about (made before this) shows its name alone.
+- An assistant made before abouts shows its name alone.
+- `@Name` is the one word the box reads itself: alone, it opens your chat with that assistant (no call); in a message, the words go to the one you talk to, whose prompt reads `@Name` as "ask them". The box suggests names as you type `@`; Return or a click takes the first or the one clicked.
 
 ## The principle
 
@@ -19,7 +20,7 @@ You and each assistant share one conversation that never ends, as you would with
 - **Hands only look.** Clicks and keys move your eyes: switch assistant, open a block, look at an agent's work or at two assistants' talk, open an image, hide the sidebar. Looking never changes anything.
 - **The screen shows state, not controls.** Who someone is, what is going on (talking, agents at work, a goal, an import), today's cost: always visible, as facts.
 - **Cutting in is a message.** A message sent while the assistant talks or works stops it at once; it reads you and answers. "Stop" and it stays stopped; "also check the tests" and it goes on with that.
-- **People, not settings.** An assistant is introduced by who it is ("Personal stylist"), never by how it is tuned ("high effort"). How hard it thinks is part of its character, set when it is hired, and not shown.
+- **People, not settings.** An assistant is introduced by who it is ("Personal stylist"), never by how it is tuned ("high effort"). How hard it thinks is part of its character, set when it is created, and not shown.
 
 Voice comes for free: if everything is sayable and nothing needs pointing, a microphone is one more way to fill the box.
 
@@ -27,10 +28,10 @@ Voice comes for free: if everything is sayable and nothing needs pointing, a mic
 
 - **Users and tasks:** one person on their own Mac, talking many times a day with a few long-lived assistants that remember everything, act on the Mac and consult each other.
 - **Posture:** sovereign, conversational. The chat is the whole interface; the chrome reports, it doesn't ask.
-- **The cast** (each: name · about; effort is set at hiring and never shown):
+- **The cast** (each: name · about; effort is set at creation and never shown):
   - **Acorn** · General assistant. The everyday one, there for anything: the butler. (High effort, not shown.)
   - **Max** · Thoughtful expert. Thinks long before answering; you, or Acorn, go to Max when it matters. (Max effort, not shown.)
-  - **Hired**, by asking any assistant: **Marrie** · Personal stylist. **Doug** · Friendly neighbour who loves cracking jokes.
+  - **Created**, by asking any assistant: **Marrie** · Personal stylist. **Doug** · Friendly neighbour who loves cracking jokes.
 - **Assumptions:** single user, native app; voice later must need no new verbs.
 
 ## How deepseek-harness does turns, and what Acorn takes from it
@@ -95,7 +96,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Thread | assistant ↔ assistant, lasting | Messages and Blocks, like a Chat | its own page, reached from the consult in either chat |
 | Message | who, date, text, images | in a Chat or Thread | in it |
 | Block | n messages, summary | two halves, down to Messages | in the Chat or Thread |
-| Agent | name, at work / done, log | spawned in one Chat | its page (tab) |
+| Agent | name, task, at work / done, log | hired by one Chat's assistant, for one task | its page (tab) |
 | Fact | text, scope (everyone / one) | held by all assistants or one | said back on request |
 | Goal | text | one per Chat | line above the box |
 | Import | sessions, price, progress | into one Chat | progress in the header |
@@ -108,11 +109,14 @@ Most structural first. Symptom → cause → fix → on screen.
 | Barge-in | interrupt like a person | Send while it talks or works: it stops at once, keeps what it said marked "cut off", reads you, answers. |
 | Consult | assistants ask each other | Acorn asks Max; Max answers in their own lasting thread; Acorn tells you what Max said. |
 | Memory tree | remember everything | Old messages merge into Blocks; open one to see what it was made of. |
-| Agent | parallel helpers | The assistant sends helpers; you watch them and speak about them to the assistant. |
+| Agent | hands for one task | The assistant hires a freelancer for one task; it works in the background, reports once and is gone. "Fire Scout" ends it early. |
 | Goal | persistence | Name the finish line; it keeps taking turns until a check says it's met or you call it off. |
 | Fact | knowledge across chats | "Remember X" and every assistant (or one) knows X until you say forget it. |
 | Purge | erase a secret | "Purge the message with my token": it and its summaries vanish and are wiped from disk. |
-| Hire | more people | Ask for someone with a name and an about; they appear in the sidebar. |
+| Create assistant | more people | Ask for someone with a name and an about; they appear in the sidebar and stay. |
+| Mention | name an assistant in the box | `@Max` alone opens your chat with Max; `@Max what do you think?` has the one you talk to ask Max. |
+
+**Ask or hire.** An assistant asks another assistant for judgment (a part, taste, expertise, memory of its own) and hires an agent for labour (research, a long build, many files) that can run while it goes on. Assistants stay; agents are gone after one report. Agents hire no one and ask no one.
 
 ### Consult
 
@@ -141,13 +145,13 @@ Most structural first. Symptom → cause → fix → on screen.
 | Act | Said to the assistant (tool) | By hand (looking only) |
 |---|---|---|
 | Interrupt, redirect, stop the turn | any message (barge-in) | – |
-| Stop / message an agent | `stop`, `tell` | – |
-| Ask another assistant | `list_assistants`, `search_assistants`, `ask_assistant` | – |
-| Hire | `create_assistant` (name, about, instructions, effort) | – |
+| Hire / message / fire an agent | `hire`, `tell`, `fire` | – |
+| Ask another assistant | `list_assistants`, `search_assistants`, `ask_assistant`; `@Name` in a message | – |
+| Create an assistant | `create_assistant` (name, about, instructions, effort) | – |
 | Set / drop goal | `goal` | – |
 | Remember / forget / purge | `remember`, `forget`, `purge` | – |
 | Usage, import, export, tree | `usage`, `import_find`, `import`, `import_pause`, `export`, `tree` | – |
-| Switch assistant | – (voice later: "let me talk to Max") | sidebar, Cmd+B |
+| Switch assistant | `@Name` alone (voice later: "let me talk to Max") | sidebar, Cmd+B |
 | Open / collapse a block | – | click |
 | Overview | – | Cmd+Shift+F |
 | Look at an agent or a thread | – | tab, `[Name]` link, Ctrl+Tab |
@@ -163,7 +167,9 @@ Most structural first. Symptom → cause → fix → on screen.
 | Chat | you and one assistant, forever | session, conversation (in UI) |
 | Thread | two assistants, forever | chat (for these) |
 | Ask | one assistant consulting another | delegate, call |
-| Agent | a helper an assistant sends | worker, subagent (in UI) |
+| Agent | a freelancer an assistant hires for one task; it reports once and is gone | worker, subagent, helper |
+| Hire / Fire | take on / let go an agent | spawn, start, stop, kill (for agents); hire (for assistants: they are created) |
+| Mention | `@Name` in the box | tag, ping |
 | Block | a summary standing for n messages | line, part, node, nx |
 | Open / Collapse | a block's halves / back to its summary | fold, unfold, zoom |
 | Overview | the whole chat in the fewest blocks | fold all |
@@ -178,7 +184,9 @@ Most structural first. Symptom → cause → fix → on screen.
 | Any message | appears at once; a reply in progress ends "— cut off" | – |
 | A tool act | the assistant says what it did | reversible ones by asking ("undo that": remember↔forget, goal↔drop) |
 | Ask | call row linking the thread; reply framed under the asker's name | "never mind" cuts it |
-| Hire | row appears in the sidebar with its about | – |
+| Create assistant | row appears in the sidebar with its about | – |
+| Hire | a tab while it works; its report framed under its name | "fire it" |
+| `@Name` alone | that assistant's chat shown | Esc, or the sidebar |
 | Purge | the message vanishes | the assistant asks back once ("This can't be undone. Purge it?"); your yes confirms |
 | Import | sessions and price stated, then asked | your yes; "pause the import" |
 
@@ -194,5 +202,5 @@ Most structural first. Symptom → cause → fix → on screen.
 
 - Does what an assistant hears in a thread reach its chat with you? Say Max tells Acorn your deploy is risky; next day you ask Max directly. Options: no (threads stay apart; Facts are the shared layer), or his chat's view lists his threads' latest blocks. Recommend no, at first.
 - Barge-in and a long tool (a 5-minute build): cut it, as a person who is spoken to stops and listens, at the cost of redoing it? Recommend cut, and later let the assistant start such commands as background jobs that survive a barge-in.
-- Switching the shown assistant by word, for voice ("let me talk to Max").
+- Switching by spoken word, for voice ("let me talk to Max"): `@Name` covers typing.
 - A last-resort stop if an assistant won't obey "stop" for its agents: quitting the app, or a hidden hard key?

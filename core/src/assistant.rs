@@ -2,7 +2,7 @@
 //! ==========
 //! Who the person chats with, as people: Acorn, the general assistant (the
 //! config's chat, at its `pick`); Max, the thoughtful expert (at max
-//! effort); then those an assistant hired as asked (`create_assistant`),
+//! effort); then those an assistant created as asked (`create_assistant`),
 //! each a name, an about (who it is, one line the app shows), its
 //! instructions (its system prompt) and an effort, kept in
 //! $ACORN_DIR/assistants.json, oldest first. How hard one thinks is part

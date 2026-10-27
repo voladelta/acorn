@@ -46,6 +46,14 @@ fn each_assistant_opens_its_own_chat() {
             assert!(!app.shows(&format!("Hello! This is {other}.")), "{name}'s chat, not {other}'s");
         }
     }
+    // `@` names the others as you type; Return takes the first, and `@Name` alone talks to them.
+    app.type_text("label:Message Max", "@pi").unwrap();
+    app.wait_for_within("text:@Pip", wait).unwrap();
+    app.submit("label:Message Max").unwrap();
+    app.submit("label:Message Max").unwrap();
+    app.wait_for_within("text:Pip  ·  Personal stylist", wait).unwrap();
+    assert!(!app.shows("text:@Pip"), "the names gone with the word");
+
     for id in ["default", "max", "pip"] {
         assert!(dir.path().join("chats").join(id).is_dir(), "{id}'s chat on disk");
     }

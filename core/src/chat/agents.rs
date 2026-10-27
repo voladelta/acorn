@@ -1,6 +1,6 @@
 //! Agents
 //! ======
-//! An agent (a subagent, or a computer task) has a name and a log; each
+//! An agent (hired for one task, or a computer task) has a name and a log; each
 //! call gets its context and its whole log, so a told agent goes on even
 //! after a quit; its replies reach the chat as one "[Name]" message.
 //! Every caller's tools (`Kit`) run here, the assistant's and the agents'.
@@ -92,7 +92,7 @@ impl Engine {
                 }
             }
             "date" => Out::ok(self.lock().mem.date(num("id", u64::MAX))),
-            "spawn" => {
+            "hire" => {
                 let effort = match &input["effort"] {
                     Value::Null => None,
                     e => match e.as_str().and_then(Effort::parse) {
@@ -104,10 +104,10 @@ impl Engine {
                     },
                 };
                 let tasks: Vec<String> = input["tasks"].as_array().into_iter().flatten().map(|t| t.as_str().map_or_else(|| t.to_string(), str::to_string)).collect();
-                Out::ok(self.spawn(tasks, effort, &halt).await)
+                Out::ok(self.hire(tasks, effort, &halt).await)
             }
             "tell" => Out::ok(self.tell_agent(&str("name"), &str("message")).await),
-            "stop" => {
+            "fire" => {
                 let mut chat = self.lock();
                 let name = Some(str("name")).filter(|n| !n.is_empty());
                 let at = chat.working().into_iter().filter(|w| name.as_ref().is_none_or(|n| n == w)).collect::<Vec<_>>();
@@ -115,7 +115,7 @@ impl Engine {
                 match (at.is_empty(), name) {
                     (true, Some(name)) => Out::fail(format!("No agent {name} at work.")),
                     (true, None) => Out::ok("No agent was at work."),
-                    _ => Out::ok(format!("Stopped {}.", at.join(", "))),
+                    _ => Out::ok(format!("Fired {}.", at.join(", "))),
                 }
             }
             "goal" => {
@@ -167,7 +167,7 @@ impl Engine {
                 };
                 match crate::assistant::add(&str("name"), &str("about"), &str("instructions"), effort) {
                     Ok(made) => {
-                        let said = format!("Hired {}, {}; they are in the sidebar.", made.name, made.about);
+                        let said = format!("Created {}, {}; they are in the sidebar.", made.name, made.about);
                         let _ = super::hub::chat(&made);
                         self.lock().all(Event::Assistant(made));
                         Out::ok(said)
@@ -181,7 +181,7 @@ impl Engine {
         }
     }
 
-    async fn spawn(self: &Arc<Self>, tasks: Vec<String>, effort: Option<Effort>, halt: &CancellationToken) -> String {
+    async fn hire(self: &Arc<Self>, tasks: Vec<String>, effort: Option<Effort>, halt: &CancellationToken) -> String {
         if tasks.is_empty() {
             return "No tasks.".into();
         }
@@ -190,7 +190,7 @@ impl Engine {
             Err(why) => return why,
         };
         let names: Vec<String> = tasks.iter().map(|task| self.lock().start(Role::Sub(effort), task, view.clone())).collect();
-        format!("Started {}. Each one's report will reach you as a message when it finishes.", names.join(", "))
+        format!("Hired {}. Each one's report will reach you as a message when it finishes.", names.join(", "))
     }
 
     fn computer(self: &Arc<Self>, task: &str) -> Out {

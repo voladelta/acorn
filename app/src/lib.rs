@@ -3,7 +3,8 @@
 //! The window around the assistants' chats (`acorn_core`): their engines
 //! run on the runtime's threads (`hub`), the window on its own. You act by
 //! words alone: the message box talks to the assistant you picked, and a
-//! message sent while it works cuts in. Hands only look: pick an
+//! message sent while it works cuts in; `@Name` alone talks to another,
+//! and in a message has yours ask them. Hands only look: pick an
 //! assistant, open a block, look at an agent's work, or at a thread where
 //! another assistant answered the one you talk to. The person's acts go
 //! to the model (`model::Model::act`), the shown chat's events too
@@ -124,11 +125,20 @@ impl Ui {
     }
 
     /// Your words, to the assistant you talk to, its chat shown: sent while
-    /// it works, they cut in. Whether they went (not while its chat still
-    /// opens).
+    /// it works, they cut in; `@Name` alone, that assistant's chat shown
+    /// instead. Whether they went (not while its chat still opens).
     pub fn say(self, text: String, images: Vec<Vec<u8>>) -> bool {
         if text.trim().is_empty() && images.is_empty() {
             return false;
+        }
+        if images.is_empty()
+            && let Some(id) = self.assistants.with_untracked(|all| {
+                let names: Vec<String> = all.iter().map(|a| a.name.clone()).collect();
+                text::mention_alone(&text, &names).and_then(|n| all.iter().find(|a| a.name == n)).map(|a| a.id.clone())
+            })
+        {
+            self.talk_to(id);
+            return true;
         }
         let talk = self.talk.get_untracked();
         if hub::get(&talk).is_none() {
@@ -204,7 +214,7 @@ pub fn App() -> impl IntoElement {
 }
 
 /// Every chat opened, its events heard as long as the window: whether each
-/// works, an assistant hired (listed), a hidden chat's notes (named),
+/// works, an assistant created (listed), a hidden chat's notes (named),
 /// always; the rest, of the chat shown.
 fn hear(ui: Ui) {
     let (tx, mut heard) = tokio::sync::mpsc::unbounded_channel::<(String, Event)>();
@@ -393,11 +403,38 @@ fn status_row(ui: Ui) -> impl IntoElement {
 
 /// The message box: Return sends (Shift+Return a new line); images come
 /// by the attach button or a paste. Sent while the assistant works, a
-/// message cuts in.
+/// message cuts in. An `@` word being typed shows the other assistants
+/// it may name, over the caret: a click takes one, Return the first
+/// (unless the word is already a name).
 fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
     let field = element_ref();
+    let caret = signal(0u32);
+    let at = signal(None::<Bounds<Points>>);
     let ready = move || ui.draft.with(|d| !d.trim().is_empty()) || images.with(|i| !i.is_empty());
+    // The `@` word's start and the assistants it may name, with whether it is one already.
+    let naming = computed(move || {
+        let me = ui.me().name;
+        let names: Vec<String> = ui.assistants.with(|all| all.iter().map(|a| a.name.clone()).filter(|n| *n != me).collect());
+        ui.draft.with(|d| {
+            let (start, word) = text::mention_at(d, caret.get())?;
+            let found: Vec<String> = text::names_for(word, &names).into_iter().map(String::from).collect();
+            let whole = found.iter().any(|n| n.eq_ignore_ascii_case(word));
+            (!found.is_empty()).then_some((start, found, whole))
+        })
+    });
+    let take = move |name: String| {
+        let Some((start, ..)) = naming.get_untracked() else { return };
+        let (text, to) = ui.draft.with_untracked(|d| text::mention_done(d, start, caret.get_untracked(), &name));
+        ui.draft.set(text);
+        caret.set(to);
+        field.focus();
+        field.set_selection(to, to);
+    };
     let submit = move || {
+        if let Some((_, found, false)) = naming.get_untracked() {
+            take(found[0].clone());
+            return;
+        }
         if ui.say(ui.draft.get_untracked(), images.get_untracked()) {
             ui.draft.set(String::new());
             images.set(Vec::new());
@@ -435,6 +472,8 @@ fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
                 .auto_focus(true)
                 .value(ui.draft)
                 .on_change(move |t: &str| ui.draft.set(t.to_string()))
+                .on_selection_change(move |s: &Selection| caret.set(s.end))
+                .on_caret_move(move |e: &CaretEvent| at.set(Some(e.page_bounds)))
                 .submit_behavior(SubmitBehavior::Submit)
                 .on_submit(move |_: &str| submit())
                 .paste_behavior(PasteBehavior::Insert)
@@ -456,6 +495,38 @@ fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
                 .on_press(move || submit())
                 .child(text("↑").text_size(px(17.0)).text_color(paper())),
         )
+        .child(when(move || naming.with(Option::is_some) && at.get().is_some(), move || names_menu(ui, at, naming, take)))
+}
+
+/// The assistants an `@` word may name, over the caret: each its name and
+/// who it is; the first is what Return takes.
+fn names_menu(ui: Ui, at: Signal<Option<Bounds<Points>>>, naming: Memo<Option<(usize, Vec<String>, bool)>>, take: impl Fn(String) + Copy + 'static) -> impl IntoElement {
+    overlay()
+        .anchor_bounds(move || at.get().unwrap_or_default())
+        .placement(Placement::Top)
+        .align(Align::Start)
+        .offset(px(6.0))
+        .child(view().py_1().min_w(px(220.0)).rounded(px(10.0)).border_1().border_color(frame()).bg(lift()).child(dynamic(move || {
+            let found = naming.get().map(|(_, found, _)| found).unwrap_or_default();
+            found
+                .into_iter()
+                .enumerate()
+                .map(|(k, name)| {
+                    let about = ui.assistants.with(|all| all.iter().find(|a| a.name == name).map(|a| a.about.clone())).unwrap_or_default();
+                    let to = name.clone();
+                    view()
+                        .flex_row()
+                        .gap_2()
+                        .px_3()
+                        .py(px(6.0))
+                        .bg(if k == 0 { hover() } else { lift() })
+                        .hover(|s| s.bg(hover()))
+                        .on_press(move || take(to.clone()))
+                        .child(text(format!("@{name}")).text_size(px(14.0)).font_weight(FontWeight::MEDIUM))
+                        .child(text(about).text_size(px(13.0)).text_color(mid()).number_of_lines(1))
+                })
+                .collect::<Vec<_>>()
+        })))
 }
 
 /// The chat, each agent at work, and the page shown.

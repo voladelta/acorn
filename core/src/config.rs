@@ -38,7 +38,7 @@ pub struct Config {
     pub pick: Effort,
     /// What every compaction runs on, a chat's and an import's alike.
     pub compactor: Effort,
-    /// What subagents run on (none: their assistant's effort).
+    /// What hired agents run on (none: their assistant's effort).
     pub agents: Option<Effort>,
     pub view: usize,
     /// Whether the agent may use this Mac's screen, mouse and keyboard.

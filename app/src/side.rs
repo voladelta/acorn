@@ -1,7 +1,7 @@
 //! Side
 //! ====
 //! The sidebar, as the nsh gallery's: Acorn's name, then the assistants
-//! (Acorn, Max, then those they hired, oldest first: `create_assistant`),
+//! (Acorn, Max, then those they created, oldest first: `create_assistant`),
 //! each a row, who it is in its tooltip; the one you talk to has a bar and
 //! a fill, one at work (with you, or answering another) a dot. Cmd+B (or
 //! the button atop it) hides it.
