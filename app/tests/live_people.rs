@@ -1,8 +1,10 @@
 //! Asking and hiring, live: the window, headless, on the real engine and
 //! DeepSeek, over a chat of its own (its own process: the engines are one
 //! a process). `@Max` in a message has Acorn ask Max, whose reply comes
-//! back framed under his name; work Acorn is told to hire for goes to an
-//! agent, whose report comes back the same way.
+//! back framed under his name; a named person to hire who stays is made
+//! an assistant; work Acorn is told to hire for goes to an agent, whose
+//! report comes back the same way; and Max, talked to, remembers what
+//! Acorn asked him.
 
 use nsh_engine::{EngineConfig, Root};
 use nsh_testing::Headless;
@@ -22,7 +24,7 @@ fn chat() -> tempfile::TempDir {
 /// Asks the model; run with `cargo test -- --ignored` and DEEPSEEK_API_KEY.
 #[test]
 #[ignore]
-fn acorn_asks_max_and_hires_an_agent() {
+fn acorn_asks_max_creates_marrie_hires_an_agent_and_max_remembers() {
     let dir = chat();
     let chats = dir.path().join("chats");
     let mut app = Headless::start(EngineConfig::new(Root::of::<acorn::App>())).unwrap();
@@ -39,6 +41,13 @@ fn acorn_asks_max_and_hires_an_agent() {
     })
     .unwrap();
 
+    app.type_text("label:Message Acorn", "Hire a personal stylist called Marrie, to stay with me.").unwrap();
+    app.submit("label:Message Acorn").unwrap();
+    let made = dir.path().join("home/assistants.json");
+    app.wait_until("Marrie created", Duration::from_secs(300), |_| std::fs::read_to_string(&made).is_ok_and(|a| a.contains("Marrie"))).unwrap();
+    app.wait_for_within("text:Marrie", Duration::from_secs(10)).unwrap();
+    assert!(!logged(&chats.join("default"), "hire {"), "Marrie is an assistant, not an agent");
+
     app.type_text("label:Message Acorn", "Hire one agent to run echo acorn-$((37*43)) in the shell, and tell me its report.").unwrap();
     app.submit("label:Message Acorn").unwrap();
     let acorn = chats.join("default");
@@ -47,6 +56,20 @@ fn acorn_asks_max_and_hires_an_agent() {
     app.wait_until("the agent's report", Duration::from_secs(300), |s| {
         let named = |w: &str| w.len() < 24 && w.starts_with(|c: char| c.is_ascii_uppercase()) && w.chars().all(char::is_alphanumeric);
         s.texts().windows(2).any(|w| named(w[0]) && w[1].contains("acorn-1591"))
+    })
+    .unwrap();
+
+    // Max, talked to, knows what Acorn asked him and what he answered.
+    app.type_text("label:Message Acorn", "@Max").unwrap();
+    app.submit("label:Message Acorn").unwrap();
+    app.wait_for_within("text:Max  ·  Thoughtful expert", Duration::from_secs(20)).unwrap();
+    app.type_text("label:Message Max", "Use no tools. In one line: what did Acorn ask you, and what did you answer?").unwrap();
+    app.submit("label:Message Max").unwrap();
+    app.wait_until("Max remembering his thread", Duration::from_secs(300), |s| {
+        s.texts().iter().any(|t| {
+            let t = t.to_lowercase();
+            t.contains("walnut") && t.contains("noix") && !t.contains("what did acorn ask")
+        })
     })
     .unwrap();
 }

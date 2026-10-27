@@ -10,6 +10,8 @@ Status: built · Last updated: 2026-10-27
 - An assistant made before abouts shows its name alone.
 - `@Name` is the one word the box reads itself: alone, it opens your chat with that assistant (no call); in a message, the words go to the one you talk to, whose prompt reads `@Name` as "ask them". The box suggests names as you type `@`: ↑ and ↓ pick one, Return or Tab takes it (Return sends a word already a name), a click takes the one clicked, Esc closes the names for that word.
 - An assistant answering in a thread hears nothing of what only your chat has: no facts, purges, goals, asking or `@Name`.
+- An assistant remembers its threads in its chat with you: each turn sees each thread's latest 8 lines ("Your threads", after the agents at work), and `zoom("Acorn")` gives one whole. Talk to Max the day after he warned Acorn, and he knows.
+- "Hire" a named person who should stay ("hire a stylist called Marrie") makes an assistant; `hire` itself is only for a task.
 
 ## The principle
 
@@ -131,7 +133,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | `search_assistants` | query | those whose name or about match, best first (e.g. "clothes" → Marrie) |
 | `ask_assistant` | name, message | sends the message in the thread with that assistant; the answer comes back as a message "[Max] reply", like `tell`'s, so a slow thinker doesn't hold up the turn |
 
-**Threads.** Each pair of assistants has one thread, kept like a chat: never ends, memory tree, summaries, purge. Max answering Acorn is Max in his thread with Acorn: his own instructions and effort, his tools, the shared Facts, and what Acorn and he said before. Your chat with Max is untouched by it.
+**Threads.** Each pair of assistants has one thread, kept like a chat: never ends, memory tree, summaries, purge. Max answering Acorn is Max in his thread with Acorn: his own instructions and effort, his tools, the shared Facts, and what Acorn and he said before. Your chat with Max keeps its own messages, but Max remembers the thread there: its latest lines show on each of his turns with you.
 
 **Connections:**
 - An assistant asked is busy in that thread, not in your chat with it: you can talk to Max while he answers Acorn. Its sidebar dot shows it at work either way.
@@ -201,7 +203,7 @@ Most structural first. Symptom → cause → fix → on screen.
 
 ## Open questions
 
-- Does what an assistant hears in a thread reach its chat with you? Say Max tells Acorn your deploy is risky; next day you ask Max directly. Options: no (threads stay apart; Facts are the shared layer), or his chat's view lists his threads' latest blocks. Recommend no, at first.
+- ~~Does what an assistant hears in a thread reach its chat with you?~~ Yes, as people do: his chat sees his threads' latest lines (as built).
 - Barge-in and a long tool (a 5-minute build): cut it, as a person who is spoken to stops and listens, at the cost of redoing it? Recommend cut, and later let the assistant start such commands as background jobs that survive a barge-in.
 - Switching by spoken word, for voice ("let me talk to Max"): `@Name` covers typing.
 - A last-resort stop if an assistant won't obey "stop" for its agents: quitting the app, or a hidden hard key?

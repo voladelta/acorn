@@ -150,7 +150,13 @@ You are one of the user's assistants, each a person with a name and a part to
 play, who stays. When you need someone, ask: when another's part fits what is
 asked (an expert, a specialist, a second opinion), ask them, and tell the user
 what they said. The user writing @Name means that assistant: ask them what the
-message wants of them, unless it only mentions them.
+message wants of them, unless it only mentions them. When another assistant
+asks you, you answer in your thread with them; what you said there is yours,
+and \"Your threads\" shows each one's latest before the user's message.
+
+Someone named who should stay, however the user puts it (\"hire a stylist
+called Marrie\", \"get me a coach\"), is a new assistant: create them. Hire
+an agent only for a task.
 ";
 
 /// Where the tools run: this Mac, the work dir, the screen if allowed.
@@ -242,7 +248,7 @@ pub const MAIN: &str = "main";
 
 fn own() -> Vec<Spec> {
     vec![
-        spec("zoom", "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With an agent's name as id, give that agent's whole chat. A long text comes in pages from character at, saying where to go on.", json!({"id": {"type": ["integer", "string"]}, "n": {"type": "integer"}, "at": {"type": "integer"}}), &["id"]),
+        spec("zoom", "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With an agent's name as id, give that agent's whole chat; with an assistant's, your thread with them, where they asked you. A long text comes in pages from character at, saying where to go on.", json!({"id": {"type": ["integer", "string"]}, "n": {"type": "integer"}, "at": {"type": "integer"}}), &["id"]),
         spec("date", "The date and time of message id.", json!({"id": {"type": "integer"}}), &["id"]),
     ]
 }
@@ -250,7 +256,7 @@ fn own() -> Vec<Spec> {
 fn boss() -> Vec<Spec> {
     let efforts: Vec<&str> = EFFORTS.iter().map(|e| e.as_str()).collect();
     vec![
-        spec("hire", "Hire one agent per task, a freelancer working in the background, all in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. An agent sees the view and the user's instructions, but knows what you want only from its task, so say all it needs.", json!({"tasks": {"type": "array", "items": {"type": "string"}}, "effort": {"type": "string", "enum": efforts, "description": "How hard they think; by default, as hard as you."}}), &["tasks"]),
+        spec("hire", "Hire one agent per task, a freelancer working in the background, all in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. An agent sees the view and the user's instructions, but knows what you want only from its task, so say all it needs. Never for a person the user wants to keep: that is create_assistant.", json!({"tasks": {"type": "array", "items": {"type": "string"}}, "effort": {"type": "string", "enum": efforts, "description": "How hard they think; by default, as hard as you."}}), &["tasks"]),
         spec("tell", "Send a message to an agent (one you hired or a computer task), by name. One at work stops what it is doing to read it, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".", json!({"name": {"type": "string"}, "message": {"type": "string"}}), &["name", "message"]),
         spec("fire", "Fire an agent at work, by name, or all of yours with no name, when the user says so or its work is no longer wanted. It stops at once, without a report.", json!({"name": {"type": "string"}}), &[]),
     ]
@@ -259,7 +265,7 @@ fn boss() -> Vec<Spec> {
 fn peers() -> Vec<Spec> {
     let efforts: Vec<&str> = EFFORTS.iter().map(|e| e.as_str()).collect();
     vec![
-        spec("create_assistant", "Create a new assistant, when the user asks for one: a person of their own, beside you in Acorn's sidebar, with a chat of its own that never ends and its own memory. It is you, Acorn, with its own name, about, reasoning effort and instructions: its system prompt, after yours. It does not start working; the user opens it from the sidebar.", json!({"name": {"type": "string"}, "about": {"type": "string", "description": "Who it is, in a few words, as the app shows it beside its name: \"Personal stylist\", \"Friendly neighbour who loves cracking jokes\". Never its effort."}, "effort": {"type": "string", "enum": efforts, "description": "How hard it thinks, as fits its part: low is fast and cheap, max is smartest and slowest; high if the user didn't say."}, "instructions": {"type": "string", "description": "Its system prompt, from what the user said (what it helps with, how it works and talks), or the one they gave word for word."}}), &["name", "about", "effort", "instructions"]),
+        spec("create_assistant", "Create a new assistant, when the user asks for one in whatever words (\"hire a stylist called Marrie\" is one: a named person who stays): a person of their own, beside you in Acorn's sidebar, with a chat of its own that never ends and its own memory. It is you, Acorn, with its own name, about, reasoning effort and instructions: its system prompt, after yours. It does not start working; the user opens it from the sidebar.", json!({"name": {"type": "string"}, "about": {"type": "string", "description": "Who it is, in a few words, as the app shows it beside its name: \"Personal stylist\", \"Friendly neighbour who loves cracking jokes\". Never its effort."}, "effort": {"type": "string", "enum": efforts, "description": "How hard it thinks, as fits its part: low is fast and cheap, max is smartest and slowest; high if the user didn't say."}, "instructions": {"type": "string", "description": "Its system prompt, from what the user said (what it helps with, how it works and talks), or the one they gave word for word."}}), &["name", "about", "effort", "instructions"]),
         spec("list_assistants", "The user's other assistants: each one's name and about.", json!({}), &[]),
         spec("search_assistants", "The user's other assistants whose name, about or instructions match a query (\"clothes\", \"second opinion\"), best first.", json!({"query": {"type": "string"}}), &["query"]),
         spec("ask_assistant", "Ask another of the user's assistants, by name, and return at once. It answers in its own thread with you, a chat of the two of you that never ends, as itself: its own part, effort and memory of what you asked before. Its reply reaches you as a message \"[Name] ...\". Asking again while it works cuts in, as the user does with you. Say all it needs: it sees your thread, not your chat with the user.", json!({"name": {"type": "string"}, "message": {"type": "string"}}), &["name", "message"]),
@@ -329,5 +335,6 @@ mod tests {
             assert!(chat.contains(only) && !thread.contains(only), "{only}: the user's chat alone");
         }
         assert!(thread.contains("When you need hands, hire") && chat.contains("You can tell it more"));
+        assert!(chat.contains("create them") && !thread.contains("create them"), "a named person who stays is created");
     }
 }

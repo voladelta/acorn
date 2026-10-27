@@ -18,6 +18,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use tokio_util::sync::CancellationToken;
 
+/// How many of a thread's latest lines the user's chat sees each turn.
+const THREAD_LINES: usize = 8;
+
 /// What an agent is: a subagent (at an effort of its own, or the run's),
 /// or the hands of a computer task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,6 +83,9 @@ impl Engine {
         let str = |k: &str| input[k].as_str().unwrap_or_default().trim().to_string();
         match name {
             "zoom" => {
+                if let Some(lines) = input["id"].as_str().and_then(|name| self.thread_lines(name)) {
+                    return Out::ok(clip::page(&lines, num("at", 0) as usize));
+                }
                 let mut chat = self.lock();
                 let (n, at) = (num("n", 1), num("at", 0) as usize);
                 match &input["id"] {
@@ -264,6 +270,38 @@ impl Engine {
             }
             Err(why) => Out::fail(why),
         }
+    }
+
+    /// Your threads, where other assistants asked you, as the user's chat
+    /// sees them: each one's latest lines, `zoom` giving one whole. None in
+    /// a thread, or with none. Read before the chat is locked: a thread
+    /// locks its asker's chat to answer, so the two never wait on each
+    /// other.
+    pub(super) fn threads(&self) -> Option<Block> {
+        let mine = format!("{}/", self.id);
+        let said: Vec<String> = super::hub::all()
+            .into_iter()
+            .filter(|e| e.id.starts_with(&mine))
+            .filter_map(|e| {
+                let chat = e.lock();
+                let lines = chat.mem.view_lines();
+                let latest = &lines[lines.len().saturating_sub(THREAD_LINES)..];
+                let asks = &chat.with.as_ref()?.name;
+                (!latest.is_empty()).then(|| format!("## With {asks}\n{}\n", latest.join("\n")))
+            })
+            .collect();
+        (!said.is_empty() && !self.id.contains('/')).then(|| {
+            Block::new(format!("Your threads, where other assistants asked you for the user (each one's latest lines; its ids are the thread's, not this chat's; zoom(\"Name\") gives one whole):\n{}\n", said.join("\n")), false)
+        })
+    }
+
+    /// Your thread with the assistant named, whole (any case); None: no
+    /// such assistant, or no thread with them.
+    fn thread_lines(&self, name: &str) -> Option<String> {
+        let asks = crate::assistant::all().into_iter().find(|a| a.name.eq_ignore_ascii_case(name))?;
+        let thread = super::hub::get(&format!("{}/{}", self.id, asks.id))?;
+        let lines = thread.lock().mem.view_lines();
+        Some(lines.join("\n"))
     }
 
     /// The chat's view, once its summaries are built; else why there is

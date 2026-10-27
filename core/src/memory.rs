@@ -805,6 +805,17 @@ impl Memory {
         blocks
     }
 
+    /// The view's lines, oldest first; a message not summarized yet as its
+    /// kind and its text's first NODE bytes, so the latest show at once.
+    pub fn view_lines(&self) -> Vec<String> {
+        let shown = |p: Part| match (self.built(p), p.n(), self.message(p.i)) {
+            (true, ..) => line(p, self.text(p)),
+            (false, 1, Some(m)) => line(p, cut(&format!("{}: {}", m.kind.as_str(), flat(&m.text)))),
+            _ => line(p, WAIT),
+        };
+        self.view.parts.iter().map(|&p| shown(p)).collect()
+    }
+
     /// The chat's view before message `end`, as a call's blocks.
     pub fn view_blocks(&self, end: u64) -> Vec<crate::Block> {
         self.blocks(end, &self.view.parts)

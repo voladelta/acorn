@@ -119,6 +119,7 @@ impl Engine {
             }
         }
         let from = from.unwrap();
+        let threads = self.threads();
         let call = {
             let mut chat = self.lock();
             let msgs = std::mem::take(&mut chat.wait);
@@ -130,6 +131,7 @@ impl Engine {
             chat.show();
             let mut blocks = chat.mem.view_blocks(from);
             blocks.push(chat.at_work());
+            blocks.extend(threads);
             blocks.push(Block::new(format!("{HEAD}{text}"), true));
             let ask = ai::Ask { blocks, imgs, tools: Some(chat.kit(None)), meter: Some(chat.meter(Served::Chat)), ..chat.share() };
             chat.asked = true;
