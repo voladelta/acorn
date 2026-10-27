@@ -37,14 +37,20 @@
 //! as it holds up every write while it runs. Copies the disk itself keeps
 //! (APFS snapshots, the SSD) are beyond Acorn's reach.
 
+mod images;
+mod purge;
+mod view;
+
+pub use images::{IMAGES_ARE, image_add, image_kind};
+pub use purge::{erase, wipe};
+
 use crate::clip;
 use crate::{Img, Kind, Served, config, disk, names};
-use anyhow::{Context, Result};
-use base64::Engine as _;
+use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use rusqlite::{Connection, OptionalExtension, Row, params};
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -443,40 +449,6 @@ impl Memory {
         say
     }
 
-    // Images
-    // ------
-
-    pub fn images_dir(&self) -> PathBuf {
-        self.dir.join(IMAGES)
-    }
-
-    /// An image file of the chat by its name; None: no such.
-    pub fn image_file(&self, name: &str) -> Option<PathBuf> {
-        let (hash, ext) = name.split_once('.')?;
-        let ok = hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) && !ext.is_empty() && ext.bytes().all(|b| b.is_ascii_lowercase());
-        let file = self.images_dir().join(name);
-        (ok && file.exists()).then_some(file)
-    }
-
-    /// What models get of message id's images: their copies, if any.
-    pub fn images(&self, id: u64) -> Vec<Img> {
-        let names = self.message(id).map(|m| m.images).unwrap_or_default();
-        let dir = self.images_dir();
-        names
-            .iter()
-            .filter_map(|name| {
-                let fit = dir.join(format!("{name}.jpg"));
-                let (file, mime) = if fit.exists() {
-                    (fit, "image/jpeg".to_string())
-                } else {
-                    (dir.join(name), format!("image/{}", name.rsplit('.').next().unwrap_or("png")))
-                };
-                let data = base64::engine::general_purpose::STANDARD.encode(fs::read(file).ok()?);
-                Some(Img { mime, data })
-            })
-            .collect()
-    }
-
     // Tree
     // ----
 
@@ -661,225 +633,6 @@ impl Memory {
         merge_task(&format!("{a}+{n}"), &format!("{}+{n}", a + n), a, z)
     }
 
-    // Views
-    // -----
-
-    /// A node of the views or above them: its text, or WAIT if not built.
-    pub fn text(&self, part: Part) -> &str {
-        self.nodes.get(&part.slot()).map_or(WAIT, String::as_str)
-    }
-
-    /// A line's bytes as calls get it: none until built.
-    fn size(&self, part: Part) -> usize {
-        if self.built(part) { self.text(part).len() } else { 0 }
-    }
-
-    /// Each view to its end; a batch starts as a view passes `high`, or goes
-    /// on at a message (`next`) if a missing parent stopped it; between
-    /// messages, only a whole batch, to half or, as parents not built keep
-    /// it over (an import's lag JOBS calls a level), by `high`: each change
-    /// makes every call after write the view anew. A node merged away no
-    /// view holds, nor one under it, is let go.
-    pub fn fit(&mut self, next: bool) {
-        let mut gone = Vec::new();
-        let mut changed = false;
-        let sides: Vec<u64> = [0, 1].into_iter().filter(|&s| self.hold[s].is_none()).map(|s| self.first(0, s)).collect();
-        let count = self.count;
-        let seen_end = sides.into_iter().fold(count, u64::min);
-        let mut views = [std::mem::take(&mut self.view), std::mem::take(&mut self.seen)];
-        self.reach(&mut views[0], count);
-        self.reach(&mut views[1], seen_end);
-        for view in &mut views {
-            let (parts, batch) = (view.parts.len(), view.batch);
-            if view.size > view.high || (next && view.batch) {
-                let merged = self.merge(view);
-                if next || merged.size <= (view.high / 2).max(view.size.saturating_sub(view.high)) {
-                    view.parts = merged.parts;
-                    view.size = merged.size;
-                    gone.extend(merged.gone);
-                }
-                view.batch = view.size > view.high / 2;
-            }
-            changed |= view.parts.len() != parts || view.batch != batch;
-        }
-        [self.view, self.seen] = views;
-        for part in gone {
-            if !self.held(part) {
-                self.nodes.remove(&part.slot());
-            }
-        }
-        if changed && let Err(err) = self.save() {
-            eprintln!("memory: state: {err}");
-        }
-        self.fitted = true;
-    }
-
-    /// A view to message `end`: its lines from it dropped (an import going
-    /// on again), the messages to it appended.
-    fn reach(&self, view: &mut View, end: u64) {
-        let cut = view.cover(end);
-        for part in view.parts.split_off(cut) {
-            view.size -= self.size(part);
-        }
-        for i in view.end()..end {
-            view.parts.push(Part::leaf(i));
-            view.size += self.size(Part::leaf(i));
-        }
-    }
-
-    /// Whether a view holds `part` or a node under it, or will (not there).
-    fn held(&self, part: Part) -> bool {
-        [&self.view, &self.seen].into_iter().any(|view| {
-            let k = view.cover(part.span().0);
-            k == view.parts.len() || view.parts[k].l <= part.l
-        })
-    }
-
-    /// A view's most due pairs merged down to half, as their parents allow:
-    /// a pair whose parent is built, most due first ((T + 1) / 2^l - i, T the
-    /// view's end: its age from its last message, in halves), the oldest of
-    /// equals; a heap of pairs over the view as a linked list, so a view of
-    /// thousands merges in milliseconds.
-    fn merge(&self, from: &View) -> Merged {
-        let t = from.end() as f64;
-        let low = from.high / 2;
-        let mut view: Vec<Option<Part>> = from.parts.iter().copied().map(Some).collect();
-        let len = view.len();
-        let mut next: Vec<usize> = (1..=len).collect();
-        let mut prev: Vec<isize> = (0..len as isize).map(|k| k - 1).collect();
-        let mut heap = BinaryHeap::new();
-        let mut gone = Vec::new();
-        let offer = |heap: &mut BinaryHeap<Due>, view: &[Option<Part>], next: &[usize], k: isize| {
-            if k < 0 {
-                return;
-            }
-            let k = k as usize;
-            let (Some(a), Some(Some(b))) = (view[k], view.get(next[k]).copied()) else { return };
-            if a.i % 2 != 0 || b.l != a.l || b.i != a.i + 1 || !self.built(a.up()) {
-                return;
-            }
-            let d = (t + 1.0) / a.n() as f64 - a.i as f64;
-            heap.push(Due { d, k, a, b });
-        };
-        let mut size = from.size;
-        for k in 0..len {
-            offer(&mut heap, &view, &next, k as isize);
-        }
-        while size > low {
-            let Some(Due { k, a, b, .. }) = heap.pop() else { break };
-            let j = next[k];
-            if view[k] != Some(a) || view.get(j).copied().flatten() != Some(b) {
-                continue;
-            }
-            let up = a.up();
-            size = size + self.size(up) - self.size(a) - self.size(b);
-            view[k] = Some(up);
-            view[j] = None;
-            next[k] = next[j];
-            if next[j] < len {
-                prev[next[j]] = k as isize;
-            }
-            gone.extend([a, b]);
-            offer(&mut heap, &view, &next, prev[k]);
-            offer(&mut heap, &view, &next, k as isize);
-        }
-        Merged { parts: view.into_iter().flatten().collect(), size, gone }
-    }
-
-    /// The views' lines built before message `end`, in blocks (the last cut
-    /// short), one marked: the last whole one, else the opening one. The
-    /// mark ends the prefix single flight keys (`ai::cache`); DeepSeek
-    /// caches prefixes itself.
-    pub fn blocks(&self, end: u64, parts: &[Part]) -> Vec<crate::Block> {
-        let lines: Vec<String> = parts
-            .iter()
-            .filter(|p| p.span().1 < end && self.built(**p))
-            .map(|&p| format!("{}\n", line(p, self.text(p))))
-            .collect();
-        let whole = lines.len() / BLOCK;
-        let mut blocks = vec![crate::Block::new("<chat>\n", whole == 0)];
-        for k in 0..whole {
-            blocks.push(crate::Block::new(lines[k * BLOCK..(k + 1) * BLOCK].concat(), k == whole - 1));
-        }
-        blocks.push(crate::Block::new(lines[whole * BLOCK..].concat() + "</chat>\n", false));
-        blocks
-    }
-
-    /// The view's last `n` lines, oldest first; a message not summarized
-    /// yet as its kind and its text's first NODE bytes, so the latest show
-    /// at once. Only those lines are read.
-    pub fn view_lines(&self, n: usize) -> Vec<String> {
-        let shown = |p: Part| match (self.built(p), p.n(), self.message(p.i)) {
-            (true, ..) => line(p, self.text(p)),
-            (false, 1, Some(m)) => line(p, cut(&format!("{}: {}", m.kind.as_str(), flat(&m.text)))),
-            _ => line(p, WAIT),
-        };
-        let parts = &self.view.parts;
-        parts[parts.len().saturating_sub(n)..].iter().map(|&p| shown(p)).collect()
-    }
-
-    /// The chat's view before message `end`, as a call's blocks.
-    pub fn view_blocks(&self, end: u64) -> Vec<crate::Block> {
-        self.blocks(end, &self.view.parts)
-    }
-
-    /// The node of the n messages from id, if in the chat.
-    pub fn part(&self, id: u64, n: u64) -> Option<Part> {
-        Part::of(id, n).filter(|_| id + n <= self.count)
-    }
-
-    /// A message (n = 1) whole, a long one a page from `at`, its images on
-    /// the first; else the two lines under id+n.
-    pub fn zoom(&mut self, id: u64, n: u64, at: usize) -> String {
-        let Some(part) = self.part(id, n) else {
-            let roots: Vec<String> = roots(self.count).into_iter().map(Part::name).collect();
-            return format!("No line {id}+{n}: n is a power of 2, id a multiple of n. The tree's roots: {}.", roots.join(", "));
-        };
-        match part.halves() {
-            None => {
-                let mut root = self.message(id).expect("a message of the chat");
-                root.text = clip::page(&root.text, at);
-                if at > 0 {
-                    root.images.clear();
-                }
-                format!("{id}+0|{}", root.show())
-            }
-            Some(halves) => halves
-                .into_iter()
-                .map(|h| {
-                    let text = self.node(h).unwrap_or_else(|| WAIT.into());
-                    line(h, &text)
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-        }
-    }
-
-    pub fn date(&self, id: u64) -> String {
-        self.message(id).map_or_else(|| format!("No message {id}."), |root| root.when())
-    }
-
-    /// Where a page of the chat starts: the last message starting a turn
-    /// (the user's or a report) the view holds whole; none: the first, or
-    /// the end.
-    pub fn turn(&self) -> u64 {
-        let from = self.view.parts.iter().rposition(|p| p.l > 0).map_or(0, |k| k + 1);
-        let whole = &self.view.parts[from..];
-        let user = whole.iter().rev().find(|p| self.message(p.i).is_some_and(|m| matches!(m.kind, Kind::User | Kind::Work)));
-        user.or_else(|| whole.first()).map_or(self.count, |p| p.i)
-    }
-
-    /// Level l's nodes built, in order.
-    pub fn level(&self, l: u32) -> Vec<(Part, String)> {
-        let n = 1u64 << l;
-        (0..self.count / n).filter_map(|i| self.node(Part::new(l, i)).map(|t| (Part::new(l, i), t))).collect()
-    }
-
-    /// The tree's levels: as many as the count's bits.
-    pub fn levels(&self) -> u32 {
-        u64::BITS - self.count.leading_zeros()
-    }
-
     // Agents
     // ------
 
@@ -927,167 +680,6 @@ impl Memory {
             None => format!("No agent {name}."),
         }
     }
-
-    // Purges
-    // ------
-
-    /// Erases a message for good: the chat's message id (each of its
-    /// pages), or message id of an agent's log (`agent`). Its text becomes
-    /// PURGED, its line and images go, and, in the chat, every node built
-    /// from it: those in a view open into their halves, and it and those
-    /// above build anew (a call building any node now is not stored: the
-    /// caller stops them). A wipe of chat.db is then owed. Answers what it
-    /// erased.
-    pub fn purge(&mut self, agent: Option<&str>, id: u64) -> Result<String> {
-        let log = agent.unwrap_or(CHAT);
-        let (mut a, mut b) = (id, id);
-        match agent {
-            Some(name) if self.read(name, id).is_none() => return Ok(format!("No message {id} in {name}'s chat.")),
-            Some(_) => {}
-            None if id >= self.count => return Ok(format!("No message {id}.")),
-            None => {
-                while a > 0 && self.message(a - 1).is_some_and(|m| m.more) {
-                    a -= 1;
-                }
-                while b + 1 < self.count && self.message(b).is_some_and(|m| m.more) {
-                    b += 1;
-                }
-            }
-        }
-        let mut gone = HashSet::new();
-        if agent.is_none() {
-            for i in a..=b {
-                let mut part = Part::leaf(i);
-                while part.span().1 < self.count {
-                    if self.node(part).is_some() {
-                        gone.insert(part.slot());
-                    }
-                    part = part.up();
-                }
-            }
-        }
-        let wipe = self.dir.join(WIPE);
-        fs::write(&wipe, "")?;
-        disk::wrote(&wipe);
-        let mut images = Vec::new();
-        let tx = self.db.transaction()?;
-        for i in a..=b {
-            let Some(mut root) = tx.query_row("select * from msgs where log = ? and i = ?", params![log, i], from_row).optional()? else { continue };
-            images.append(&mut root.images);
-            root.text = PURGED.into();
-            root.line = None;
-            root.size = root.show().len();
-            tx.execute("update msgs set text = ?, images = '[]', line = null, size = ? where log = ? and i = ?", params![root.text, root.size, log, i])?;
-        }
-        for &slot in &gone {
-            tx.execute("delete from nodes where slot = ?", [slot])?;
-        }
-        tx.commit()?;
-        let mut said = match agent {
-            Some(name) => format!("Purged message {id} of {name}'s chat."),
-            None => {
-                self.unbuild(a, b, &gone);
-                let pages = if a == b { String::new() } else { format!(" (its pages {a} to {b})") };
-                format!("Purged message {id}{pages} and the {} summaries made from it; they are being written anew without it.", gone.len())
-            }
-        };
-        for name in images {
-            let used = self.db.query_row("select exists (select 1 from msgs where images like '%' || ? || '%')", [&name], |r| r.get::<_, bool>(0));
-            match used {
-                Ok(true) => {}
-                Ok(false) => {
-                    let dir = self.images_dir();
-                    for file in [dir.join(&name), dir.join(format!("{name}.jpg"))] {
-                        let _ = fs::remove_file(file);
-                    }
-                }
-                Err(err) => said += &format!(" Its image {name} was kept: {err}."),
-            }
-        }
-        self.purged += 1;
-        said += if self.stuck { " Its old bytes are wiped from Acorn's files when Acorn starts again." } else { " Its old bytes are wiped from Acorn's files once the chat is idle." };
-        Ok(said)
-    }
-
-    /// A wipe done of the purges up to `upto`; none owed after, its marker
-    /// goes.
-    pub fn wiped(&mut self, upto: u64) {
-        self.wiped = upto;
-        if self.wiped == self.purged {
-            let _ = fs::remove_file(self.dir.join(WIPE));
-        }
-    }
-
-    /// The nodes `gone` (by slot) let go, the views' open into the halves
-    /// left, the leaves a..=b and those above them to build anew.
-    fn unbuild(&mut self, a: u64, b: u64, gone: &HashSet<u64>) {
-        self.age += 1;
-        self.nodes.retain(|slot, _| !gone.contains(slot));
-        for i in a..=b {
-            let mut part = Part::leaf(i).up();
-            while part.span().1 < self.count {
-                self.ready(part, false);
-                part = part.up();
-            }
-            self.ready(Part::leaf(i), true);
-        }
-        for k in 0..2 {
-            let view = if k == 0 { &self.view } else { &self.seen };
-            let parts: Vec<Part> = view.parts.clone().into_iter().flat_map(|p| self.open_up(p, gone)).collect();
-            let size = parts.iter().map(|&p| self.size(p)).sum();
-            let view = if k == 0 { &mut self.view } else { &mut self.seen };
-            (view.parts, view.size) = (parts, size);
-        }
-        self.fit(false);
-        if let Err(err) = self.save() {
-            eprintln!("memory: state: {err}");
-        }
-    }
-
-    /// A view's line, or, if gone, the lines under it left, kept.
-    fn open_up(&mut self, part: Part, gone: &HashSet<u64>) -> Vec<Part> {
-        match part.halves() {
-            Some(halves) if gone.contains(&part.slot()) => halves.into_iter().flat_map(|h| self.open_up(h, gone)).collect(),
-            _ => {
-                if let Some(text) = self.node(part) {
-                    self.nodes.insert(part.slot(), text);
-                }
-                vec![part]
-            }
-        }
-    }
-}
-
-struct Merged {
-    parts: Vec<Part>,
-    size: usize,
-    gone: Vec<Part>,
-}
-
-/// A pair of a view's lines to merge: how due, where.
-struct Due {
-    d: f64,
-    k: usize,
-    a: Part,
-    b: Part,
-}
-
-impl PartialEq for Due {
-    fn eq(&self, o: &Due) -> bool {
-        self.cmp(o).is_eq()
-    }
-}
-impl Eq for Due {}
-impl PartialOrd for Due {
-    fn partial_cmp(&self, o: &Due) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(o))
-    }
-}
-impl Ord for Due {
-    /// The most due first, then the oldest.
-    fn cmp(&self, o: &Due) -> std::cmp::Ordering {
-        self.d.total_cmp(&o.d).then(o.k.cmp(&self.k))
-    }
 }
 
 // Helpers
@@ -1099,23 +691,6 @@ fn saved(db: &Connection) -> Option<Saved> {
     serde_json::from_str(&json).ok()
 }
 
-/// Deleted rows erased from a db's file: rewritten whole (secure_delete
-/// zeroes only cells and pages freed, not old bytes left in a page still
-/// used), its WAL truncated. It takes as long as the db is big (2 s for
-/// 450 MB) and holds up every write meanwhile.
-pub fn erase(db: &Connection) -> Result<()> {
-    db.execute_batch("vacuum")?;
-    let busy: i64 = db.query_row("pragma wal_checkpoint(truncate)", [], |r| r.get(0))?;
-    anyhow::ensure!(busy == 0, "its WAL is in use");
-    Ok(())
-}
-
-/// The chat in `dir` wiped (`erase`), on a connection of its own: blocking.
-pub fn wipe(dir: &Path) -> Result<()> {
-    let db = Connection::open(dir.join("chat.db"))?;
-    db.busy_timeout(std::time::Duration::from_secs(60))?;
-    erase(&db)
-}
 
 /// A message from its row in `msgs`.
 fn from_row(r: &Row) -> rusqlite::Result<Root> {
@@ -1225,51 +800,4 @@ pub fn over(line: &str) -> String {
 
 pub fn line(part: Part, text: &str) -> String {
     format!("{}|{}", part.name(), flat(text))
-}
-
-/// An image's kind by its first bytes; None: none of png, jpeg, gif, webp.
-pub fn image_kind(head: &[u8]) -> Option<&'static str> {
-    let at = |k: usize, mark: &[u8]| head.get(k..k + mark.len()) == Some(mark);
-    if at(0, b"\x89PNG") {
-        Some("image/png")
-    } else if at(0, b"\xFF\xD8\xFF") {
-        Some("image/jpeg")
-    } else if at(0, b"GIF8") {
-        Some("image/gif")
-    } else if at(8, b"WEBP") {
-        Some("image/webp")
-    } else {
-        None
-    }
-}
-
-pub const IMAGES_ARE: &str = "Images are png, jpeg, gif or webp.";
-
-/// An image's bytes put in a chat's dir by their hash, its copy for models
-/// beside it (scaled to FIT, as a JPEG); its name. Blocking: run off the
-/// chat's lock.
-pub fn image_add(dir: &Path, bytes: &[u8]) -> Result<String> {
-    use sha2::Digest;
-    let kind = image_kind(bytes).context(IMAGES_ARE)?;
-    let img = image::load_from_memory(bytes).context(IMAGES_ARE)?;
-    let (w, h) = (img.width(), img.height());
-    let hash = sha2::Sha256::digest(bytes);
-    let hex: String = hash.iter().take(8).map(|b| format!("{b:02x}")).collect();
-    let name = format!("{hex}.{}", &kind["image/".len()..]);
-    let k = (FIT / w.max(h) as f64).min(1.0);
-    let fit = (k < 1.0 || bytes.len() > IMAGE) && (w as u64) * (h as u64) <= PIXELS;
-    let images = dir.join(IMAGES);
-    fs::create_dir_all(&images)?;
-    if fit {
-        let small = img.resize_exact((w as f64 * k).round() as u32, (h as f64 * k).round() as u32, image::imageops::FilterType::Lanczos3);
-        let mut out = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&small.to_rgb8())?;
-        let file = images.join(format!("{name}.jpg"));
-        fs::write(&file, out)?;
-        disk::wrote(&file);
-    }
-    let file = images.join(&name);
-    fs::write(&file, bytes)?;
-    disk::wrote(&file);
-    Ok(name)
 }
