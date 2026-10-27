@@ -1,4 +1,4 @@
-//! Skills over time, live: a hired agent on a many-step job still searches
+//! Skills over time, live: a hired agent on a many-step job still lists
 //! before it writes, and a skill is found again after the chat's memory
 //! has compacted what loaded it (the view is kept tiny to force that, and
 //! the skill is edited, so only a fresh load can pass).
@@ -131,7 +131,7 @@ fn skills_survive_long_agent_jobs_and_compaction() {
   println!("compacted nodes: {nodes}");
   assert_ne!(nodes, "0", "memory never compacted, so the test proves nothing");
 
-  // the skill changes; only a fresh search and load can follow it now
+  // the skill changes; only a fresh list and load can follow it now
   skill(
     &user,
     "changelog",

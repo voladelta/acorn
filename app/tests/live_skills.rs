@@ -116,11 +116,11 @@ fn skills_are_found_chosen_scoped_and_made() {
   let seen = |app: &Headless, word: &str| app.screen().texts().iter().any(|t| t.contains(word));
   let p = proj.display();
 
-  // 1. nothing applies: no skill is searched
+  // 1. nothing applies: no skill is listed
   ask(&mut app, "What is 12 times 12? Answer with the number only.", "144");
   assert!(
-    !logged(&chat, "search_skills {") && !logged(&chat, "load_skill {"),
-    "searched for nothing"
+    !logged(&chat, "list_skills {") && !logged(&chat, "load_skill {"),
+    "listed skills for nothing"
   );
 
   // 2. the right one among distractors, and only it

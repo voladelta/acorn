@@ -252,15 +252,15 @@ fn own() -> Vec<Spec> {
       &["id"],
     ),
     spec(
-      "search_skills",
-      "The user's skills (how-tos for particular tasks) whose name or description match a query, best first, each as name: description. With no query, all of them; try that when a query finds none.",
-      json!({"query": {"type": "string"}, "dir": {"type": "string", "description": "A project folder you work in, whose own skills count too."}}),
+      "list_skills",
+      "The user's skills (how-tos for particular tasks), each as name: description.",
+      json!({"dir": {"type": "string", "description": "A project folder you work in, whose own skills count too."}}),
       &[],
     ),
     spec(
       "load_skill",
       "A skill's steps, by name, and the dir it lives in, where its relative paths start. Follow them.",
-      json!({"name": {"type": "string"}, "dir": {"type": "string", "description": "The project folder, as for search_skills."}}),
+      json!({"name": {"type": "string"}, "dir": {"type": "string", "description": "The project folder, as for list_skills."}}),
       &["name"],
     ),
   ]

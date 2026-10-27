@@ -2,7 +2,7 @@
 //! ======
 //! How-tos the user keeps for particular tasks, one dir each, named by the
 //! dir: <skill>/SKILL.md, a `---` block holding a `description:` line,
-//! then the steps. None is in the prompt: a caller searches (`search`) and
+//! then the steps. None is in the prompt: a caller lists them (`list`) and
 //! loads the one that fits (`load`). They are read from disk on every
 //! call, so an edit or a new skill counts at once; Acorn makes one by
 //! writing the file.
@@ -46,9 +46,9 @@ skill tools as dir). A later one's skill replaces an earlier one's of the same
 name. A skill holds the user's own rules for a kind of task (format, tone,
 steps) that you cannot guess, however simple the task looks. So at the start of
 any task that makes something (notes, code, a file, a plan), before its first
-step, search_skills (with dir, the project folder, if the task names one), then
+step, list_skills (with dir, the project folder, if the task names one), then
 load_skill the one that fits and follow it. Do this even when the job is long or
-handed to you with a single line. A plain question needs no search. To make one,
+handed to you with a single line. A plain question needs no skill. To make one,
 write {acorn}/<name>/{FILE}, or in a project's .acorn/skills to keep it to that
 project, starting with a --- block of a description: line saying when it applies.",
     agents = agents.display(),
@@ -65,12 +65,17 @@ struct Skill {
   about: String,
 }
 
-/// The skills in `roots` by name. A dir without a SKILL.md is none; one
-/// that can't be read is listed as such.
+/// The skills in `roots` by name. Only a dir with a SKILL.md is one; one
+/// whose file can't be read is listed as such.
 fn scan(roots: &[PathBuf]) -> Vec<Skill> {
   let mut skills = BTreeMap::new();
   for root in roots {
-    for e in fs::read_dir(root).into_iter().flatten().flatten() {
+    for e in fs::read_dir(root)
+      .into_iter()
+      .flatten()
+      .flatten()
+      .filter(|e| e.path().is_dir())
+    {
       let about = match fs::read_to_string(e.path().join(FILE)) {
         Ok(text) => field(split(&text).0, "description").unwrap_or_default(),
         Err(err) if err.kind() == ErrorKind::NotFound => continue,
@@ -135,30 +140,19 @@ fn unquote(value: &str) -> &str {
     .unwrap_or(value)
 }
 
-/// The skills in `roots` that match a query, best first (each word in the
-/// name or description counts one); with no query, all.
-pub fn search(roots: &[PathBuf], query: &str) -> String {
-  let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-  let mut found: Vec<(usize, Skill)> = scan(roots)
-    .into_iter()
-    .map(|s| {
-      let hay = format!("{} {}", s.name, s.about).to_lowercase();
-      (words.iter().filter(|w| hay.contains(w.as_str())).count(), s)
+/// Every skill in `roots`, one `name: description` line each.
+pub fn list(roots: &[PathBuf]) -> String {
+  let lines: Vec<_> = scan(roots)
+    .iter()
+    .map(|s| match s.about.as_str() {
+      "" => format!("{}: (no description)", s.name),
+      about => format!("{}: {about}", s.name),
     })
-    .filter(|(hits, _)| words.is_empty() || *hits > 0)
     .collect();
-  found.sort_by_key(|(hits, _)| std::cmp::Reverse(*hits));
-  match (found.is_empty(), words.is_empty()) {
-    (false, _) => found
-      .iter()
-      .map(|(_, s)| match s.about.as_str() {
-        "" => format!("{}: (no description)", s.name),
-        about => format!("{}: {about}", s.name),
-      })
-      .collect::<Vec<_>>()
-      .join("\n"),
-    (true, true) => "No skills yet.".into(),
-    (true, false) => "None matches; search with no query lists them all.".into(),
+  if lines.is_empty() {
+    "No skills yet.".into()
+  } else {
+    lines.join("\n")
   }
 }
 
@@ -169,7 +163,7 @@ pub fn load(roots: &[PathBuf], name: &str) -> Result<String, String> {
   let skill = scan(roots)
     .into_iter()
     .find(|s| s.name == name)
-    .ok_or_else(|| format!("No skill {name}; search_skills lists them."))?;
+    .ok_or_else(|| format!("No skill {name}; list_skills lists them."))?;
   let text = fs::read_to_string(skill.at.join(FILE)).map_err(|e| format!("Skill {name}: {e}"))?;
   Ok(format!(
     "Skill {name}, in {} (its paths start there):\n\n{}",
@@ -189,7 +183,7 @@ mod tests {
   }
 
   #[test]
-  fn searches_by_words_and_lists_all_with_none() {
+  fn lists_each_dir_with_a_skill_file_and_its_description() {
     let dir = tempfile::tempdir().unwrap();
     skill(
       dir.path(),
@@ -203,21 +197,13 @@ mod tests {
     );
     skill(dir.path(), "bare", "No head at all.");
     fs::create_dir_all(dir.path().join("empty")).unwrap();
-    let all = search(&[dir.path().into()], "");
+    fs::write(dir.path().join(".DS_Store"), "x").unwrap();
     assert_eq!(
-      all,
+      list(&[dir.path().into()]),
       "bare: (no description)\npdf: Fill or merge PDF files\ntax: File the yearly tax return"
     );
-    assert_eq!(
-      search(&[dir.path().into()], "merge pdf"),
-      "pdf: Fill or merge PDF files"
-    );
-    assert_eq!(
-      search(&[dir.path().into()], "return"),
-      "tax: File the yearly tax return"
-    );
-    assert!(search(&[dir.path().into()], "zebra").starts_with("None matches"));
-    assert!(search(&[dir.path().join("nope")], "").starts_with("No skills yet"));
+    assert!(load(&[dir.path().into()], ".DS_Store").is_err());
+    assert_eq!(list(&[dir.path().join("nope")]), "No skills yet.");
   }
 
   #[test]
@@ -248,7 +234,7 @@ mod tests {
     );
     skill(dir.path(), "empty", "---\n---\nTop.\n---\nAfter the rule.\n");
     skill(dir.path(), "quoted", "---\ndescription: \"Say 'hi'\"\n---\nB.\n");
-    let all = search(&[dir.path().into()], "");
+    let all = list(&[dir.path().into()]);
     assert_eq!(all, "crlf: windows\nempty: (no description)\nquoted: Say 'hi'");
     assert!(load(&[dir.path().into()], "crlf").unwrap().ends_with("Steps."));
     assert!(
@@ -264,7 +250,7 @@ mod tests {
     skill(dir.path(), "ok", "---\ndescription: fine\n---\nB.");
     fs::create_dir_all(dir.path().join("bad")).unwrap();
     fs::write(dir.path().join("bad").join(FILE), [0xff, 0xfe, 0xfd]).unwrap();
-    assert_eq!(search(&[dir.path().into()], ""), "bad: (unreadable)\nok: fine");
+    assert_eq!(list(&[dir.path().into()]), "bad: (unreadable)\nok: fine");
     assert!(load(&[dir.path().into()], "bad").is_err());
   }
 
@@ -279,7 +265,7 @@ mod tests {
       "---\nname: a\ndescription: project's\n---\nProject steps.",
     );
     let roots = [user.path().into(), project.path().into()];
-    assert_eq!(search(&roots, ""), "a: project's\nb: only user's");
+    assert_eq!(list(&roots), "a: project's\nb: only user's");
     assert!(load(&roots, "a").unwrap().ends_with("Project steps."));
   }
 

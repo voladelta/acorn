@@ -139,10 +139,7 @@ impl Engine {
         }
       }
       "date" => Out::ok(self.lock().mem.date(num("id", u64::MAX))),
-      "search_skills" => Out::ok(crate::skills::search(
-        &crate::skills::roots(&cwd, &str("dir")),
-        &str("query"),
-      )),
+      "list_skills" => Out::ok(crate::skills::list(&crate::skills::roots(&cwd, &str("dir")))),
       "load_skill" => {
         crate::skills::load(&crate::skills::roots(&cwd, &str("dir")), &str("name")).map_or_else(Out::fail, Out::ok)
       }
