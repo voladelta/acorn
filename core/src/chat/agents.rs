@@ -189,6 +189,7 @@ impl Engine {
             }
             "computer" if hands => computer::act(&input, cancel).await,
             "computer" => self.computer(input["task"].as_str().unwrap_or_default()),
+            "web_search" | "web_fetch" => crate::web::run(name, &input, cancel).await,
             _ => machine::run(name, &input, cwd, cancel).await,
         }
     }

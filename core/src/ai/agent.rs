@@ -42,7 +42,7 @@ const BUSY: &str = "the AI service is busy or unavailable right now";
 const CUT: &str = "[cut off: a message came in while it ran]";
 const UNRUN: &str = "not run: a message came in first";
 
-static HTTP: LazyLock<reqwest::Client> =
+pub static HTTP: LazyLock<reqwest::Client> =
     LazyLock::new(|| reqwest::Client::builder().user_agent("Acorn/0.1").build().expect("an HTTP client"));
 
 /// One try of a call: its steps till it ends; the messages it heard but

@@ -51,6 +51,8 @@ pub fn tool_glyph(name: &str) -> &'static str {
         "read" => "📖",
         "write" => "📄",
         "edit" => "📝",
+        "web_search" => "🌐",
+        "web_fetch" => "🔗",
         "hire" | "spawn" => "🤖",
         "tell" => "💬",
         "fire" | "stop" => "✋",

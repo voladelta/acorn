@@ -94,6 +94,8 @@ fn shown(name: &str, x: Map<String, Value>) -> (String, Vec<Code>) {
             (format!("{}{at}", msg_show(x.get("id"), x.get("n"))), vec![])
         }
         "date" => (msg_show(x.get("id"), None), vec![]),
+        "web_search" => (str("query"), vec![]),
+        "web_fetch" => (str("url"), vec![]),
         "hire" | "spawn" => {
             let tasks: Vec<&Value> = x.get("tasks").and_then(Value::as_array).map(|t| t.iter().collect()).unwrap_or_default();
             let n = tasks.len();
@@ -197,8 +199,10 @@ mod tests {
         assert_eq!(c.head, "ls -la");
         let c = parse(r#"shell {"command":"cargo te"#);
         assert_eq!((c.name.as_str(), c.head.as_str()), ("shell", "cargo te"));
-        let c = parse(r#"web_search {"q":"bend","deep":{"a":1}}"#);
+        let c = parse(r#"lookup {"q":"bend","deep":{"a":1}}"#);
         assert_eq!(c.head, "\"bend\" {\"a\":1}");
+        let c = parse(r#"web_search {"query":"acorn site:github.com","count":3}"#);
+        assert_eq!(c.head, "acorn site:github.com");
         assert_eq!(parse("no call").name, "");
         assert_eq!(report_read("[RedAnt]\ndone\n\nFull chat: zoom(\"RedAnt\")"), Some(("RedAnt".into(), "done".into())));
     }

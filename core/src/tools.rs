@@ -8,14 +8,15 @@
 //! (KEEP), and sets goals, reads usage, imports, exports and draws its
 //! memory (HOME); in a thread, where another assistant asks it something,
 //! it gets none of those. shell, read, write and edit (`machine`) run on
-//! this Mac, each caller in its own dir under the work dir. A computer
+//! this Mac, each caller in its own dir under the work dir; web_search and
+//! web_fetch (`web`) read the web. A computer
 //! task's agent gets only the computer tool. The agents themselves run in
 //! `chat::agents`.
 
 use crate::ai::Spec;
 use crate::machine::{self, spec};
 use crate::effort::EFFORTS;
-use crate::{config, memory};
+use crate::{config, memory, web};
 use serde_json::json;
 use std::path::Path;
 
@@ -290,10 +291,12 @@ fn keep() -> Vec<Spec> {
     ]
 }
 
-/// The tools that run on this Mac, as one caller's: in its own dir.
+/// The tools that run on this Mac, as one caller's: in its own dir; then
+/// the web's.
 fn kit(work: &Path, who: &str) -> Vec<Spec> {
     let work = work.display().to_string();
-    machine::tools().into_iter().map(|t| Spec { info: format!("{} It runs on this Mac, in {work}/{who}.", t.info), ..t }).collect()
+    let mac = machine::tools().into_iter().map(|t| Spec { info: format!("{} It runs on this Mac, in {work}/{who}.", t.info), ..t });
+    mac.chain(web::tools()).collect()
 }
 
 fn hand() -> Spec {

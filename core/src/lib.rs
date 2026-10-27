@@ -25,6 +25,7 @@ pub mod names;
 pub mod effort;
 pub mod price;
 pub mod tools;
+pub mod web;
 pub mod wire;
 
 use serde::{Deserialize, Serialize};
