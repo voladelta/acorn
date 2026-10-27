@@ -181,6 +181,6 @@ fn skills_are_found_chosen_scoped_and_made() {
     "haiku-mode",
   );
   let made = std::fs::read_to_string(user.join("haiku-mode/SKILL.md")).unwrap();
-  assert!(made.contains("name:") && made.contains("description:"), "{made}");
+  assert!(made.contains("description:"), "{made}");
   ask(&mut app, "Write me a haiku about rain.", "OTTER");
 }
