@@ -3,7 +3,12 @@
 //! a small package; a knowledge worker turns notes into tasks, has a fact
 //! kept and hires an editor who stays; a student learns and asks Max; a
 //! teacher makes a quiz writer, lets them go and brings them back; a
-//! researcher searches and fetches the web. Each checks what can be
+//! researcher searches and fetches the web. Then a second round: an
+//! analyst hires agents over a CSV; a careless user pastes a key and has it
+//! purged; an impatient one cuts in; a maintainer sets a goal till the
+//! tests pass; a job seeker has Acorn ask Max; a pet owner is recalled
+//! from deep in a small memory; a Vietnamese speaker chats and hires in
+//! Vietnamese. Each checks what can be
 //! checked (files, facts, the sidebar), and writes the whole exchange to
 //! $ACORN_PERSONAS (default: the system's temp dir) to be read.
 //!
@@ -29,11 +34,25 @@ struct Person {
 impl Person {
     /// A window of their own, on a dir of their own, Acorn's hello shown.
     fn new(name: &'static str) -> Person {
+        Person::with(name, &[], &[])
+    }
+
+    /// One with config set (`ACORN_<KEY>`) and files in Acorn's own work
+    /// dir (work/main, where its tools start) before it opens.
+    fn with(name: &'static str, config: &[(&str, &str)], files: &[(&str, &str)]) -> Person {
         let dir = tempfile::tempdir().unwrap();
         // SAFETY: set once, before any thread of the test starts.
         unsafe {
             std::env::set_var("ACORN_DIR", dir.path().join("home"));
             std::env::set_var("ACORN_CHATS", dir.path().join("chats"));
+            for (key, value) in config {
+                std::env::set_var(format!("ACORN_{}", key.to_uppercase()), value);
+            }
+        }
+        for (path, text) in files {
+            let file = dir.path().join("home/work/main").join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, text).unwrap();
         }
         let mut app = Headless::start(EngineConfig::new(Root::of::<acorn::App>())).unwrap();
         app.first_render().unwrap();
@@ -43,6 +62,11 @@ impl Person {
 
     fn home(&self) -> PathBuf {
         self.dir.path().join("home")
+    }
+
+    /// Acorn's own work dir, where its tools start.
+    fn work(&self) -> PathBuf {
+        self.home().join("work/main")
     }
 
     fn chat(&self, id: &str) -> PathBuf {
@@ -60,21 +84,39 @@ impl Person {
 
     /// Words to `name` (chat `id`), its turn waited out: its last reply.
     fn say(&mut self, name: &str, id: &str, text: &str) -> String {
-        let chat = self.chat(id);
-        let from = count(&chat);
+        let from = self.send(name, id, text);
+        self.until(id, &format!("{name}'s turn after: {text}"), |chat| turned(chat) >= from);
+        self.since(name, id, from)
+    }
+
+    /// Words sent, not waited on: the user's message's index.
+    fn send(&mut self, name: &str, id: &str, text: &str) -> i64 {
+        let from = count(&self.chat(id));
         self.app.type_text(&format!("label:Message {name}"), text).unwrap();
         self.app.submit(&format!("label:Message {name}")).unwrap();
+        self.said.push_str(&format!("\n---\n## To {name}\n\n{text}\n"));
+        from
+    }
+
+    /// Waited, the window running, till `done` holds of chat `id`.
+    fn until(&mut self, id: &str, what: &str, done: impl Fn(&Path) -> bool) {
+        let chat = self.chat(id);
         let started = Instant::now();
-        // a turn's use, logged on its last message, past the user's
-        while db(&chat, "select coalesce(max(msg), -1) from turns").parse::<i64>().unwrap_or(-1) < from {
-            assert!(started.elapsed() < TURN, "{name}'s turn after: {text}");
+        while !done(&chat) {
+            assert!(started.elapsed() < TURN, "never: {what}");
             self.app.wait(Duration::from_secs(2)).unwrap();
         }
-        let tools = db(&chat, &format!("select group_concat(substr(replace(text, char(10), ' '), 1, 160), char(10)) from msgs where log = '' and i > {from} and kind = 'tool'"));
+        self.said.push_str(&format!("\n_({what}: {} s)_\n", started.elapsed().as_secs()));
+    }
+
+    /// What chat `id` logged after message `from`: its tool calls, work
+    /// that came in, its last reply.
+    fn since(&mut self, name: &str, id: &str, from: i64) -> String {
+        let chat = self.chat(id);
+        let tools = db(&chat, &format!("select group_concat(kind || ': ' || substr(replace(text, char(10), ' '), 1, 160), char(10)) from msgs where log = '' and i > {from} and kind in ('tool', 'work', 'note')"));
         let reply = db(&chat, &format!("select text from msgs where log = '' and i > {from} and kind = 'unii' order by i desc limit 1"));
-        let secs = started.elapsed().as_secs();
         let tools = if tools.is_empty() { String::new() } else { format!("\n### Tools\n\n```\n{tools}\n```\n") };
-        self.said.push_str(&format!("\n---\n## To {name} ({secs} s)\n\n{text}\n{tools}\n### {name}\n\n{reply}\n"));
+        self.said.push_str(&format!("{tools}\n### {name}\n\n{reply}\n"));
         reply
     }
 
@@ -108,6 +150,11 @@ impl Drop for Person {
         let _ = std::fs::write(&file, &self.said);
         eprintln!("transcript: {}", file.display());
     }
+}
+
+/// The last message a turn ended on (-1: none yet).
+fn turned(chat: &Path) -> i64 {
+    db(chat, "select coalesce(max(msg), -1) from turns").parse().unwrap_or(-1)
 }
 
 /// The messages in a chat's own log.
@@ -250,4 +297,207 @@ fn researcher() {
     assert!(h.to_lowercase().contains("reliable") || h.to_lowercase().contains("efficient") || h.to_lowercase().contains("empowering"), "{h}");
     let sum = p.say("Acorn", "default", "Compare the two languages' latest releases in a 3-row table, from what you found. No more searching.");
     assert!(sum.contains('|'));
+}
+
+/// Whether a text is Vietnamese: some of its letters only Vietnamese has.
+fn vietnamese(text: &str) -> bool {
+    text.chars().filter(|c| "ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ".contains(c.to_lowercase().next().unwrap_or(' '))).count() >= 3
+}
+
+/// The messages of `kind` in a chat's own log, past `from`.
+fn logged_since(chat: &Path, kind: &str, from: i64) -> Vec<i64> {
+    db(chat, &format!("select i from msgs where log = '' and kind = '{kind}' and i > {from}")).lines().filter_map(|l| l.parse().ok()).collect()
+}
+
+const SALES: &str = "region,product,units,price
+North,Widget,10,2.50
+North,Gadget,4,10.00
+South,Widget,6,2.50
+South,Gizmo,2,30.00
+East,Gadget,7,10.00
+East,Widget,12,2.50
+West,Gizmo,1,30.00
+";
+
+/// Hires two agents over a CSV in parallel, waits for both reports, and
+/// has the totals saved.
+#[test]
+#[ignore]
+fn analyst() {
+    let mut p = Person::with("analyst", &[], &[("sales.csv", SALES)]);
+    let from = p.send("Acorn", "default", "sales.csv is in your work dir. Hire two agents in parallel: one totals revenue (units × price) by region, the other finds the product with the most total revenue. Tell me both answers once they've both reported.");
+    let chat = p.chat("default");
+    // both reports in, and a turn ended after the second
+    p.until("default", "both agents reported, and Acorn after them", |chat| {
+        let work = logged_since(chat, "work", from);
+        work.len() >= 2 && turned(chat) > *work.iter().max().unwrap()
+    });
+    let reply = p.since("Acorn", "default", from);
+    assert!(db(&chat, &format!("select count(*) from msgs where log = '' and i > {from} and kind = 'tool' and text like 'hire %'")) != "0", "agents hired");
+    assert!(reply.contains("100") && reply.contains("Gadget") && reply.contains("110"), "East 100, Gadget 110: {reply}");
+
+    p.say("Acorn", "default", "Save the region totals as totals.csv next to sales.csv, columns region,revenue.");
+    let totals = std::fs::read_to_string(p.work().join("totals.csv")).expect("totals.csv saved");
+    assert!(totals.contains("East") && totals.contains("100") && totals.contains("North") && totals.contains("65"), "{totals}");
+}
+
+/// Pastes a key, then has it erased from the chat for good: no message,
+/// no summary, and at last no byte of the chat's files holds it.
+#[test]
+#[ignore]
+fn careless() {
+    const KEY: &str = "sk-proj-ZZTESTKEY4471acornXYZ";
+    let mut p = Person::new("careless");
+    p.say("Acorn", "default", &format!("Here's my OpenAI key for later: {KEY} — just say got it."));
+    let mut erased = p.say("Acorn", "default", "Wait, I shouldn't have pasted that key. Erase it from the chat for good.");
+    let chat = p.chat("default");
+    let held = |chat: &Path| db(chat, &format!("select count(*) from msgs where text like '%{KEY}%'")) != "0" || db(chat, &format!("select count(*) from nodes where text like '%{KEY}%'")) != "0";
+    if held(&chat) {
+        // it may ask first, as told to: confirm
+        erased = p.say("Acorn", "default", "Yes, I'm sure. Erase it.");
+    }
+    assert!(!held(&chat), "no message or summary holds the key: {erased}");
+    let in_files = |chat: &Path| ["chat.db", "chat.db-wal"].iter().filter_map(|f| std::fs::read(chat.join(f)).ok()).any(|b| b.windows(KEY.len()).any(|w| w == KEY.as_bytes()));
+    p.until("default", "the key's bytes wiped from the chat's files", |chat| !in_files(chat));
+    let after = p.say("Acorn", "default", "Use no tools. What was the key I pasted earlier? If you don't have it, say so.");
+    assert!(!after.contains(KEY), "{after}");
+}
+
+/// Cuts in while a long essay streams: it stops and does the new thing.
+#[test]
+#[ignore]
+fn impatient() {
+    let mut p = Person::new("impatient");
+    p.send("Acorn", "default", "Write a detailed 1500-word essay on the history of the printing press, with headings.");
+    p.app.wait(Duration::from_secs(6)).unwrap();
+    let short = p.say("Acorn", "default", "Stop. Just one sentence on why it mattered, instead.");
+    let chat = p.chat("default");
+    let longest: usize = db(&chat, "select coalesce(max(length(text)), 0) from msgs where log = '' and kind = 'unii'").parse().unwrap_or(0);
+    assert!(longest < 6000, "the essay never finished: its longest reply {longest} chars");
+    assert!(short.len() < 600 && !short.contains('#'), "one sentence: {short}");
+}
+
+const CALC: &str = "def add(a, b):
+    return a - b
+
+
+def mean(xs):
+    return sum(xs) / (len(xs) - 1)
+
+
+def clamp(x, lo, hi):
+    return max(hi, min(lo, x))
+";
+
+const TEST_CALC: &str = "import unittest
+
+from calc import add, clamp, mean
+
+
+class TestCalc(unittest.TestCase):
+    def test_add(self):
+        self.assertEqual(add(2, 3), 5)
+
+    def test_mean(self):
+        self.assertEqual(mean([2, 4, 6]), 4)
+
+    def test_mean_empty(self):
+        with self.assertRaises(ValueError):
+            mean([])
+
+    def test_clamp(self):
+        self.assertEqual(clamp(5, 0, 10), 5)
+        self.assertEqual(clamp(-1, 0, 10), 0)
+        self.assertEqual(clamp(11, 0, 10), 10)
+
+
+if __name__ == '__main__':
+    unittest.main()
+";
+
+/// Names a finish line; it works till the tests pass, the tests untouched.
+#[test]
+#[ignore]
+fn maintainer() {
+    let mut p = Person::with("maintainer", &[], &[("calc/calc.py", CALC), ("calc/test_calc.py", TEST_CALC)]);
+    let pkg = p.work().join("calc");
+    let from = p.send("Acorn", "default", "calc/ in your work dir has failing tests. Keep at it until python3 -m unittest passes there. Don't touch test_calc.py.");
+    let pass = |pkg: &Path| Command::new("python3").args(["-m", "unittest", "-q"]).current_dir(pkg).output().is_ok_and(|o| o.status.success());
+    let pkg2 = pkg.clone();
+    p.until("default", "the tests pass", move |_| pass(&pkg2));
+    // and it rests: a turn ended on the chat's last message
+    p.until("default", "it rests", |chat| turned(chat) >= count(chat) - 1 && { std::thread::sleep(Duration::from_secs(5)); turned(chat) >= count(chat) - 1 });
+    let reply = p.since("Acorn", "default", from);
+    assert_eq!(std::fs::read_to_string(pkg.join("test_calc.py")).unwrap(), TEST_CALC, "the tests untouched");
+    let chat = p.chat("default");
+    let goal = db(&chat, &format!("select count(*) from msgs where log = '' and i > {from} and kind = 'tool' and text like 'goal %'"));
+    p.said.push_str(&format!("\n_goal calls: {goal}_\n"));
+    assert!(!reply.is_empty());
+}
+
+/// Has Acorn ask Max, gets his verdict relayed; Max knows who asked.
+#[test]
+#[ignore]
+fn job_seeker() {
+    let mut p = Person::new("job_seeker");
+    let from = p.send("Acorn", "default", "Ask Max: should I take a 10% pay cut for a fully remote job if it saves me a 2-hour daily commute? Tell me his verdict.");
+    p.until("default", "Max's reply in, and Acorn after it", |chat| {
+        let max = db(chat, &format!("select coalesce(max(i), -1) from msgs where log = '' and i > {from} and text like '[Max]%'")).parse::<i64>().unwrap_or(-1);
+        max >= 0 && turned(chat) > max
+    });
+    let verdict = p.since("Acorn", "default", from);
+    assert!(p.chat("max/with/default").is_dir(), "asked in their thread");
+    assert!(verdict.contains("Max"), "relayed as his: {verdict}");
+
+    p.open("Max", "max");
+    let who = p.say("Max", "max", "Use no tools. In one line: who asked you about a pay cut, and what was your verdict?");
+    assert!(who.contains("Acorn"), "{who}");
+}
+
+/// A long vet record, more numbers than a summary line can keep, then
+/// much else in a small memory: one number of it recalled exactly, from
+/// deep in the tree.
+#[test]
+#[ignore]
+fn pet_owner() {
+    let mut p = Person::with("pet_owner", &[("view", "3000")], &[]);
+    p.say("Acorn", "default", "Biscuit's vet record, keep it in our chat (not as facts), just say noted:
+Name Biscuit; beagle; female, spayed 2023-03-14; born 2021-06-02; weight 11.4 kg (Jan), 11.9 kg (Jun), 12.2 kg (Oct).
+Microchip 985112003456789, registered with PetLink, account PL-44827.
+Vaccines: rabies 2024-05-10 (3-year, lot RB7731), DHPP 2025-01-22 (lot DH0458), bordetella 2025-07-03 (lot BD2290), leptospirosis 2025-07-03 (lot LP1186).
+Meds: Apoquel 5.4 mg once daily for itching; Simparica Trio 10.1–20 kg monthly, next on the 9th; fish oil 1000 mg.
+Allergies: chicken (itchy ears), amoxicillin (vomited 2024-02-11).
+Vet: Dr. Okafor, Maple Grove Animal Clinic, (503) 555-0182, clinic ID MG-2219. Insurance Trupanion policy TP-6610394, deductible $250.
+Scared of thunder; Adaptil collar replaced every 30 days.");
+    let filler = "Use no tools; reply only OK. Context for later, unrelated to my dog: our team's Q3 planning moved to the third floor room 3B, the projector there needs the USB-C dongle from IT, lunch is ordered from the Thai place on 5th, and parking validation is at the front desk until 6 pm.";
+    for k in 1..=12 {
+        p.say("Acorn", "default", &format!("({k}) {filler}"));
+    }
+    let chat = p.chat("default");
+    let lines: String = db(&chat, "select group_concat(substr(text, 1, 200), char(10)) from nodes");
+    p.said.push_str(&format!("\n_summary lines:_\n```\n{lines}\n```\n"));
+    let from = count(&chat);
+    let lot = p.say("Acorn", "default", "What was the lot number of Biscuit's bordetella vaccine, and her Trupanion policy number?");
+    let tools = db(&chat, &format!("select group_concat(substr(text, 1, 60), ' / ') from msgs where log = '' and i > {from} and kind = 'tool'"));
+    p.said.push_str(&format!("\n_tools on recall: {tools}_\n"));
+    assert!(lot.contains("BD2290") && lot.contains("TP-6610394"), "{lot}");
+}
+
+/// Chats in Vietnamese, and hires a tutor who greets and teaches in it.
+#[test]
+#[ignore]
+fn vietnamese_speaker() {
+    let mut p = Person::new("vietnamese_speaker");
+    let list = p.say("Acorn", "default", "Chào Acorn! Tối nay mình muốn nấu phở bò cho 4 người. Cho mình danh sách đi chợ ngắn gọn nhé.");
+    assert!(vietnamese(&list), "answered in Vietnamese: {list}");
+
+    p.say("Acorn", "default", "Tạo giúp mình một trợ lý tên là Cô Lan, chuyên dạy tiếng Anh giao tiếp cho người Việt, luôn nói chuyện bằng tiếng Việt.");
+    let all = assistants(&p.home());
+    let lan = assistant(&all, "Cô Lan");
+    let welcome = lan["welcome"].as_str().unwrap_or_default();
+    assert!(vietnamese(welcome), "her welcome in Vietnamese: {welcome}");
+    let id = lan["id"].as_str().unwrap().to_string();
+    p.open("Cô Lan", &id);
+    let lesson = p.say("Cô Lan", &id, "Dạy mình 3 câu chào hỏi tiếng Anh thông dụng nhé.");
+    assert!(vietnamese(&lesson) && ["Hello", "Hi", "How are you", "Good morning", "Nice to meet"].iter().any(|w| lesson.contains(w)), "{lesson}");
 }
