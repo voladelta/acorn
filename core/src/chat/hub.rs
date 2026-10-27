@@ -70,7 +70,7 @@ pub fn all() -> Vec<Arc<Engine>> {
     slots.iter().filter_map(|s| s.try_lock()?.clone()).collect()
 }
 
-/// A deleted assistant's chats closed, its and every thread it is in:
+/// An archived assistant's chats closed, its and every thread it is in:
 /// their work stops, and none opens again from here.
 pub fn close(id: &str) {
     let ours = |chat: &str| chat == id || chat.split_once('/').is_some_and(|(answers, asks)| answers == id || asks == id);
@@ -108,10 +108,10 @@ fn open(id: String, me: &Assistant, with: Option<&Assistant>) -> Result<Arc<Engi
     if let Some(engine) = &*slot {
         return Ok(engine.clone());
     }
-    // Checked with its slot in OPEN, so a delete either closes it or is seen here.
+    // Checked with its slot in OPEN, so an archive either closes it or is seen here.
     let all = assistant::all();
     if let Some(gone) = std::iter::once(me).chain(with).find(|a| !all.iter().any(|b| b.id == a.id)) {
-        return Err(format!("{} was deleted.", gone.name));
+        return Err(format!("{} is archived.", gone.name));
     }
     match Engine::start(id.clone(), me.clone(), with.cloned(), heard.clone()) {
         Ok(engine) => {

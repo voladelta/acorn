@@ -216,7 +216,7 @@ pub fn App() -> impl IntoElement {
 }
 
 /// Every chat opened, its events heard as long as the window: whether each
-/// works, an assistant created (listed) or deleted (dropped, and the one
+/// works, an assistant created or restored (listed) or archived (dropped, and the one
 /// you talk to Acorn, if it was), a hidden chat's notes (named),
 /// always; the rest, of the chat shown.
 fn hear(ui: Ui) {

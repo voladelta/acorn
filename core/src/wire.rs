@@ -106,7 +106,7 @@ pub enum Event {
     Use { id: u64, spend: Spend },
     /// An assistant made (`create_assistant`), to list and start.
     Assistant(crate::assistant::Assistant),
-    /// An assistant deleted (`delete_assistant`), by id, to drop.
+    /// An assistant archived (`archive_assistant`), by id, to drop.
     Gone(String),
 }
 

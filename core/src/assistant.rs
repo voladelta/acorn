@@ -8,9 +8,10 @@
 //! message) and an effort, kept in
 //! $ACORN_DIR/assistants.json, oldest first. How hard one thinks is part
 //! of who it is, never shown. Each has its own chat (`chats`/<id>) and its
-//! own work dir; Acorn's are the config's. One made may be deleted as asked
-//! (`delete_assistant`): its chat, its threads and its work dir go to the
-//! Trash, whence the user may bring them back.
+//! own work dir; Acorn's are the config's. One made may be archived as
+//! asked (`archive_assistant`): off the sidebar and out of reach, its chats
+//! closed, every file kept as it was, till it is restored
+//! (`restore_assistant`).
 
 use crate::config;
 use crate::effort::Effort;
@@ -53,15 +54,17 @@ pub struct Assistant {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub welcome: String,
     pub effort: Effort,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
 }
 
 impl Assistant {
     pub fn acorn() -> Assistant {
-        Assistant { id: config::get().chat.clone(), name: "Acorn".into(), about: "General assistant".into(), instructions: String::new(), welcome: crate::chat::HELLO.into(), effort: config::get().pick }
+        Assistant { id: config::get().chat.clone(), name: "Acorn".into(), about: "General assistant".into(), instructions: String::new(), welcome: crate::chat::HELLO.into(), effort: config::get().pick, archived: false }
     }
 
     pub fn max() -> Assistant {
-        Assistant { id: MAX.into(), name: "Max".into(), about: "Thoughtful expert".into(), instructions: MAX_WAY.into(), welcome: MAX_HELLO.into(), effort: Effort::Max }
+        Assistant { id: MAX.into(), name: "Max".into(), about: "Thoughtful expert".into(), instructions: MAX_WAY.into(), welcome: MAX_HELLO.into(), effort: Effort::Max, archived: false }
     }
 
     pub fn is_acorn(&self) -> bool {
@@ -115,8 +118,18 @@ impl Assistant {
     }
 }
 
-/// Every assistant: Acorn, Max, then those made.
+/// Every assistant: Acorn, Max, then those made, but the archived.
 pub fn all() -> Vec<Assistant> {
+    everyone().into_iter().filter(|a| !a.archived).collect()
+}
+
+/// The assistants archived, oldest first.
+pub fn archived() -> Vec<Assistant> {
+    saved().into_iter().filter(|a| a.archived).collect()
+}
+
+/// Every assistant, the archived too.
+fn everyone() -> Vec<Assistant> {
     let mut all = vec![Assistant::acorn()];
     if config::get().chat != MAX {
         all.push(Assistant::max());
@@ -134,42 +147,40 @@ fn saved() -> Vec<Assistant> {
     })
 }
 
-/// An assistant made, by name (any case), deleted from assistants.json;
-/// never Acorn, Max, or the one asking (`me`, its id).
-pub fn remove(name: &str, me: &str) -> Result<Assistant, String> {
-    let _filing = FILING.lock().unwrap_or_else(|e| e.into_inner());
-    let name = name.trim();
-    let Some(gone) = all().into_iter().find(|a| a.name.eq_ignore_ascii_case(name)) else {
-        return Err(format!("No assistant {name}; list_assistants names them."));
-    };
-    if gone.is_acorn() || gone.id == MAX {
-        return Err(format!("{} stays: only assistants made can be deleted.", gone.name));
-    }
-    if gone.id == me {
-        return Err("That's you: another assistant can delete you.".into());
-    }
-    let mine: Vec<Assistant> = saved().into_iter().filter(|a| a.id != gone.id).collect();
-    write(&mine)?;
-    Ok(gone)
+/// An assistant made, by name (any case), archived; never Acorn, Max,
+/// or the one asking (`me`, its id).
+pub fn archive(name: &str, me: &str) -> Result<Assistant, String> {
+    mark(name, true, |a| {
+        if a.is_acorn() || a.id == MAX {
+            return Err(format!("{} stays: only assistants made can be archived.", a.name));
+        }
+        if a.id == me {
+            return Err("That's you: another assistant can archive you.".into());
+        }
+        Ok(())
+    })
 }
 
-/// A deleted assistant's files, moved to the Trash in one folder: its
-/// chat (with the threads where others asked it), its threads where it
-/// asked others, its work dir. The folder.
-pub fn trash(gone: &Assistant) -> Result<PathBuf, String> {
-    let chats = &config::get().chats;
-    let stamp = chrono::Local::now().format("%Y-%m-%d %H.%M.%S");
-    let to = config::home().join(".Trash").join(format!("Acorn {} {stamp}", gone.name));
-    let mut moves = vec![(chats.join(&gone.id), to.join("chat")), (gone.work(), to.join("work"))];
-    for other in std::fs::read_dir(chats).into_iter().flatten().flatten() {
-        let thread = other.path().join("with").join(&gone.id);
-        moves.push((thread, to.join("asked").join(other.file_name())));
+/// An assistant archived, by name (any case), back.
+pub fn restore(name: &str) -> Result<Assistant, String> {
+    mark(name, false, |_| Ok(()))
+}
+
+/// The one named (any case) set archived or not, if `may`.
+fn mark(name: &str, archived: bool, may: impl Fn(&Assistant) -> Result<(), String>) -> Result<Assistant, String> {
+    let _filing = FILING.lock().unwrap_or_else(|e| e.into_inner());
+    let name = name.trim();
+    let Some(it) = everyone().into_iter().find(|a| a.name.eq_ignore_ascii_case(name)) else {
+        return Err(format!("No assistant {name}; list_assistants names them, the archived too."));
+    };
+    may(&it)?;
+    if it.archived == archived {
+        return Err(format!("{} is {}.", it.name, if archived { "archived already" } else { "not archived" }));
     }
-    for (from, to) in moves.into_iter().filter(|(from, _)| from.exists()) {
-        let moved = to.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::rename(&from, &to));
-        moved.map_err(|e| format!("{} couldn't go to the Trash: {e}", from.display()))?;
-    }
-    Ok(to)
+    let mut mine = saved();
+    mine.iter_mut().filter(|a| a.id == it.id).for_each(|a| a.archived = archived);
+    write(&mine)?;
+    Ok(Assistant { archived, ..it })
 }
 
 fn write(mine: &[Assistant]) -> Result<(), String> {
@@ -191,15 +202,16 @@ pub fn add(name: &str, about: &str, instructions: &str, welcome: &str, effort: E
     if about.is_empty() {
         return Err("An assistant needs an about: who it is, in a few words.".into());
     }
-    let all = all();
-    if all.iter().any(|a| a.name.eq_ignore_ascii_case(name)) {
-        return Err(format!("There is already an assistant named {name}."));
+    let all = everyone();
+    if let Some(same) = all.iter().find(|a| a.name.eq_ignore_ascii_case(name)) {
+        let archived = if same.archived { " (archived: restore_assistant brings them back)" } else { "" };
+        return Err(format!("There is already an assistant named {name}{archived}."));
     }
     let slug: String = name.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect();
     let base = if slug.is_empty() { "assistant".to_string() } else { slug };
     let taken = |id: &str| all.iter().any(|a| a.id == id) || config::get().chats.join(id).exists();
     let id = std::iter::once(base.clone()).chain((2..).map(|n| format!("{base}-{n}"))).find(|id| !taken(id)).unwrap_or(base);
-    let made = Assistant { id, name: name.into(), about: about.into(), instructions: instructions.trim().into(), welcome: welcome.trim().into(), effort };
+    let made = Assistant { id, name: name.into(), about: about.into(), instructions: instructions.trim().into(), welcome: welcome.trim().into(), effort, archived: false };
     let mut mine = saved();
     mine.push(made.clone());
     write(&mine)?;

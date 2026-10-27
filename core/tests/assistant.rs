@@ -1,6 +1,6 @@
 //! Assistants made as `create_assistant` makes them: saved, listed after
-//! Acorn and Max, each with its own chat id, work dir and prompt; deleted
-//! as `delete_assistant` deletes them, their files to the Trash.
+//! Acorn and Max, each with its own chat id, work dir and prompt; archived
+//! and restored, their files kept.
 
 use acorn_core::assistant::{self, Assistant};
 use acorn_core::effort::Effort;
@@ -12,7 +12,6 @@ fn made_assistants_are_saved_and_listed() {
     unsafe {
         std::env::set_var("ACORN_DIR", dir.path().join("home"));
         std::env::set_var("ACORN_CHATS", dir.path().join("chats"));
-        std::env::set_var("HOME", dir.path());
     }
     std::fs::create_dir_all(dir.path().join("chats/abc")).unwrap();
 
@@ -43,20 +42,21 @@ fn made_assistants_are_saved_and_listed() {
     assert_eq!((Assistant::acorn().about, Assistant::max().about), ("General assistant".to_string(), "Thoughtful expert".to_string()));
     assert_eq!(Assistant::max().effort, Effort::Max);
 
-    // Deleted: gone from the list, its chat, its work and its threads where it asked others in one Trash folder.
-    let chats = dir.path().join("chats");
-    for d in [chats.join("abc-2"), chats.join("max/with/abc-2"), chats.join("max/with/maxtwo"), abc.work()] {
-        std::fs::create_dir_all(d).unwrap();
-    }
-    assert!(assistant::remove("Acorn", "max").is_err() && assistant::remove("max", "abc-2").is_err(), "Acorn and Max stay");
-    assert!(assistant::remove("abc", "abc-2").is_err(), "not yourself");
-    assert!(assistant::remove("Nobody", "max").is_err());
-    let gone = assistant::remove(" ABC ", "max").unwrap();
-    assert_eq!(gone, abc);
+    // Archived: off the list, its files kept, its name held; restored: back as it was.
+    let chat = dir.path().join("chats/abc-2");
+    std::fs::create_dir_all(&chat).unwrap();
+    assert!(assistant::archive("Acorn", "max").is_err() && assistant::archive("max", "abc-2").is_err(), "Acorn and Max stay");
+    assert!(assistant::archive("abc", "abc-2").is_err(), "not yourself");
+    assert!(assistant::archive("Nobody", "max").is_err());
+    let gone = assistant::archive(" ABC ", "max").unwrap();
+    assert!(gone.archived && gone.name == "Abc");
     assert_eq!(names(assistant::all()), ["Acorn", "Max", "Max Two"]);
-    let to = assistant::trash(&gone).unwrap();
-    assert!(to.starts_with(dir.path().join(".Trash")) && to.file_name().unwrap().to_string_lossy().starts_with("Acorn Abc "));
-    assert!(to.join("chat").is_dir() && to.join("work").is_dir() && to.join("asked/max").is_dir());
-    assert!(!chats.join("abc-2").exists() && !chats.join("max/with/abc-2").exists() && !abc.work().exists());
-    assert!(chats.join("max/with/maxtwo").exists(), "others' threads stay");
+    assert_eq!(names(assistant::archived()), ["Abc"]);
+    assert!(chat.is_dir(), "nothing deleted");
+    assert!(assistant::archive("abc", "max").is_err(), "archived already");
+    assert!(assistant::add("Abc", "Another", "", "", Effort::Low).unwrap_err().contains("archived"), "its name held");
+    let back = assistant::restore("abc").unwrap();
+    assert_eq!(back, abc);
+    assert_eq!(names(assistant::all()), ["Acorn", "Max", "Abc", "Max Two"]);
+    assert!(assistant::archived().is_empty() && assistant::restore("abc").is_err());
 }

@@ -187,19 +187,26 @@ impl Engine {
                     Err(why) => Out::fail(why),
                 }
             }
-            "delete_assistant" => {
+            "archive_assistant" => {
                 let me = self.lock().me.id.clone();
-                let gone = match crate::assistant::remove(&str("name"), &me) {
-                    Ok(gone) => gone,
-                    Err(why) => return Out::fail(why),
-                };
-                super::hub::close(&gone.id);
-                self.lock().all(Event::Gone(gone.id.clone()));
-                match crate::assistant::trash(&gone) {
-                    Ok(to) => Out::ok(format!("Deleted {}; their chat and files are in the Trash, in \"{}\".", gone.name, to.file_name().unwrap_or_default().to_string_lossy())),
-                    Err(why) => Out::fail(format!("Deleted {} from the sidebar, but {why}", gone.name)),
+                match crate::assistant::archive(&str("name"), &me) {
+                    Ok(gone) => {
+                        super::hub::close(&gone.id);
+                        self.lock().all(Event::Gone(gone.id.clone()));
+                        Out::ok(format!("Archived {}: off the sidebar, their chat and files kept; restore_assistant brings them back.", gone.name))
+                    }
+                    Err(why) => Out::fail(why),
                 }
             }
+            "restore_assistant" => match crate::assistant::restore(&str("name")) {
+                Ok(back) => {
+                    let said = format!("Restored {}, {}; they are in the sidebar, their chat as it was.", back.name, back.about);
+                    let _ = super::hub::chat(&back);
+                    self.lock().all(Event::Assistant(back));
+                    Out::ok(said)
+                }
+                Err(why) => Out::fail(why),
+            },
             "computer" if hands => computer::act(&input, cancel).await,
             "computer" => self.computer(input["task"].as_str().unwrap_or_default()),
             "web_search" | "web_fetch" => crate::web::run(name, &input, cancel).await,
@@ -481,10 +488,17 @@ impl Chat {
             .filter(|(hits, _)| words.is_empty() || *hits > 0)
             .collect();
         them.sort_by_key(|(hits, _)| std::cmp::Reverse(*hits));
-        if them.is_empty() {
-            return if words.is_empty() { "No other assistants yet.".into() } else { "None matches.".into() };
+        let shown = |a: &crate::assistant::Assistant| if a.about.is_empty() { a.name.clone() } else { format!("{}: {}", a.name, a.about) };
+        let mut said = match them.is_empty() {
+            true if words.is_empty() => "No other assistants yet.".to_string(),
+            true => return "None matches.".into(),
+            false => them.iter().map(|(_, a)| shown(a)).collect::<Vec<_>>().join("\n"),
+        };
+        let archived: Vec<String> = crate::assistant::archived().iter().map(shown).collect();
+        if words.is_empty() && !archived.is_empty() {
+            said.push_str(&format!("\n\nArchived (restore_assistant brings one back):\n{}", archived.join("\n")));
         }
-        them.iter().map(|(_, a)| if a.about.is_empty() { a.name.clone() } else { format!("{}: {}", a.name, a.about) }).collect::<Vec<_>>().join("\n")
+        said
     }
 
     /// An agent's page: its log, and what streams.
