@@ -28,11 +28,14 @@
 //! the views' nodes and those built above them; any other row is read as
 //! needed. Images are in docs/images/ by their hash.
 //!
-//! A purge erases a message for good (a secret pasted in): its text and
-//! images, and every node built from it, are deleted (`erase`); its node
-//! and those above build anew without it. Other nodes built while its
-//! summary was in the compactions' view may still echo it.
-
+//! A purge erases a message for good (a secret pasted in): at once, its
+//! text and images and every node built from it, so no call sees it again;
+//! its node and those above build anew without it. Other nodes built while
+//! its summary was in the compactions' view may still echo it. Its old
+//! bytes stay in chat.db's pages till a wipe rewrites the file (`erase`),
+//! owed in a marker file (WIPE) till done, and run by the chat once idle,
+//! as it holds up every write while it runs. Copies the disk itself keeps
+//! (APFS snapshots, the SSD) are beyond Acorn's reach.
 
 use crate::clip;
 use crate::{Img, Kind, Served, config, disk, names};
@@ -40,8 +43,8 @@ use anyhow::{Context, Result};
 use base64::Engine as _;
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{BinaryHeap, HashMap, HashSet};
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -67,6 +70,8 @@ pub const PURGED: &str = "(purged)";
 const IMAGES: &str = "docs/images";
 /// The chat's log in `msgs`; an agent's is its name.
 const CHAT: &str = "";
+/// A wipe owed: this file in the chat's dir.
+const WIPE: &str = "chat.db.wipe";
 
 const SCHEMA: &str = "pragma journal_mode = wal; pragma synchronous = normal; pragma secure_delete = on;
 create table if not exists msgs (log text not null, i integer not null, kind text not null, text text not null, date text not null,
@@ -259,7 +264,10 @@ struct Saved {
 /// their side; sides: the side by the last message of nodes not built;
 /// hold: why each side is held (None: it builds); made: nodes built since
 /// last drained; fitted: the views were fit since last drained; age: the
-/// purges so far (a node a call began before one is not stored).
+/// chat's purges so far (a node a call began before one is not stored);
+/// purged, wiped: the purges so far, those a wipe has erased from the file
+/// (owed: purged > wiped); wiping: a wipe runs, or failed (it runs again
+/// when Acorn starts: `stuck`).
 pub struct Memory {
     pub dir: PathBuf,
     pub db: Connection,
@@ -280,6 +288,10 @@ pub struct Memory {
     pub made: Vec<Part>,
     pub fitted: bool,
     pub age: u64,
+    pub purged: u64,
+    pub wiped: u64,
+    pub wiping: bool,
+    pub stuck: bool,
 }
 
 // Memory
@@ -289,7 +301,8 @@ impl Memory {
     pub fn load(dir: &Path) -> Result<Memory> {
         fs::create_dir_all(dir)?;
         let db = Connection::open(dir.join("chat.db"))?;
-        db.busy_timeout(std::time::Duration::from_secs(10))?;
+        // only a wipe holds it up (no other process opens it): wait it out
+        db.busy_timeout(std::time::Duration::from_secs(600))?;
         db.execute_batch(SCHEMA)?;
         let saved = saved(&db);
         let mut mem = Memory {
@@ -312,6 +325,10 @@ impl Memory {
             made: Vec::new(),
             fitted: false,
             age: 0,
+            purged: u64::from(dir.join(WIPE).exists()),
+            wiped: 0,
+            wiping: false,
+            stuck: false,
         };
         if let Some(s) = &saved {
             mem.pick = s.pick.clone();
@@ -916,8 +933,8 @@ impl Memory {
     /// PURGED, its line and images go, and, in the chat, every node built
     /// from it: those in a view open into their halves, and it and those
     /// above build anew (a call building any node now is not stored: the
-    /// caller stops them). Then chat.db's freed pages are zeroed and its
-    /// WAL truncated. Answers what it erased.
+    /// caller stops them). A wipe of chat.db is then owed. Answers what it
+    /// erased.
     pub fn purge(&mut self, agent: Option<&str>, id: u64) -> Result<String> {
         let log = agent.unwrap_or(CHAT);
         let (mut a, mut b) = (id, id);
@@ -946,6 +963,9 @@ impl Memory {
                 }
             }
         }
+        let wipe = self.dir.join(WIPE);
+        fs::write(&wipe, "")?;
+        disk::wrote(&wipe);
         let mut images = Vec::new();
         let tx = self.db.transaction()?;
         for i in a..=b {
@@ -981,10 +1001,18 @@ impl Memory {
                 Err(err) => said += &format!(" Its image {name} was kept: {err}."),
             }
         }
-        if let Err(err) = erase(&self.db) {
-            said += &format!(" But its old bytes may stay in chat.db till the next purge: {err}.");
-        }
+        self.purged += 1;
+        said += if self.stuck { " Its old bytes are wiped from Acorn's files when Acorn starts again." } else { " Its old bytes are wiped from Acorn's files once the chat is idle." };
         Ok(said)
+    }
+
+    /// A wipe done of the purges up to `upto`; none owed after, its marker
+    /// goes.
+    pub fn wiped(&mut self, upto: u64) {
+        self.wiped = upto;
+        if self.wiped == self.purged {
+            let _ = fs::remove_file(self.dir.join(WIPE));
+        }
     }
 
     /// The nodes `gone` (by slot) let go, the views' open into the halves
@@ -1069,10 +1097,21 @@ fn saved(db: &Connection) -> Option<Saved> {
 }
 
 /// Deleted rows erased from a db's file: rewritten whole (secure_delete
-/// zeroes only cells freed, not stale copies a page split left), its WAL
-/// truncated. It takes as long as the db is big.
-pub fn erase(db: &Connection) -> rusqlite::Result<()> {
-    db.execute_batch("vacuum; pragma wal_checkpoint(truncate)")
+/// zeroes only cells and pages freed, not old bytes left in a page still
+/// used), its WAL truncated. It takes as long as the db is big (2 s for
+/// 450 MB) and holds up every write meanwhile.
+pub fn erase(db: &Connection) -> Result<()> {
+    db.execute_batch("vacuum")?;
+    let busy: i64 = db.query_row("pragma wal_checkpoint(truncate)", [], |r| r.get(0))?;
+    anyhow::ensure!(busy == 0, "its WAL is in use");
+    Ok(())
+}
+
+/// The chat in `dir` wiped (`erase`), on a connection of its own: blocking.
+pub fn wipe(dir: &Path) -> Result<()> {
+    let db = Connection::open(dir.join("chat.db"))?;
+    db.busy_timeout(std::time::Duration::from_secs(60))?;
+    erase(&db)
 }
 
 /// A message from its row in `msgs`.

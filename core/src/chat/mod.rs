@@ -24,7 +24,7 @@ use crate::ai::{self, Handle, Used};
 use crate::assistant::Assistant;
 use crate::compactor;
 use crate::import;
-use crate::memory::{Memory, Msg, Part};
+use crate::memory::{self, Memory, Msg, Part};
 use crate::pick::Pick;
 use crate::wire::{Command, Event, Live, Seg, TURN};
 use crate::{Kind, Served, Spend, config};
@@ -405,6 +405,37 @@ impl Chat {
             }
             self.progress();
         }
+        self.wipe();
+    }
+
+    /// A wipe owed (`Memory::purge`) started once the chat is idle (no
+    /// turn, agent or summary at work), so its rewrite of chat.db holds up
+    /// no write, on a thread of its own. One that fails is left owed, till
+    /// Acorn starts again.
+    fn wipe(&mut self) {
+        let mem = &self.mem;
+        if mem.wiping || mem.wiped == mem.purged || self.busy || !mem.busy.is_empty() || !self.working().is_empty() {
+            return;
+        }
+        self.mem.wiping = true;
+        let (this, dir, upto) = (self.this.clone(), self.mem.dir.clone(), self.mem.purged);
+        std::thread::spawn(move || {
+            let done = memory::wipe(&dir);
+            let Some(engine) = this.upgrade() else { return };
+            let mut chat = engine.lock();
+            match done {
+                Ok(()) => {
+                    chat.mem.wiping = false;
+                    chat.mem.wiped(upto);
+                    chat.all(Event::Note("Purge finished: erased from Acorn's files.".into()));
+                }
+                Err(err) => {
+                    chat.mem.stuck = true;
+                    eprintln!("acorn: wipe: {err}");
+                    chat.all(Event::Note(format!("A purged message's old bytes are still in chat.db ({err}); Acorn wipes them when it starts again.")));
+                }
+            }
+        });
     }
 
     /// A step that logs to the chat: now, or once the post logging ends.

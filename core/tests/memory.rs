@@ -25,6 +25,12 @@ fn build(mem: &mut Memory) {
     mem.fit(false);
 }
 
+/// A chat's wipe owed, done as the chat does it once idle.
+fn wipe(mem: &mut Memory) {
+    memory::wipe(&mem.dir).unwrap();
+    mem.wiped(mem.purged);
+}
+
 /// Whether any of the chat's files holds `text`.
 fn on_disk(dir: &std::path::Path, text: &str) -> bool {
     std::fs::read_dir(dir).unwrap().flatten().filter(|e| e.path().is_file()).any(|e| {
@@ -74,10 +80,14 @@ fn memory_in_sqlite() {
     assert!(mem.view.parts.iter().all(|p| mem.text(*p).find(SECRET).is_none()));
     build(&mut mem);
     assert!(mem.node(Part::new(3, 0)).is_some_and(|t| !t.contains(SECRET)), "built anew without it");
-    assert!(!on_disk(&dir, SECRET), "erased from chat.db and its WAL");
+    let owed = dir.join("chat.db.wipe");
+    assert!(owed.exists(), "a wipe is owed");
     drop(mem);
     let mut mem = Memory::load(&dir).unwrap();
     assert_eq!(mem.message(5).unwrap().text, PURGED);
+    assert!(mem.purged > mem.wiped, "a quit doesn't lose the wipe owed");
+    wipe(&mut mem);
+    assert!(!owed.exists() && !on_disk(&dir, SECRET), "erased from chat.db and its WAL");
     assert!(mem.purge(None, 999).unwrap().starts_with("No message"));
 
     // a long message, its secret on every line, purged from every page
@@ -88,7 +98,13 @@ fn memory_in_sqlite() {
     assert!(on_disk(&dir, SECRET));
     let said = mem.purge(None, id).unwrap();
     assert!(said.contains("its pages"), "{said}");
-    assert!(!on_disk(&dir, SECRET), "no stale copy left in chat.db");
+    let upto = mem.purged;
+    mem.purge(None, 0).unwrap();
+    memory::wipe(&dir).unwrap();
+    mem.wiped(upto);
+    assert!(owed.exists(), "a purge during a wipe owes another");
+    wipe(&mut mem);
+    assert!(!owed.exists() && !on_disk(&dir, SECRET), "no stale copy left in chat.db");
     build(&mut mem);
 
     // a quit in the middle of a message: its pages so far dropped
@@ -108,6 +124,8 @@ fn memory_in_sqlite() {
     assert_eq!(mem.agent(&name).unwrap().len(), 2);
     mem.purge(Some(&name), 1).unwrap();
     assert!(mem.agent_show(&name).contains(PURGED) && !mem.agent_show(&name).contains(SECRET));
+    assert!(owed.exists());
+    wipe(&mut mem);
     assert!(!on_disk(&dir, SECRET));
     assert!(mem.agent("Nobody").is_none());
 
