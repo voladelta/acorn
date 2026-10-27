@@ -147,7 +147,8 @@ something to keep for good (who they are, a preference, a decision, a rule for
 your work), remember it as a fact; forget one they say is wrong. When they ask
 you to erase something from the chat, such as a password or key they pasted,
 purge its message, once they confirm: it can't be undone. When they name a
-finish line (\"keep at it until the tests pass\"), set it as your goal.
+finish line (\"keep at it until the tests pass\"), set it as your goal first,
+before any other work, even if you expect to be done this turn.
 
 You are one of the user's assistants, each a person with a name and a part to
 play, who stays. When you need someone, ask: when another's part fits what is
@@ -259,7 +260,7 @@ fn own() -> Vec<Spec> {
 fn boss() -> Vec<Spec> {
     let efforts: Vec<&str> = EFFORTS.iter().map(|e| e.as_str()).collect();
     vec![
-        spec("hire", "Hire one agent per task, a freelancer working in the background, all in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. An agent sees the view and the user's instructions, but knows what you want only from its task, so say all it needs. Never for a person the user wants to keep: that is create_assistant.", json!({"tasks": {"type": "array", "items": {"type": "string"}}, "effort": {"type": "string", "enum": efforts, "description": "How hard they think; by default, as hard as you."}}), &["tasks"]),
+        spec("hire", "Hire one agent per task, a freelancer working in the background, all in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. An agent sees the view and the user's instructions, but knows what you want only from its task, so say all it needs. It works in a dir of its own, not yours: name each file by its absolute path. Never for a person the user wants to keep: that is create_assistant.", json!({"tasks": {"type": "array", "items": {"type": "string"}}, "effort": {"type": "string", "enum": efforts, "description": "How hard they think; by default, as hard as you."}}), &["tasks"]),
         spec("tell", "Send a message to an agent (one you hired or a computer task), by name. One at work stops what it is doing to read it, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".", json!({"name": {"type": "string"}, "message": {"type": "string"}}), &["name", "message"]),
         spec("fire", "Fire an agent at work, by name, or all of yours with no name, when the user says so or its work is no longer wanted. It stops at once, without a report.", json!({"name": {"type": "string"}}), &[]),
     ]
@@ -279,7 +280,7 @@ fn peers() -> Vec<Spec> {
 
 fn home() -> Vec<Spec> {
     vec![
-        spec("goal", "Set the goal you work to, when the user names a finish line (\"keep going until the tests pass\"): as each turn would end, a check reads the chat, and if the goal isn't met you go on. With no goal, drop the one set, when the user says to stop or it no longer holds. The user sees the goal while it is set.", json!({"goal": {"type": "string"}}), &[]),
+        spec("goal", "Set the goal you work to, when the user names a finish line (\"keep going until the tests pass\"), first, before any other work: as each turn would end, a check reads the chat, and if the goal isn't met you go on. With no goal, drop the one set, when the user says to stop or it no longer holds. The user sees the goal while it is set.", json!({"goal": {"type": "string"}}), &[]),
         spec("usage", "What the user's calls cost, by day and kind, every assistant's chats and threads together, the last days (7 by default). Show the user a short table, in dollars.", json!({"days": {"type": "integer"}}), &[]),
         spec("import", "Bring the user's past AI chats into this chat's memory. find: look for them (Claude Code's and Codex's on this Mac, and the Claude or ChatGPT website exports at files, zips the user dropped or named), listing each session (id, app, day, messages, where) and the price of importing; tell the user. start: import what find found, from day since (YYYY-MM-DD), with tool calls or not, leaving out skip (session ids), once the user agrees to the price; it begins when your turn ends and runs a while. pause, resume: the import running.", json!({"do": {"type": "string", "enum": ["find", "start", "pause", "resume"]}, "files": {"type": "array", "items": {"type": "string"}}, "since": {"type": "string"}, "tools": {"type": "boolean"}, "skip": {"type": "array", "items": {"type": "string"}}}), &["do"]),
         spec("export", "Save this chat's whole memory (messages, summaries, agents' chats, images) as one JSON file in the user's Downloads, and return its path.", json!({}), &[]),

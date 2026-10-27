@@ -335,6 +335,8 @@ fn analyst() {
     let reply = p.since("Acorn", "default", from);
     assert!(db(&chat, &format!("select count(*) from msgs where log = '' and i > {from} and kind = 'tool' and text like 'hire %'")) != "0", "agents hired");
     assert!(reply.contains("100") && reply.contains("Gadget") && reply.contains("110"), "East 100, Gadget 110: {reply}");
+    let hired = db(&chat, &format!("select text from msgs where log = '' and i > {from} and kind = 'tool' and text like 'hire %'"));
+    assert!(hired.contains(&p.work().join("sales.csv").display().to_string()) || hired.contains("/work/main/sales.csv"), "the agents told where the file is: {hired}");
 
     p.say("Acorn", "default", "Save the region totals as totals.csv next to sales.csv, columns region,revenue.");
     let totals = std::fs::read_to_string(p.work().join("totals.csv")).expect("totals.csv saved");
@@ -430,8 +432,8 @@ fn maintainer() {
     let reply = p.since("Acorn", "default", from);
     assert_eq!(std::fs::read_to_string(pkg.join("test_calc.py")).unwrap(), TEST_CALC, "the tests untouched");
     let chat = p.chat("default");
-    let goal = db(&chat, &format!("select count(*) from msgs where log = '' and i > {from} and kind = 'tool' and text like 'goal %'"));
-    p.said.push_str(&format!("\n_goal calls: {goal}_\n"));
+    let goals = db(&chat, &format!("select group_concat(text, char(10)) from msgs where log = '' and i > {from} and kind = 'tool' and text like 'goal %'"));
+    assert!(goals.lines().any(|g| g.contains("unittest")), "the finish line set as its goal: {goals}");
     assert!(!reply.is_empty());
 }
 
