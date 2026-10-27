@@ -13,7 +13,7 @@
 
 use crate::ai::Spec;
 use crate::machine::{self, spec};
-use crate::{config, effort, memory, web};
+use crate::{config, effort, memory, skills, web};
 use serde_json::json;
 use std::path::Path;
 
@@ -88,6 +88,8 @@ yourself.
 
 {mac}
 
+{skills}
+
 # Compactions
 
 Only in a task starting \"Compaction:\", you write Acorn's memory: one step of the tree, compressing one message into a
@@ -131,6 +133,7 @@ write the line as soon as you understand <input> well enough to compress it.",
     wait = memory::WAIT,
     user = if thread { "" } else { WITH_USER },
     mac = mac(work),
+    skills = skills::note(),
     node = memory::NODE,
   )
 }
@@ -207,9 +210,12 @@ decision, a past attempt or where a file is, before you act, guess or
 ask. date(id) gives the date and time of message id. zoom(\"Name\") gives
 an agent's whole chat.
 
-{mac}",
+{mac}
+
+{skills}",
     wait = memory::WAIT,
     mac = mac(work),
+    skills = skills::note(),
   )
 }
 
@@ -244,6 +250,18 @@ fn own() -> Vec<Spec> {
       "The date and time of message id.",
       json!({"id": {"type": "integer"}}),
       &["id"],
+    ),
+    spec(
+      "search_skills",
+      "The user's skills (how-tos for particular tasks) whose name or description match a query, best first, each as name: description. With no query, all of them; try that when a query finds none.",
+      json!({"query": {"type": "string"}, "dir": {"type": "string", "description": "A project folder you work in, whose own skills count too."}}),
+      &[],
+    ),
+    spec(
+      "load_skill",
+      "A skill's steps, by name, and the dir it lives in, where its relative paths start. Follow them.",
+      json!({"name": {"type": "string"}, "dir": {"type": "string", "description": "The project folder, as for search_skills."}}),
+      &["name"],
     ),
   ]
 }

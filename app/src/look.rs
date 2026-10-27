@@ -47,6 +47,7 @@ pub fn tool_glyph(name: &str) -> &'static str {
   match name {
     "zoom" => "🔍",
     "date" => "📅",
+    "search_skills" | "load_skill" => "🧰",
     "shell" => "⌨️",
     "read" => "📖",
     "write" => "📄",

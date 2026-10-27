@@ -22,6 +22,7 @@ pub mod machine;
 pub mod memory;
 pub mod names;
 pub mod price;
+pub mod skills;
 pub mod tools;
 pub mod web;
 pub mod wire;

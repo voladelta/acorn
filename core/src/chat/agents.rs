@@ -139,6 +139,13 @@ impl Engine {
         }
       }
       "date" => Out::ok(self.lock().mem.date(num("id", u64::MAX))),
+      "search_skills" => Out::ok(crate::skills::search(
+        &crate::skills::roots(&cwd, &str("dir")),
+        &str("query"),
+      )),
+      "load_skill" => {
+        crate::skills::load(&crate::skills::roots(&cwd, &str("dir")), &str("name")).map_or_else(Out::fail, Out::ok)
+      }
       "hire" => {
         let effort = match &input["effort"] {
           Value::Null => None,
