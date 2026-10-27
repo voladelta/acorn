@@ -85,7 +85,8 @@ impl Toolbox for Kit {
 
 impl Engine {
     async fn tool(self: Arc<Self>, cwd: PathBuf, hands: bool, name: &str, input: Value, cancel: CancellationToken, halt: CancellationToken) -> Out {
-        let num = |k: &str, def: u64| input[k].as_u64().unwrap_or(def);
+        // a number, or one said as a string ("8"), as models sometimes do
+        let num = |k: &str, def: u64| input[k].as_u64().or_else(|| input[k].as_str().and_then(|s| s.trim().parse().ok())).unwrap_or(def);
         let str = |k: &str| input[k].as_str().unwrap_or_default().trim().to_string();
         match name {
             "zoom" => {
@@ -156,7 +157,7 @@ impl Engine {
             }
             "forget" => {
                 let me = self.lock().me.id.clone();
-                let Some(id) = input["id"].as_u64() else { return Out::fail("Give id: the fact's number.") };
+                let Some(id) = Some(num("id", u64::MAX)).filter(|&id| id != u64::MAX) else { return Out::fail("Give id: the fact's number.") };
                 crate::facts::forget(&me, id).map_or_else(|err| Out::fail(format!("Not forgotten: {err}")), Out::ok)
             }
             "purge" => {
