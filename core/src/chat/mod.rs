@@ -44,21 +44,21 @@ pub(crate) use imports::Batch;
 /// so no compactor call summarizes it.
 pub const HELLO: &str = "Hello! This is Acorn.
 
-I'm like ChatGPT, but there is only **one chat** between us. *Forever.*
+I'm like ChatGPT, but there's only **one chat** between us. *Forever.*
 
-Nothing we say is lost. I keep it all in a **memory tree**, with recent days in more detail.
+Nothing we say is lost. It grows into a **memory tree**: recent days sharp, older ones in broad strokes.
 
-Ask me to build something. Or many things. Just keep asking. For days, weeks, years.
+Ask me to build something. Then the next thing. Keep asking, for days, weeks, years.
 
-Then, ask me anything about your past:
+Then ask about your past:
 
 > “What was that app I used to turn ads into cats?”
 
-I'll remember:
+I'll dig it up:
 
 > “Not an app: `ad2cat.py`, from a CatBoard post 7 years ago. Link's dead, but here's the script.”
 
-How? No new model. No magic. Just a regular chatbot with a neat memory system.";
+How? No new model. No magic. Just a plain chatbot with a memory that grows.";
 
 const HELLO_LINE: &str = "unii: hello: Acorn, one endless chat kept in a memory tree, recent days in more detail; build anything for years; recalls the past (ad2cat.py); a chatbot with a memory system.";
 

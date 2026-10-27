@@ -40,8 +40,8 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> =
 /// What every part of the window shares: the model (of the chat shown),
 /// the assistants, the one you talk to, the chat shown (its chat with
 /// you, or a thread it asked in), the chats at work, whether the sidebar
-/// shows, the note shown, the message being written, the clock times
-/// read.
+/// shows, the note shown, the message being written and its field, the
+/// clock times read.
 #[derive(Clone, Copy)]
 pub struct Ui {
     pub model: Signal<Model>,
@@ -52,6 +52,7 @@ pub struct Ui {
     pub side: Signal<bool>,
     pub toast: Signal<Option<String>>,
     pub draft: Signal<String>,
+    pub field: ElementRef,
     pub now: Signal<i64>,
 }
 
@@ -196,6 +197,7 @@ pub fn App() -> impl IntoElement {
         side: signal(true),
         toast: signal(None),
         draft: signal(String::new()),
+        field: element_ref(),
         now: signal(acorn_core::now_ms()),
     };
     provide_context(ui);
@@ -408,7 +410,7 @@ fn status_row(ui: Ui) -> impl IntoElement {
 /// or Tab takes it (Return sends a word already a name), a click takes
 /// the one clicked, Esc closes it for that word.
 fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
-    let field = element_ref();
+    let field = ui.field;
     let caret = signal(0u32);
     let at = signal(None::<Bounds<Points>>);
     let pick = signal(0usize);

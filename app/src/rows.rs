@@ -34,6 +34,8 @@ pub fn chat(ui: Ui) -> impl IntoElement {
         let shown = ui.shown.get();
         (0..items.with(Vec::len)).map(move |k| (shown.clone(), k))
     })
+    // a press in the chat takes the keys from the field, so Cmd+C copies what it selects
+    .on_press_down(move || ui.field.blur())
     .follow_end(px(120.0))
     .estimated_item_size(px(80.0))
     .content_padding_top(px(24.0))
