@@ -54,6 +54,19 @@ fn each_assistant_opens_its_own_chat() {
     app.wait_for_within("text:Pip  ·  Personal stylist", wait).unwrap();
     assert!(!app.shows("text:@Pip"), "the names gone with the word");
 
+    // ↓ picks the next name, Return takes it; Esc closes the names for the word.
+    app.type_text("label:Message Pip", "@a").unwrap();
+    app.wait_for_within("text:@Max", wait).unwrap();
+    app.press_key("down").unwrap();
+    app.submit("label:Message Pip").unwrap();
+    app.submit("label:Message Pip").unwrap();
+    app.wait_for_within("text:Max  ·  Thoughtful expert", wait).unwrap();
+    app.type_text("label:Message Max", "@a").unwrap();
+    app.wait_for_within("text:@Acorn", wait).unwrap();
+    app.press_key("escape").unwrap();
+    app.wait_until("the names closed", wait, |s| s.texts().iter().all(|t| *t != "@Acorn")).unwrap();
+    app.type_text("label:Message Max", "").unwrap();
+
     for id in ["default", "max", "pip"] {
         assert!(dir.path().join("chats").join(id).is_dir(), "{id}'s chat on disk");
     }

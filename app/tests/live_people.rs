@@ -41,8 +41,14 @@ fn acorn_asks_max_and_hires_an_agent() {
 
     app.type_text("label:Message Acorn", "Hire one agent to run echo acorn-$((37*43)) in the shell, and tell me its report.").unwrap();
     app.submit("label:Message Acorn").unwrap();
-    app.wait_until("the agent's report told", Duration::from_secs(300), |s| s.texts().iter().any(|t| t.contains("acorn-1591"))).unwrap();
-    assert!(logged(&chats.join("default"), "hire {"), "an agent hired, not the work done by Acorn");
+    let acorn = chats.join("default");
+    app.wait_until("an agent hired", Duration::from_secs(180), |_| logged(&acorn, "hire {")).unwrap();
+    // the agent's name on the frame, its report in it: not Acorn's thinking, which may work it out
+    app.wait_until("the agent's report", Duration::from_secs(300), |s| {
+        let named = |w: &str| w.len() < 24 && w.starts_with(|c: char| c.is_ascii_uppercase()) && w.chars().all(char::is_alphanumeric);
+        s.texts().windows(2).any(|w| named(w[0]) && w[1].contains("acorn-1591"))
+    })
+    .unwrap();
 }
 
 /// Whether a chat's files hold `what` (its db and the db's write-ahead log).

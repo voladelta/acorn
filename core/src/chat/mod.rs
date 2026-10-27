@@ -334,7 +334,7 @@ impl Chat {
     /// thread's asker, then the facts it sees), its assistant's effort.
     pub fn share(&self) -> ai::Ask {
         let asks = self.with.as_ref().map(|a| a.asking()).unwrap_or_default();
-        let head = crate::tools::master(&self.me.work()) + &self.me.personality() + &asks + &crate::facts::prompt(&self.me.id);
+        let head = crate::tools::master(&self.me.work(), self.with.is_some()) + &self.me.personality() + &asks + &crate::facts::prompt(&self.me.id);
         ai::Ask {
             effort: self.me.effort,
             system: crate::tools::system(&head),

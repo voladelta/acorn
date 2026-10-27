@@ -8,7 +8,8 @@ Status: built · Last updated: 2026-10-27
 - No `/goal` alias: slash words are gone. Dropping files on the window adds their paths to the message being written ("import this").
 - Esc goes back to your chat from an agent's page, a thread or the overview.
 - An assistant made before abouts shows its name alone.
-- `@Name` is the one word the box reads itself: alone, it opens your chat with that assistant (no call); in a message, the words go to the one you talk to, whose prompt reads `@Name` as "ask them". The box suggests names as you type `@`; Return or a click takes the first or the one clicked.
+- `@Name` is the one word the box reads itself: alone, it opens your chat with that assistant (no call); in a message, the words go to the one you talk to, whose prompt reads `@Name` as "ask them". The box suggests names as you type `@`: ↑ and ↓ pick one, Return or Tab takes it (Return sends a word already a name), a click takes the one clicked, Esc closes the names for that word.
+- An assistant answering in a thread hears nothing of what only your chat has: no facts, purges, goals, asking or `@Name`.
 
 ## The principle
 

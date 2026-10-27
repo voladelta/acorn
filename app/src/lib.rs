@@ -404,12 +404,15 @@ fn status_row(ui: Ui) -> impl IntoElement {
 /// The message box: Return sends (Shift+Return a new line); images come
 /// by the attach button or a paste. Sent while the assistant works, a
 /// message cuts in. An `@` word being typed shows the other assistants
-/// it may name, over the caret: a click takes one, Return the first
-/// (unless the word is already a name).
+/// it may name, over the caret (`names_menu`): ↑ and ↓ pick one, Return
+/// or Tab takes it (Return sends a word already a name), a click takes
+/// the one clicked, Esc closes it for that word.
 fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
     let field = element_ref();
     let caret = signal(0u32);
     let at = signal(None::<Bounds<Points>>);
+    let pick = signal(0usize);
+    let hushed = signal(None::<usize>);
     let ready = move || ui.draft.with(|d| !d.trim().is_empty()) || images.with(|i| !i.is_empty());
     // The `@` word's start and the assistants it may name, with whether it is one already.
     let naming = computed(move || {
@@ -419,7 +422,7 @@ fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
             let (start, word) = text::mention_at(d, caret.get())?;
             let found: Vec<String> = text::names_for(word, &names).into_iter().map(String::from).collect();
             let whole = found.iter().any(|n| n.eq_ignore_ascii_case(word));
-            (!found.is_empty()).then_some((start, found, whole))
+            (!found.is_empty() && hushed.get() != Some(start)).then_some((start, found, whole))
         })
     });
     let take = move |name: String| {
@@ -432,7 +435,7 @@ fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
     };
     let submit = move || {
         if let Some((_, found, false)) = naming.get_untracked() {
-            take(found[0].clone());
+            take(found[pick.get_untracked().min(found.len() - 1)].clone());
             return;
         }
         if ui.say(ui.draft.get_untracked(), images.get_untracked()) {
@@ -471,7 +474,14 @@ fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
                 .multiline(true)
                 .auto_focus(true)
                 .value(ui.draft)
-                .on_change(move |t: &str| ui.draft.set(t.to_string()))
+                .on_change(move |t: &str| {
+                    ui.draft.set(t.to_string());
+                    pick.set(0);
+                    // the word closed is gone with its `@`
+                    if hushed.get_untracked().is_some_and(|start| t.get(start..start + 1) != Some("@")) {
+                        hushed.set(None);
+                    }
+                })
                 .on_selection_change(move |s: &Selection| caret.set(s.end))
                 .on_caret_move(move |e: &CaretEvent| at.set(Some(e.page_bounds)))
                 .submit_behavior(SubmitBehavior::Submit)
@@ -495,12 +505,34 @@ fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
                 .on_press(move || submit())
                 .child(text("↑").text_size(px(17.0)).text_color(paper())),
         )
-        .child(when(move || naming.with(Option::is_some) && at.get().is_some(), move || names_menu(ui, at, naming, take)))
+        .child(when(move || naming.with(Option::is_some) && at.get().is_some(), move || names_menu(ui, Menu { at, naming, pick, hushed }, take)))
+}
+
+/// What the names menu shows and keeps: where the caret is, the `@`
+/// word's start and names, the one picked, the word it was closed for.
+#[derive(Clone, Copy)]
+struct Menu {
+    at: Signal<Option<Bounds<Points>>>,
+    naming: Memo<Option<(usize, Vec<String>, bool)>>,
+    pick: Signal<usize>,
+    hushed: Signal<Option<usize>>,
 }
 
 /// The assistants an `@` word may name, over the caret: each its name and
-/// who it is; the first is what Return takes.
-fn names_menu(ui: Ui, at: Signal<Option<Bounds<Points>>>, naming: Memo<Option<(usize, Vec<String>, bool)>>, take: impl Fn(String) + Copy + 'static) -> impl IntoElement {
+/// who it is, the one picked marked. Its keys are bound while it shows,
+/// in the message box too, over the window's.
+fn names_menu(ui: Ui, menu: Menu, take: impl Fn(String) + Copy + 'static) -> impl IntoElement {
+    let Menu { at, naming, pick, hushed } = menu;
+    let keys = KeyOptions { when: nsh_core::keymap::When::Always, repeat: true };
+    let found = move || naming.get_untracked().map(|(_, found, _)| found).unwrap_or_default();
+    on_key_with("up", keys, move |_| pick.update(|p| *p = (*p + found().len().max(1) - 1) % found().len().max(1)));
+    on_key_with("down", keys, move |_| pick.update(|p| *p = (*p + 1) % found().len().max(1)));
+    on_key_with("tab", keys, move |_| {
+        if let Some(name) = found().get(pick.get_untracked()).cloned() {
+            take(name);
+        }
+    });
+    on_key_with("escape", KeyOptions { repeat: false, ..keys }, move |_| hushed.set(naming.get_untracked().map(|(start, ..)| start)));
     overlay()
         .anchor_bounds(move || at.get().unwrap_or_default())
         .placement(Placement::Top)
@@ -519,7 +551,7 @@ fn names_menu(ui: Ui, at: Signal<Option<Bounds<Points>>>, naming: Memo<Option<(u
                         .gap_2()
                         .px_3()
                         .py(px(6.0))
-                        .bg(if k == 0 { hover() } else { lift() })
+                        .bg(move || if pick.get() == k { hover() } else { lift() })
                         .hover(|s| s.bg(hover()))
                         .on_press(move || take(to.clone()))
                         .child(text(format!("@{name}")).text_size(px(14.0)).font_weight(FontWeight::MEDIUM))

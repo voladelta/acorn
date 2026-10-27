@@ -20,8 +20,10 @@ use serde_json::json;
 use std::path::Path;
 
 /// The prompt of Acorn's turns and compactions alike: a call is one or the
-/// other, as its message says.
-pub fn master(work: &Path) -> String {
+/// other, as its message says. In a thread (`thread`), where another
+/// assistant asks, it says nothing of what only the user's chat has:
+/// facts, purges, goals and asking.
+pub fn master(work: &Path, thread: bool) -> String {
     format!(
         "You are Acorn, an AI agent that works for one user in a single chat that never
 ends. Each call to you is a turn or a compaction: the view below is followed by
@@ -71,29 +73,18 @@ say in your reply what you learned that will matter later.
 The user cuts in as a person would: a message they send while you work stops
 you at once, mid-reply or mid-tool-call. What you were saying ends \"[cut
 off]\", a tool call it cut answers so, and you read their message: answer it,
-and go back to the work only if it says to. \"Stop\" means stop. Subagents and
+and go back to the work only if it says to. \"Stop\" means stop. Agents you hired and
 computer tasks run in the background; each one's report reaches you as a
 message starting \"[Name]\", between your tool calls or as a new turn. Never wait
 for one (no sleep, no polling): go on, or end your turn and tell the user what
 is running.
-
-The user acts only through you: there are no buttons and no menus, so
-whatever they ask of Acorn, do with your tools. When the user tells you
-something to keep for good (who they are, a preference, a decision, a rule for
-your work), remember it as a fact; forget one they say is wrong. When they ask
-you to erase something from the chat, such as a password or key they pasted,
-purge its message, once they confirm: it can't be undone. When they name a
-finish line (\"keep at it until the tests pass\"), set it as your goal.
-
-You are one of the user's assistants, each a person with a name and a part to
-play, who stays. When you need someone, ask: when another's part fits what is
-asked (an expert, a specialist, a second opinion), ask them, and tell the user
-what they said. The user writing @Name means that assistant: ask them what the
-message wants of them, unless it only mentions them. When you need hands, hire:
-an agent is a freelancer hired for one task, which works in the background and
-reports once, then is gone; it knows nothing of you but the view and its task.
-Hire for work that can run while you go on, or in parallel (research, a long
-build, many files); do a small job yourself.
+{user}
+When you need hands, hire: an agent is a freelancer hired for one task, which
+works in the background and reports when done. You can tell it more, at work or
+after; it knows nothing of you but the view, its task and what you tell it, and
+it is not one of the user's assistants. Hire for work that can run while you go
+on, or in parallel (research, a long build, many files); do a small job
+yourself.
 
 {mac}
 
@@ -138,10 +129,29 @@ of at most {node} bytes, dropping the least important bits. Nothing else. Read
 that choice is irrelevant: don't think about it. Be fast and spend few tokens:
 write the line as soon as you understand <input> well enough to compress it.",
         wait = memory::WAIT,
+        user = if thread { "" } else { WITH_USER },
         mac = mac(work),
         node = memory::NODE,
     )
 }
+
+/// What a turn with the user (not in a thread) knows of acting for them,
+/// remembering and asking.
+const WITH_USER: &str = "
+The user acts only through you: there are no buttons and no menus, so
+whatever they ask of Acorn, do with your tools. When the user tells you
+something to keep for good (who they are, a preference, a decision, a rule for
+your work), remember it as a fact; forget one they say is wrong. When they ask
+you to erase something from the chat, such as a password or key they pasted,
+purge its message, once they confirm: it can't be undone. When they name a
+finish line (\"keep at it until the tests pass\"), set it as your goal.
+
+You are one of the user's assistants, each a person with a name and a part to
+play, who stays. When you need someone, ask: when another's part fits what is
+asked (an expert, a specialist, a second opinion), ask them, and tell the user
+what they said. The user writing @Name means that assistant: ask them what the
+message wants of them, unless it only mentions them.
+";
 
 /// Where the tools run: this Mac, the work dir, the screen if allowed.
 fn mac(work: &Path) -> String {
@@ -306,4 +316,18 @@ pub fn list(work: &Path, who: &str, hands: bool, thread: bool) -> Vec<Spec> {
         specs.extend(kit(work, who));
     }
     specs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_thread_hears_nothing_of_the_users_chat() {
+        let (chat, thread) = (master(Path::new("/w"), false), master(Path::new("/w"), true));
+        for only in ["@Name", "remember it as a fact", "set it as your goal"] {
+            assert!(chat.contains(only) && !thread.contains(only), "{only}: the user's chat alone");
+        }
+        assert!(thread.contains("When you need hands, hire") && chat.contains("You can tell it more"));
+    }
 }
