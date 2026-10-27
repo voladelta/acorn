@@ -31,34 +31,30 @@ banana bagel cookie mango melon muffin noodle pancake pepper potato pretzel
 radish taco waffle";
 
 pub fn random() -> String {
-    let adjs: Vec<&str> = ADJS.split_whitespace().collect();
-    let nouns: Vec<&str> = NOUNS.split_whitespace().collect();
-    let mut rng = rand::thread_rng();
-    word(adjs.choose(&mut rng).unwrap()) + &word(nouns.choose(&mut rng).unwrap())
+  let adjs: Vec<&str> = ADJS.split_whitespace().collect();
+  let nouns: Vec<&str> = NOUNS.split_whitespace().collect();
+  let mut rng = rand::thread_rng();
+  word(adjs.choose(&mut rng).unwrap()) + &word(nouns.choose(&mut rng).unwrap())
 }
 
 /// Whether a text is a name, old or new.
 pub fn is_name(s: &str) -> bool {
-    let words = |list: &str| list.split_whitespace().map(word).collect::<Vec<_>>();
-    let (adjs, nouns) = (words(ADJS), words(NOUNS));
-    adjs.iter().any(|a| {
-        s.strip_prefix(a.as_str())
-            .map(|r| r.strip_prefix('-').unwrap_or(r))
-            .is_some_and(|r| nouns.iter().any(|n| n == r))
-    })
+  let words = |list: &str| list.split_whitespace().map(word).collect::<Vec<_>>();
+  let (adjs, nouns) = (words(ADJS), words(NOUNS));
+  adjs.iter().any(|a| s.strip_prefix(a.as_str()).map(|r| r.strip_prefix('-').unwrap_or(r)).is_some_and(|r| nouns.iter().any(|n| n == r)))
 }
 
 fn word(w: &str) -> String {
-    let mut c = w.chars();
-    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+  let mut c = w.chars();
+  c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn names_read_back() {
-        let n = super::random();
-        assert!(super::is_name(&n));
-        assert!(!super::is_name("Fire-Ant") && super::is_name("Red-Ant"));
-    }
+  #[test]
+  fn names_read_back() {
+    let n = super::random();
+    assert!(super::is_name(&n));
+    assert!(!super::is_name("Fire-Ant") && super::is_name("Red-Ant"));
+  }
 }

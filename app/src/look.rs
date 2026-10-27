@@ -44,26 +44,26 @@ pub const COL: f32 = 740.0;
 
 /// Each tool's emoji; any other's is 🔧.
 pub fn tool_glyph(name: &str) -> &'static str {
-    match name {
-        "zoom" => "🔍",
-        "date" => "📅",
-        "shell" => "⌨️",
-        "read" => "📖",
-        "write" => "📄",
-        "edit" => "📝",
-        "web_search" => "🌐",
-        "web_fetch" => "🔗",
-        "hire" | "spawn" => "🤖",
-        "tell" => "💬",
-        "fire" | "stop" => "✋",
-        "create_assistant" => "🐿️",
-        "list_assistants" | "search_assistants" => "👥",
-        "ask_assistant" => "🗣️",
-        "goal" => "🎯",
-        "usage" => "💵",
-        "import" => "📥",
-        "export" => "💾",
-        "tree" => "🌳",
-        _ => "🔧",
-    }
+  match name {
+    "zoom" => "🔍",
+    "date" => "📅",
+    "shell" => "⌨️",
+    "read" => "📖",
+    "write" => "📄",
+    "edit" => "📝",
+    "web_search" => "🌐",
+    "web_fetch" => "🔗",
+    "hire" | "spawn" => "🤖",
+    "tell" => "💬",
+    "fire" | "stop" => "✋",
+    "create_assistant" => "🐿️",
+    "list_assistants" | "search_assistants" => "👥",
+    "ask_assistant" => "🗣️",
+    "goal" => "🎯",
+    "usage" => "💵",
+    "import" => "📥",
+    "export" => "💾",
+    "tree" => "🌳",
+    _ => "🔧",
+  }
 }

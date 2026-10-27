@@ -15,12 +15,12 @@ pub mod clip;
 pub mod compactor;
 pub mod config;
 pub mod disk;
+pub mod effort;
 pub mod facts;
 pub mod import;
 pub mod machine;
 pub mod memory;
 pub mod names;
-pub mod effort;
 pub mod price;
 pub mod tools;
 pub mod web;
@@ -35,108 +35,108 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
-    User,
-    Work,
-    Mind,
-    #[serde(rename = "unii")]
-    Acorn,
-    Tool,
-    Echo,
-    Note,
+  User,
+  Work,
+  Mind,
+  #[serde(rename = "unii")]
+  Acorn,
+  Tool,
+  Echo,
+  Note,
 }
 
 impl Kind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Kind::User => "user",
-            Kind::Work => "work",
-            Kind::Mind => "mind",
-            Kind::Acorn => "unii",
-            Kind::Tool => "tool",
-            Kind::Echo => "echo",
-            Kind::Note => "note",
-        }
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Kind::User => "user",
+      Kind::Work => "work",
+      Kind::Mind => "mind",
+      Kind::Acorn => "unii",
+      Kind::Tool => "tool",
+      Kind::Echo => "echo",
+      Kind::Note => "note",
     }
+  }
 }
 
 /// An image for a model: its mime type, its bytes in base64.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Img {
-    #[serde(rename = "type")]
-    pub mime: String,
-    pub data: String,
+  #[serde(rename = "type")]
+  pub mime: String,
+  pub data: String,
 }
 
 /// A message for the agent: its text, its images, and whether it cuts in
 /// on a call at work (the words of whoever the call works for).
 #[derive(Clone, Debug, Default)]
 pub struct Say {
-    pub text: String,
-    pub imgs: Vec<Img>,
-    pub cut: bool,
+  pub text: String,
+  pub imgs: Vec<Img>,
+  pub cut: bool,
 }
 
 /// A text block of a call's message; `mark`: a cache entry ends after it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
-    pub text: String,
-    pub mark: bool,
+  pub text: String,
+  pub mark: bool,
 }
 
 impl Block {
-    pub fn new(text: impl Into<String>, mark: bool) -> Block {
-        Block { text: text.into(), mark }
-    }
+  pub fn new(text: impl Into<String>, mark: bool) -> Block {
+    Block { text: text.into(), mark }
+  }
 }
 
 /// What a call serves: the chat's turn, a summary (the chat's, an
 /// import's), an agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Served {
-    Chat,
-    Compactor,
-    Import,
-    Agent,
+  Chat,
+  Compactor,
+  Import,
+  Agent,
 }
 
 impl Served {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Served::Chat => "chat",
-            Served::Compactor => "compactor",
-            Served::Import => "import",
-            Served::Agent => "agent",
-        }
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Served::Chat => "chat",
+      Served::Compactor => "compactor",
+      Served::Import => "import",
+      Served::Agent => "agent",
     }
+  }
 }
 
 /// What requests used, summed: how many, tokens in (new, and read from
 /// DeepSeek's cache) and out, USD, when the last ended (ms).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Spend {
-    pub n: u64,
-    pub input: u64,
-    pub read: u64,
-    pub output: u64,
-    pub usd: f64,
-    pub at: i64,
+  pub n: u64,
+  pub input: u64,
+  pub read: u64,
+  pub output: u64,
+  pub usd: f64,
+  pub at: i64,
 }
 
 impl std::ops::Add for Spend {
-    type Output = Spend;
-    fn add(self, b: Spend) -> Spend {
-        Spend {
-            n: self.n + b.n,
-            input: self.input + b.input,
-            read: self.read + b.read,
-            output: self.output + b.output,
-            usd: self.usd + b.usd,
-            at: self.at.max(b.at),
-        }
+  type Output = Spend;
+  fn add(self, b: Spend) -> Spend {
+    Spend {
+      n: self.n + b.n,
+      input: self.input + b.input,
+      read: self.read + b.read,
+      output: self.output + b.output,
+      usd: self.usd + b.usd,
+      at: self.at.max(b.at),
     }
+  }
 }
 
 /// Milliseconds since 1970.
 pub fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
+  chrono::Utc::now().timestamp_millis()
 }

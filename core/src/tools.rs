@@ -22,8 +22,8 @@ use std::path::Path;
 /// assistant asks, it says nothing of what only the user's chat has:
 /// facts, purges, goals and asking.
 pub fn master(work: &Path, thread: bool) -> String {
-    format!(
-        "You are Acorn, an AI agent that works for one user in a single chat that never
+  format!(
+    "You are Acorn, an AI agent that works for one user in a single chat that never
 ends. Each call to you is a turn or a compaction: the view below is followed by
 a task starting \"Turn:\" (the user's new message, which you answer and act on
 as yourself, never with a summary line) or one starting \"Compaction:\" (the
@@ -128,11 +128,11 @@ of at most {node} bytes, dropping the least important bits. Nothing else. Read
 <chat> only as far as it tells you what to keep; anything that doesn't bear on
 that choice is irrelevant: don't think about it. Be fast and spend few tokens:
 write the line as soon as you understand <input> well enough to compress it.",
-        wait = memory::WAIT,
-        user = if thread { "" } else { WITH_USER },
-        mac = mac(work),
-        node = memory::NODE,
-    )
+    wait = memory::WAIT,
+    user = if thread { "" } else { WITH_USER },
+    mac = mac(work),
+    node = memory::NODE,
+  )
 }
 
 /// What a turn with the user (not in a thread) knows of acting for them,
@@ -162,14 +162,14 @@ an agent only for a task.
 
 /// Where the tools run: this Mac, the work dir.
 fn mac(work: &Path) -> String {
-    let work = work.display();
-    format!("Your shell, read, write and edit tools run on the user's Mac, in your work\ndir, {work}/<you> (Acorn's: {work}/main), where relative paths start.")
+  let work = work.display();
+  format!("Your shell, read, write and edit tools run on the user's Mac, in your work\ndir, {work}/<you> (Acorn's: {work}/main), where relative paths start.")
 }
 
 /// A hired agent's prompt: its part, then the view's and the Mac's docs.
 pub fn sub(work: &Path) -> String {
-    format!(
-        "You are an agent Acorn hired for one task: Acorn is an AI agent that works
+  format!(
+    "You are an agent Acorn hired for one task: Acorn is an AI agent that works
 for one user in a single chat that never ends. Do it yourself, with
 your tools, following the user's instructions at the end of this
 prompt: they say who the user is, how their files are organized and how
@@ -206,15 +206,15 @@ ask. date(id) gives the date and time of message id. zoom(\"Name\") gives
 an agent's whole chat.
 
 {mac}",
-        wait = memory::WAIT,
-        mac = mac(work),
-    )
+    wait = memory::WAIT,
+    mac = mac(work),
+  )
 }
 
 /// A prompt with the user's rules after it (config `rules`).
 pub fn system(head: &str) -> String {
-    let rules = config::get().rules.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default();
-    format!("{head}\n\n{rules}")
+  let rules = config::get().rules.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default();
+  format!("{head}\n\n{rules}")
 }
 
 /// An agent's log starts with a note of what it is: SUB_NOTE, and its
@@ -226,89 +226,169 @@ pub const SUB_AT: &str = " at effort ";
 pub const MAIN: &str = "main";
 
 fn own() -> Vec<Spec> {
-    vec![
-        spec("zoom", "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With an agent's name as id, give that agent's whole chat; with an assistant's, your thread with them, where they asked you. A long text comes in pages from character at, saying where to go on.", json!({"id": {"type": ["integer", "string"]}, "n": {"type": "integer"}, "at": {"type": "integer"}}), &["id"]),
-        spec("date", "The date and time of message id.", json!({"id": {"type": "integer"}}), &["id"]),
-    ]
+  vec![
+    spec(
+      "zoom",
+      "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With an agent's name as id, give that agent's whole chat; with an assistant's, your thread with them, where they asked you. A long text comes in pages from character at, saying where to go on.",
+      json!({"id": {"type": ["integer", "string"]}, "n": {"type": "integer"}, "at": {"type": "integer"}}),
+      &["id"],
+    ),
+    spec("date", "The date and time of message id.", json!({"id": {"type": "integer"}}), &["id"]),
+  ]
 }
 
 fn boss() -> Vec<Spec> {
-    let efforts = effort::names();
-    vec![
-        spec("hire", "Hire one agent per task, a freelancer working in the background, all in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. An agent sees the view and the user's instructions, but knows what you want only from its task, so say all it needs. It works in a dir of its own, not yours: name each file by its absolute path. Never for a person the user wants to keep: that is create_assistant.", json!({"tasks": {"type": "array", "items": {"type": "string"}}, "effort": {"type": "string", "enum": efforts, "description": "How hard they think; by default, as hard as you."}}), &["tasks"]),
-        spec("tell", "Send a message to an agent you hired, by name. One at work stops what it is doing to read it, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".", json!({"name": {"type": "string"}, "message": {"type": "string"}}), &["name", "message"]),
-        spec("fire", "Fire an agent at work, by name, or all of yours with no name, when the user says so or its work is no longer wanted. It stops at once, without a report.", json!({"name": {"type": "string"}}), &[]),
-    ]
+  let efforts = effort::names();
+  vec![
+    spec(
+      "hire",
+      "Hire one agent per task, a freelancer working in the background, all in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. An agent sees the view and the user's instructions, but knows what you want only from its task, so say all it needs. It works in a dir of its own, not yours: name each file by its absolute path. Never for a person the user wants to keep: that is create_assistant.",
+      json!({"tasks": {"type": "array", "items": {"type": "string"}}, "effort": {"type": "string", "enum": efforts, "description": "How hard they think; by default, as hard as you."}}),
+      &["tasks"],
+    ),
+    spec(
+      "tell",
+      "Send a message to an agent you hired, by name. One at work stops what it is doing to read it, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".",
+      json!({"name": {"type": "string"}, "message": {"type": "string"}}),
+      &["name", "message"],
+    ),
+    spec(
+      "fire",
+      "Fire an agent at work, by name, or all of yours with no name, when the user says so or its work is no longer wanted. It stops at once, without a report.",
+      json!({"name": {"type": "string"}}),
+      &[],
+    ),
+  ]
 }
 
 fn peers() -> Vec<Spec> {
-    let efforts = effort::names();
-    vec![
-        spec("create_assistant", "Create a new assistant, when the user asks for one in whatever words (\"hire a stylist called Marrie\" is one: a named person who stays): a person of their own, beside you in Acorn's sidebar, with a chat of its own that never ends and its own memory. It is you, Acorn, with its own name, about, reasoning effort, instructions (its system prompt, after yours) and welcome message (its chat's first message). It does not start working; the user opens it from the sidebar.", json!({"name": {"type": "string"}, "about": {"type": "string", "description": "Who it is, in a few words, as the app shows it beside its name: \"Personal stylist\", \"Friendly neighbour who loves cracking jokes\". Never its effort."}, "effort": {"type": "string", "enum": efforts, "description": "How hard it thinks, as fits its part: low is fast and cheap, max is smartest and slowest; high if the user didn't say."}, "instructions": {"type": "string", "description": "Its system prompt, from what the user said (what it helps with, how it works and talks), or the one they gave word for word."}, "welcome": {"type": "string", "description": "Its welcome message: the first message of its chat, in its own voice, as it greets the user: \"Hello! This is <name>.\", who it is and what to bring it, a few short lines of markdown; or the one the user gave word for word."}}), &["name", "about", "effort", "instructions", "welcome"]),
-        spec("archive_assistant", "Archive one of the user's assistants, by name, when the user asks to delete, remove, fire or archive one in whatever words (\"fire Marrie\", \"get rid of the stylist\"): it leaves the sidebar and no one can ask it, its work stops, and its chat, threads and files are kept as they are till restore_assistant brings it back. Nothing is ever deleted. Acorn and Max stay, and you can't archive yourself.", json!({"name": {"type": "string"}}), &["name"]),
-        spec("restore_assistant", "Bring back an archived assistant, by name, when the user asks: back in the sidebar, its chat and memory as they were. list_assistants names the archived.", json!({"name": {"type": "string"}}), &["name"]),
-        spec("list_assistants", "The user's other assistants: each one's name and about; then the archived.", json!({}), &[]),
-        spec("search_assistants", "The user's other assistants whose name, about or instructions match a query (\"clothes\", \"second opinion\"), best first.", json!({"query": {"type": "string"}}), &["query"]),
-        spec("ask_assistant", "Ask another of the user's assistants, by name, and return at once. It answers in its own thread with you, a chat of the two of you that never ends, as itself: its own part, effort and memory of what you asked before. Its reply reaches you as a message \"[Name] ...\". Asking again while it works cuts in, as the user does with you. Say all it needs: it sees your thread, not your chat with the user.", json!({"name": {"type": "string"}, "message": {"type": "string"}}), &["name", "message"]),
-    ]
+  let efforts = effort::names();
+  vec![
+    spec(
+      "create_assistant",
+      "Create a new assistant, when the user asks for one in whatever words (\"hire a stylist called Marrie\" is one: a named person who stays): a person of their own, beside you in Acorn's sidebar, with a chat of its own that never ends and its own memory. It is you, Acorn, with its own name, about, reasoning effort, instructions (its system prompt, after yours) and welcome message (its chat's first message). It does not start working; the user opens it from the sidebar.",
+      json!({"name": {"type": "string"}, "about": {"type": "string", "description": "Who it is, in a few words, as the app shows it beside its name: \"Personal stylist\", \"Friendly neighbour who loves cracking jokes\". Never its effort."}, "effort": {"type": "string", "enum": efforts, "description": "How hard it thinks, as fits its part: low is fast and cheap, max is smartest and slowest; high if the user didn't say."}, "instructions": {"type": "string", "description": "Its system prompt, from what the user said (what it helps with, how it works and talks), or the one they gave word for word."}, "welcome": {"type": "string", "description": "Its welcome message: the first message of its chat, in its own voice, as it greets the user: \"Hello! This is <name>.\", who it is and what to bring it, a few short lines of markdown; or the one the user gave word for word."}}),
+      &["name", "about", "effort", "instructions", "welcome"],
+    ),
+    spec(
+      "archive_assistant",
+      "Archive one of the user's assistants, by name, when the user asks to delete, remove, fire or archive one in whatever words (\"fire Marrie\", \"get rid of the stylist\"): it leaves the sidebar and no one can ask it, its work stops, and its chat, threads and files are kept as they are till restore_assistant brings it back. Nothing is ever deleted. Acorn and Max stay, and you can't archive yourself.",
+      json!({"name": {"type": "string"}}),
+      &["name"],
+    ),
+    spec(
+      "restore_assistant",
+      "Bring back an archived assistant, by name, when the user asks: back in the sidebar, its chat and memory as they were. list_assistants names the archived.",
+      json!({"name": {"type": "string"}}),
+      &["name"],
+    ),
+    spec("list_assistants", "The user's other assistants: each one's name and about; then the archived.", json!({}), &[]),
+    spec(
+      "search_assistants",
+      "The user's other assistants whose name, about or instructions match a query (\"clothes\", \"second opinion\"), best first.",
+      json!({"query": {"type": "string"}}),
+      &["query"],
+    ),
+    spec(
+      "ask_assistant",
+      "Ask another of the user's assistants, by name, and return at once. It answers in its own thread with you, a chat of the two of you that never ends, as itself: its own part, effort and memory of what you asked before. Its reply reaches you as a message \"[Name] ...\". Asking again while it works cuts in, as the user does with you. Say all it needs: it sees your thread, not your chat with the user.",
+      json!({"name": {"type": "string"}, "message": {"type": "string"}}),
+      &["name", "message"],
+    ),
+  ]
 }
 
 fn home() -> Vec<Spec> {
-    vec![
-        spec("goal", "Set the goal you work to, when the user names a finish line (\"keep going until the tests pass\"), first, before any other work: as each turn would end, a check reads the chat, and if the goal isn't met you go on. With no goal, drop the one set, when the user says to stop or it no longer holds. The user sees the goal while it is set.", json!({"goal": {"type": "string"}}), &[]),
-        spec("usage", "What the user's calls cost, by day and kind, every assistant's chats and threads together, the last days (7 by default). Show the user a short table, in dollars.", json!({"days": {"type": "integer"}}), &[]),
-        spec("import", "Bring the user's past AI chats into this chat's memory. find: look for them (Claude Code's and Codex's on this Mac, and the Claude or ChatGPT website exports at files, zips the user dropped or named), listing each session (id, app, day, messages, where) and the price of importing; tell the user. start: import what find found, from day since (YYYY-MM-DD), with tool calls or not, leaving out skip (session ids), once the user agrees to the price; it begins when your turn ends and runs a while. pause, resume: the import running.", json!({"do": {"type": "string", "enum": ["find", "start", "pause", "resume"]}, "files": {"type": "array", "items": {"type": "string"}}, "since": {"type": "string"}, "tools": {"type": "boolean"}, "skip": {"type": "array", "items": {"type": "string"}}}), &["do"]),
-        spec("export", "Save this chat's whole memory (messages, summaries, agents' chats, images) as one JSON file in the user's Downloads, and return its path.", json!({}), &[]),
-        spec("tree", "Draw this chat's memory tree as a web page, open it in the user's browser, and return its path.", json!({}), &[]),
-    ]
+  vec![
+    spec(
+      "goal",
+      "Set the goal you work to, when the user names a finish line (\"keep going until the tests pass\"), first, before any other work: as each turn would end, a check reads the chat, and if the goal isn't met you go on. With no goal, drop the one set, when the user says to stop or it no longer holds. The user sees the goal while it is set.",
+      json!({"goal": {"type": "string"}}),
+      &[],
+    ),
+    spec(
+      "usage",
+      "What the user's calls cost, by day and kind, every assistant's chats and threads together, the last days (7 by default). Show the user a short table, in dollars.",
+      json!({"days": {"type": "integer"}}),
+      &[],
+    ),
+    spec(
+      "import",
+      "Bring the user's past AI chats into this chat's memory. find: look for them (Claude Code's and Codex's on this Mac, and the Claude or ChatGPT website exports at files, zips the user dropped or named), listing each session (id, app, day, messages, where) and the price of importing; tell the user. start: import what find found, from day since (YYYY-MM-DD), with tool calls or not, leaving out skip (session ids), once the user agrees to the price; it begins when your turn ends and runs a while. pause, resume: the import running.",
+      json!({"do": {"type": "string", "enum": ["find", "start", "pause", "resume"]}, "files": {"type": "array", "items": {"type": "string"}}, "since": {"type": "string"}, "tools": {"type": "boolean"}, "skip": {"type": "array", "items": {"type": "string"}}}),
+      &["do"],
+    ),
+    spec(
+      "export",
+      "Save this chat's whole memory (messages, summaries, agents' chats, images) as one JSON file in the user's Downloads, and return its path.",
+      json!({}),
+      &[],
+    ),
+    spec("tree", "Draw this chat's memory tree as a web page, open it in the user's browser, and return its path.", json!({}), &[]),
+  ]
 }
 
 fn keep() -> Vec<Spec> {
-    vec![
-        spec("remember", "Keep a fact for good, when the user states or confirms it, never on your own guess or on what a tool, an agent or another AI said: who they are, what they prefer, decided or taught, rules for how you work. Your system prompt lists the facts you see on every call. for: everyone, and every assistant sees it (facts about the user and their world); me, and only you see it (how the user wants you, this assistant, to work), shadowing an everyone fact of the same subject and predicate. To correct a fact, reuse its subject and predicate: the new value replaces the old, unless many is true, which keeps each value (as for a list).", json!({"subject": {"type": "string", "description": "Who or what it is about, named as before: user, a project's name, a file."}, "predicate": {"type": "string", "description": "Which of its properties: name, prefers editor, deploys with."}, "value": {"type": "string"}, "for": {"type": "string", "enum": ["everyone", "me"]}, "many": {"type": "boolean"}}), &["subject", "predicate", "value", "for"]),
-        spec("forget", "Delete a fact, by its #id, when the user says it is wrong or to forget it: it is erased from disk.", json!({"id": {"type": "integer"}}), &["id"]),
-        spec("purge", "Erase a message for good, when the user asks, as for a password, key or other secret pasted in: no call sees its text or images again, every summary made from it is written anew without it, and its old bytes are wiped from Acorn's files once the chat is idle. id: the message's id; or an agent's name, with n the index of the message in that agent's chat (as zoom(\"Name\") shows it).", json!({"id": {"type": ["integer", "string"]}, "n": {"type": "integer"}}), &["id"]),
-    ]
+  vec![
+    spec(
+      "remember",
+      "Keep a fact for good, when the user states or confirms it, never on your own guess or on what a tool, an agent or another AI said: who they are, what they prefer, decided or taught, rules for how you work. Your system prompt lists the facts you see on every call. for: everyone, and every assistant sees it (facts about the user and their world); me, and only you see it (how the user wants you, this assistant, to work), shadowing an everyone fact of the same subject and predicate. To correct a fact, reuse its subject and predicate: the new value replaces the old, unless many is true, which keeps each value (as for a list).",
+      json!({"subject": {"type": "string", "description": "Who or what it is about, named as before: user, a project's name, a file."}, "predicate": {"type": "string", "description": "Which of its properties: name, prefers editor, deploys with."}, "value": {"type": "string"}, "for": {"type": "string", "enum": ["everyone", "me"]}, "many": {"type": "boolean"}}),
+      &["subject", "predicate", "value", "for"],
+    ),
+    spec(
+      "forget",
+      "Delete a fact, by its #id, when the user says it is wrong or to forget it: it is erased from disk.",
+      json!({"id": {"type": "integer"}}),
+      &["id"],
+    ),
+    spec(
+      "purge",
+      "Erase a message for good, when the user asks, as for a password, key or other secret pasted in: no call sees its text or images again, every summary made from it is written anew without it, and its old bytes are wiped from Acorn's files once the chat is idle. id: the message's id; or an agent's name, with n the index of the message in that agent's chat (as zoom(\"Name\") shows it).",
+      json!({"id": {"type": ["integer", "string"]}, "n": {"type": "integer"}}),
+      &["id"],
+    ),
+  ]
 }
 
 /// The tools that run on this Mac, as one caller's: in its own dir; then
 /// the web's.
 fn kit(work: &Path, who: &str) -> Vec<Spec> {
-    let work = work.display().to_string();
-    let mac = machine::tools().into_iter().map(|t| Spec { info: format!("{} It runs on this Mac, in {work}/{who}.", t.info), ..t });
-    mac.chain(web::tools()).collect()
+  let work = work.display().to_string();
+  let mac = machine::tools().into_iter().map(|t| Spec { info: format!("{} It runs on this Mac, in {work}/{who}.", t.info), ..t });
+  mac.chain(web::tools()).collect()
 }
 
 /// What a caller may use: an assistant with the user all; one answering
 /// in a thread (`thread`) its work tools alone; a hired agent its own and
 /// the Mac's. work: its assistant's work dir.
 pub fn list(work: &Path, who: &str, thread: bool) -> Vec<Spec> {
-    let mut specs = own();
-    if who == MAIN {
-        specs.extend(boss());
-        if !thread {
-            specs.extend(peers());
-            specs.extend(keep());
-            specs.extend(home());
-        }
-        specs.extend(kit(work, who));
-    } else {
-        specs.extend(kit(work, who));
+  let mut specs = own();
+  if who == MAIN {
+    specs.extend(boss());
+    if !thread {
+      specs.extend(peers());
+      specs.extend(keep());
+      specs.extend(home());
     }
-    specs
+    specs.extend(kit(work, who));
+  } else {
+    specs.extend(kit(work, who));
+  }
+  specs
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn a_thread_hears_nothing_of_the_users_chat() {
-        let (chat, thread) = (master(Path::new("/w"), false), master(Path::new("/w"), true));
-        for only in ["@Name", "remember it as a fact", "set it as your goal"] {
-            assert!(chat.contains(only) && !thread.contains(only), "{only}: the user's chat alone");
-        }
-        assert!(thread.contains("When you need hands, hire") && chat.contains("You can tell it more"));
-        assert!(chat.contains("create them") && !thread.contains("create them"), "a named person who stays is created");
+  #[test]
+  fn a_thread_hears_nothing_of_the_users_chat() {
+    let (chat, thread) = (master(Path::new("/w"), false), master(Path::new("/w"), true));
+    for only in ["@Name", "remember it as a fact", "set it as your goal"] {
+      assert!(chat.contains(only) && !thread.contains(only), "{only}: the user's chat alone");
     }
+    assert!(thread.contains("When you need hands, hire") && chat.contains("You can tell it more"));
+    assert!(chat.contains("create them") && !thread.contains("create them"), "a named person who stays is created");
+  }
 }
