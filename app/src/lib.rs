@@ -83,15 +83,15 @@ impl Ui {
         self.assistants.with_untracked(|all| all.iter().find(|a| a.id == id).map(|a| a.name.clone())).unwrap_or_else(|| id.to_string())
     }
 
-    /// A chat's model, empty: an assistant's opens with the AI notice; a
+    /// A chat's model, empty: an assistant's opens with its hello; a
     /// thread's, with who asks and who answers there.
     fn fresh(self, id: &str) -> Model {
         match id.split_once('/') {
             Some((answers, asks)) => {
                 let (answers, asks) = (self.named(answers), self.named(asks));
-                Model::headed(format!("{answers}'s thread with {asks}: {asks} asks, {answers} answers. Esc goes back."), false)
+                Model::headed(format!("{answers}'s thread with {asks}: {asks} asks, {answers} answers. Esc goes back."))
             }
-            None => Model::headed(model::notice(&self.named(id)), true),
+            None => Model::default(),
         }
     }
 

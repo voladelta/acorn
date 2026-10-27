@@ -33,7 +33,6 @@ fn each_assistant_opens_its_own_chat() {
     let dir = chat();
     let mut app = open();
     let wait = Duration::from_secs(20);
-    app.wait_for_within("text:Acorn is an AI, not a person, and can make mistakes.", wait).unwrap();
     app.wait_for_within("Hello! This is Acorn.", wait).unwrap();
     app.wait_for_within("text:Acorn  ·  General assistant", wait).unwrap();
 

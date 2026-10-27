@@ -44,23 +44,23 @@ pub(crate) use imports::Batch;
 /// so no compactor call summarizes it.
 pub const HELLO: &str = "Hello! This is Acorn.
 
-I'm like ChatGPT, but there's only **one chat** between us. *Forever.*
+One chat between us, and it never ends.
 
-Nothing we say is lost. It grows into a **memory tree**: recent days sharp, older ones in broad strokes.
+Every message stays. Old days fold into short notes, recent ones stay sharp, and when the details matter I unfold them. Talk to me for a year and I'll still find what you said on day one.
 
-Ask me to build something. Then the next thing. Keep asking, for days, weeks, years.
+Three ways to start:
 
-Then ask about your past:
+**Bring your past.** Say \"import my chats\" and I'll pull in your old Claude and ChatGPT history.
 
-> “What was that app I used to turn ads into cats?”
+**Hand me a job.** Code, research, files on your Mac. Big jobs I split between helpers who work side by side.
 
-I'll dig it up:
+**Tell me what's true.** \"I'm vegetarian.\" \"Prod runs on Ubuntu.\" I keep facts like these for good.
 
-> “Not an app: `ad2cat.py`, from a CatBoard post 7 years ago. Link's dead, but here's the script.”
+For a hard call, Max is in the sidebar.
 
-How? No new model. No magic. Just a plain chatbot with a memory that grows.";
+So: day one. What are we building?";
 
-pub const HELLO_LINE: &str = "unii: hello: Acorn, one endless chat kept in a memory tree, recent days in more detail; build anything for years; recalls the past (ad2cat.py); a chatbot with a memory system.";
+pub const HELLO_LINE: &str = "unii: hello: Acorn, one endless chat; every message kept, old days folded into notes, unfolded when needed; to start: import past Claude and ChatGPT chats, hand it a job (helpers in parallel), tell it facts to keep; Max in the sidebar for hard calls.";
 
 /// A message logged: its pages [id, end).
 #[derive(Clone, Copy, Debug)]

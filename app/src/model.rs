@@ -5,25 +5,14 @@
 //! answer what to send back. The main chat shows what its agent sees: the
 //! view's parts as blocks ("nx"), from the turn on each message whole (1x)
 //! and its thoughts, then what streams or what the turn waits on. An
-//! agent's page is its log, kept live. The AI notice (a thread's caption)
-//! opens the chat and comes again before a message in another 3-hour
-//! window. The only act that changes anything is a message; the rest
-//! look.
+//! agent's page is its log, kept live. A thread opens with its caption.
+//! The only act that changes anything is a message; the rest look.
 
 use crate::call::{self, Call};
 use crate::text;
 use acorn_core::{Kind, Spend};
 use acorn_core::wire::{Command, Entry, Event, Live, Node, Progress, Seg, State, Wait, live_push};
 use std::collections::HashMap;
-
-/// The disclosure the chat shows (EU AI Act art. 50, California SB 243,
-/// New York GBL art. 47), of the assistant named.
-pub fn notice(name: &str) -> String {
-    format!("{name} is an AI, not a person, and can make mistakes.")
-}
-
-/// The AI notice's period (ms).
-const NOTICE: i64 = 3 * 60 * 60 * 1000;
 
 const WAIT: &str = "summarizing…";
 const SUMS: &str = "summarizing earlier messages…";
@@ -40,15 +29,15 @@ pub struct Page {
     pub live: Vec<Live>,
 }
 
-/// The chat as the window knows it. head: what it opens with (the AI
-/// notice, again in each new 3-hour window; a thread's caption, once);
+/// The chat as the window knows it. head: what it opens with (a thread's
+/// caption; None: nothing);
 /// fold: the tops shown (None: not folded); nodes and whole: the
 /// summaries and messages known; open: the blocks opened (true) or shut
 /// by hand; minds: the thoughts after each message; pages: the agents'
 /// asked for; page: the one shown (None: the chat).
 #[derive(Clone, Debug)]
 pub struct Model {
-    pub head: (String, bool),
+    pub head: Option<String>,
     pub state: Option<State>,
     pub parts: Vec<Seg>,
     pub turn: u64,
@@ -65,7 +54,7 @@ pub struct Model {
 impl Default for Model {
     fn default() -> Model {
         Model {
-            head: (String::new(), false),
+            head: None,
             state: None,
             parts: Vec::new(),
             turn: u64::MAX,
@@ -258,15 +247,13 @@ impl Model {
     // Rows
     // ----
 
-    /// A chat's model, empty, opening with `head`, again in each new
-    /// 3-hour window if `again`.
-    pub fn headed(head: String, again: bool) -> Model {
-        Model { head: (head, again), ..Model::default() }
+    /// A chat's model, empty, opening with `head`.
+    pub fn headed(head: String) -> Model {
+        Model { head: Some(head), ..Model::default() }
     }
 
     /// The page shown, as items (each a part's rows, or an agent's entry).
     pub fn body(&self) -> Vec<Vec<Row>> {
-        let (head, again) = (self.head.0.as_str(), self.head.1);
         if let Some(name) = &self.page {
             let page = self.pages.get(name);
             let at = if self.agents().contains(name) { "at work" } else { "done" };
@@ -278,15 +265,8 @@ impl Model {
             let rows = tops.iter().map(|&(id, n)| self.part_rows(id, n, u64::MAX, false));
             return std::iter::once(vec![Row::Cap(FOLD.into())]).chain(rows).collect();
         }
-        let mut items = vec![vec![Row::Cap(head.into())]];
-        for (k, &part) in self.parts.iter().enumerate() {
-            let mut rows = self.part_rows(part.0, part.1, self.turn, true);
-            if again && self.due(part, k.checked_sub(1).map(|k| self.parts[k])) {
-                rows.insert(0, Row::Cap(head.into()));
-            }
-            items.push(rows);
-        }
-        items
+        let head = self.head.iter().map(|h| vec![Row::Cap(h.clone())]);
+        head.chain(self.parts.iter().map(|&(id, n)| self.part_rows(id, n, self.turn, true))).collect()
     }
 
     /// What streams on the page shown, and what the turn waits on.
@@ -312,20 +292,6 @@ impl Model {
             _ => format!("waiting for {}…", acorn_core::ai::deepseek::MODEL),
         };
         std::iter::once(Row::Cap(cap)).chain(load).collect()
-    }
-
-    /// Whether the AI notice comes before part, after the part `before`: a
-    /// message from the turn on, in another window than that part's.
-    fn due(&self, part: Seg, before: Option<Seg>) -> bool {
-        let Some(last) = before.and_then(|b| self.window(b)) else { return false };
-        part.1 == 1 && part.0 >= self.turn && self.window(part).is_some_and(|w| w != last)
-    }
-
-    /// The window (NOTICE) of a part's last date (None: not known).
-    fn window(&self, (id, n): Seg) -> Option<i64> {
-        let date = if n == 1 { self.whole.get(&id).map(|e| e.date.as_str()) } else { self.nodes.get(&(id, n)).map(|n| n.to.as_str()) }?;
-        let ms = chrono::DateTime::parse_from_rfc3339(date).ok()?.timestamp_millis();
-        Some(ms.div_euclid(NOTICE))
     }
 
     /// t: the turn; talk: whether talk opens by itself (not when folded).
@@ -407,13 +373,12 @@ mod tests {
 
     #[test]
     fn the_chat_shows_blocks_then_the_turn_whole() {
-        let mut m = Model::headed(notice("Doug"), true);
+        let mut m = Model::default();
         m.hear(Event::Know { whole: vec![(0, entry(Kind::User, "hi")), (1, entry(Kind::Tool, "shell {\"command\":\"ls\"}"))], nodes: vec![] });
         m.hear(Event::View { parts: vec![(0, 1), (1, 1)], turn: 1 });
-        let body = Model { head: (notice("Doug"), true), ..m }.body();
-        assert_eq!(body[0], vec![Row::Cap("Doug is an AI, not a person, and can make mistakes.".into())]);
-        assert!(matches!(&body[1][0], Row::Box { .. }), "a user's message before the turn opens");
-        assert!(matches!(&body[2][0], Row::Msg { call: Some(c), .. } if c.name == "shell"));
+        let body = m.body();
+        assert!(matches!(&body[0][0], Row::Box { .. }), "a user's message before the turn opens");
+        assert!(matches!(&body[1][0], Row::Msg { call: Some(c), .. } if c.name == "shell"));
     }
 
     /// Words are the one act: sent at work they go as any (the engine cuts
