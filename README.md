@@ -3,7 +3,6 @@
 A native macOS app for one chat with an AI agent that never ends: every message is kept and summarized into a memory tree the agent can zoom back into, so the chat outgrows the model's context window without losing anything.
 
 ```bash
-cd acorn
 DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 ```
 
@@ -45,11 +44,10 @@ The model is told to find the latest mention of anything it needs in the view an
 
 Acorn builds from source and runs on macOS only (`main.rs` stops with a compile error elsewhere). It needs a Rust toolchain with the 2024 edition and a DeepSeek API key.
 
-<!-- TODO: Acorn is on the local `acorn` branch, not yet pushed to origin; add `-b acorn` (or drop it once merged into main). -->
 
 ```bash
-git clone https://github.com/VictorTaelin/UniiChat
-cd UniiChat/acorn
+git clone https://github.com/coderotator/acorn
+cd acorn
 cargo build --release -p acorn
 ```
 
@@ -150,7 +148,6 @@ Export memory writes the whole memory as JSON to `~/Downloads/acorn-memory-<date
 ## Development
 
 ```bash
-cd acorn
 cargo build
 cargo test
 cargo clippy --all-targets

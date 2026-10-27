@@ -1,6 +1,9 @@
 //! Acorn on this Mac: the root in a window of its own. As the window
 //! closes, every process the agent started dies with it.
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[cfg(target_os = "macos")]
 fn main() -> impl std::process::Termination {
     env_logger::init();
