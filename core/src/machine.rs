@@ -1,7 +1,7 @@
 //! Machine
 //! =======
 //! The tools that touch this Mac: shell, read, write, edit (TOOLS), each in
-//! its agent's dir under the work dir (computer use is `computer`'s). A
+//! its agent's dir under the work dir. A
 //! stop kills the job's shell and its process group. As Acorn quits,
 //! `end` kills every shell's group, and any process marked ACORN_RUN that
 //! left it. A file changed (write over one, edit) answers as a unified

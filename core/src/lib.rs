@@ -2,8 +2,7 @@
 //! ==============
 //! One chat that never ends per assistant (`chat`, `assistant`), kept forever in a memory tree
 //! (`memory`, built in the background by `compactor`), answered by an
-//! agent on DeepSeek (`ai`) with tools on this Mac (`tools`, `machine`,
-//! `computer`). The app (the `acorn` crate) only shows it: it sends
+//! agent on DeepSeek (`ai`) with tools on this Mac (`tools`, `machine`). The app (the `acorn` crate) only shows it: it sends
 //! `Command`s and hears `Event`s (`wire`).
 //!
 //! A chat is kept in its chat.db (`memory`); what the user asked to keep
@@ -14,7 +13,6 @@ pub mod assistant;
 pub mod chat;
 pub mod clip;
 pub mod compactor;
-pub mod computer;
 pub mod config;
 pub mod disk;
 pub mod facts;
@@ -92,14 +90,13 @@ impl Block {
 }
 
 /// What a call serves: the chat's turn, a summary (the chat's, an
-/// import's), an agent, a computer-use agent.
+/// import's), an agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Served {
     Chat,
     Compactor,
     Import,
     Agent,
-    Computer,
 }
 
 impl Served {
@@ -109,7 +106,6 @@ impl Served {
             Served::Compactor => "compactor",
             Served::Import => "import",
             Served::Agent => "agent",
-            Served::Computer => "computer",
         }
     }
 }

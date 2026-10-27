@@ -23,7 +23,7 @@ pub const KEY_VAR: &str = "DEEPSEEK_API_KEY";
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// $ACORN_DIR: config.json, the computer helper.
+    /// $ACORN_DIR: config.json.
     pub dir: PathBuf,
     /// Where the chats live, a dir each by id, and Acorn's.
     pub chats: PathBuf,
@@ -41,8 +41,6 @@ pub struct Config {
     /// What hired agents run on (none: their assistant's effort).
     pub agents: Option<Effort>,
     pub view: usize,
-    /// Whether the agent may use this Mac's screen, mouse and keyboard.
-    pub computer: bool,
     pub key: String,
 }
 
@@ -88,7 +86,6 @@ impl Config {
             compactor: run("compactor", &get("compactor", "low"))?,
             agents: if agents.is_empty() { None } else { Some(run("agents", &agents)?) },
             view: get("view", "").parse().ok().filter(|&v| v > 0).map_or(MOST_VIEW, |v: usize| v.min(MOST_VIEW)),
-            computer: get("computer", "") == "1",
             key: key.trim().to_string(),
             chat,
             dir,

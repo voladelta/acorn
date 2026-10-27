@@ -65,7 +65,6 @@ pub(super) fn told(days: i64) -> String {
             "compactor" => "summaries",
             "import" => "import summaries",
             "agent" => "agents",
-            "computer" => "computer use",
             k => k,
         }
         .to_string()

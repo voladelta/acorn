@@ -6,7 +6,7 @@
 //! command as itself; a file tool its path, read's lines after it; edit's
 //! files (the diff comes in its result); zoom and date the message
 //! (`#6243`, a line `#6243+8`, an agent by name); hire its tasks, tell
-//! and computer their name and text in blocks. Any other call shows its
+//! its name and text in a block. Any other call shows its
 //! name and short values as arguments, over a block for each other value,
 //! keyed by its name unless alone. A call still streaming reads as its
 //! input so far: its open string and brackets closed, else up to its last
@@ -104,7 +104,6 @@ fn shown(name: &str, x: Map<String, Value>) -> (String, Vec<Code>) {
             (head, tasks.into_iter().flat_map(text_block).collect())
         }
         "tell" => (str("name"), x.get("message").map(text_block).unwrap_or_default()),
-        "computer" if x.contains_key("task") => (String::new(), x.get("task").map(text_block).unwrap_or_default()),
         _ => input_shown(x),
     }
 }

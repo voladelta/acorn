@@ -64,7 +64,6 @@ pub fn tool_glyph(name: &str) -> &'static str {
         "import" => "📥",
         "export" => "💾",
         "tree" => "🌳",
-        "computer" => "🖱️",
         _ => "🔧",
     }
 }

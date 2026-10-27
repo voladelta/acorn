@@ -17,7 +17,7 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Memory tree** | Every message kept in `chat.db`; a binary tree of summaries, at most 512 bytes each, built in the background by the compactor |
 | **Bounded view** | The view the model reads stays under 2 MB (about 500k tokens, within DeepSeek's 1M context); past that, the oldest lines merge first |
 | **Zoom** | `zoom(id, n)` opens a line into the two it was made from; `zoom(id, 1)` gives a message whole, with its images |
-| **Agent tools** | Shell, read, write and edit on your Mac, in a work dir of the agent's own; web search and fetch, through DeepSeek's Search and Fetch APIs; agents hired for one task, in parallel; computer use (screen, mouse, keyboard) when you allow it |
+| **Agent tools** | Shell, read, write and edit on your Mac, in a work dir of the agent's own; web search and fetch, through DeepSeek's Search and Fetch APIs; agents hired for one task, in parallel |
 | **Assistants** | Acorn (general assistant), Max (thoughtful expert) and those they create on request, each a person with a name and an about, its own chat, memory and work dir, in a sidebar |
 | **Cut in** | A message sent while an assistant talks or works stops it at once, as a person would stop and listen; it answers you, then goes on only if you say so |
 | **Consult** | Assistants ask each other (`list_assistants`, `search_assistants`, `ask_assistant`), each pair in a thread of its own that never ends |
@@ -94,7 +94,6 @@ Ask for what you want in plain words: "stop", "fire Scout", "hire three agents t
 | `zoom`, `date` | everyone | Open a line of the view; a message's date |
 | `shell`, `read`, `write`, `edit` | assistants, hired agents | Run on this Mac in the caller's own dir under the work dir |
 | `hire`, `tell`, `fire` | assistants | Hire agents for one task each, in parallel, in the background; message one at work (it cuts in); fire one or all |
-| `computer` | assistants | Start a computer-use task (needs `computer` set to 1) |
 | `create_assistant` | with you | Hire an assistant: name, about, effort, instructions |
 | `list_assistants`, `search_assistants`, `ask_assistant` | with you | Find another assistant and ask it, in your two's thread; its reply comes back as a message |
 | `remember`, `forget`, `purge` | with you | Keep and drop facts; erase a message |
@@ -116,11 +115,8 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `compactor` | `low` | The effort of every summary call |
 | `agents` | their assistant's | The effort of hired agents |
 | `view` | `2000000` | Bytes past which a view merges to half; capped at 2 MB |
-| `computer` | off | `1` lets computer tasks use the screen, mouse and keyboard |
 | `rules` | none | A file appended to every system prompt: who you are, how you want work done |
 | `after` | none | A shell command run after each turn |
-
-Computer use compiles a small Swift helper into `$ACORN_DIR` on first use; macOS then asks for the Screen Recording and Accessibility permissions.
 
 ## Files
 

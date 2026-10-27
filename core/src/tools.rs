@@ -2,16 +2,14 @@
 //! =====
 //! Acorn's prompts and tools. The user acts only by words, so whatever the
 //! app does, an assistant does by a tool. Everyone gets zoom and date
-//! (OWN); an assistant hires, tells and fires agents (BOSS) and starts
-//! computer tasks (HAND); in its chat with the user it also creates
-//! assistants and consults them (PEERS), keeps facts and purges messages
-//! (KEEP), and sets goals, reads usage, imports, exports and draws its
-//! memory (HOME); in a thread, where another assistant asks it something,
-//! it gets none of those. shell, read, write and edit (`machine`) run on
-//! this Mac, each caller in its own dir under the work dir; web_search and
-//! web_fetch (`web`) read the web. A computer
-//! task's agent gets only the computer tool. The agents themselves run in
-//! `chat::agents`.
+//! (OWN); an assistant hires, tells and fires agents (BOSS); in its chat
+//! with the user it also creates assistants and consults them (PEERS),
+//! keeps facts and purges messages (KEEP), and sets goals, reads usage,
+//! imports, exports and draws its memory (HOME); in a thread, where
+//! another assistant asks it something, it gets none of those. shell,
+//! read, write and edit (`machine`) run on this Mac, each caller in its
+//! own dir under the work dir; web_search and web_fetch (`web`) read the
+//! web. The agents themselves run in `chat::agents`.
 
 use crate::ai::Spec;
 use crate::machine::{self, spec};
@@ -75,8 +73,8 @@ say in your reply what you learned that will matter later.
 The user cuts in as a person would: a message they send while you work stops
 you at once, mid-reply or mid-tool-call. What you were saying ends \"[cut
 off]\", a tool call it cut answers so, and you read their message: answer it,
-and go back to the work only if it says to. \"Stop\" means stop. Agents you hired and
-computer tasks run in the background; each one's report reaches you as a
+and go back to the work only if it says to. \"Stop\" means stop. Agents you hired run
+in the background; each one's report reaches you as a
 message starting \"[Name]\", between your tool calls or as a new turn. Never wait
 for one (no sleep, no polling): go on, or end your turn and tell the user what
 is running.
@@ -162,17 +160,10 @@ called Marrie\", \"get me a coach\"), is a new assistant: create them. Hire
 an agent only for a task.
 ";
 
-/// Where the tools run: this Mac, the work dir, the screen if allowed.
+/// Where the tools run: this Mac, the work dir.
 fn mac(work: &Path) -> String {
     let work = work.display();
-    let screen = if config::get().computer {
-        "computer tasks use its screen, mouse and keyboard"
-    } else {
-        "computer tasks can't run, as the user has not allowed them (computer is not 1 in Acorn's config)"
-    };
-    format!(
-        "Your shell, read, write and edit tools run on the user's Mac, in your work\ndir, {work}/<you> (Acorn's: {work}/main), where relative paths start;\n{screen}."
-    )
+    format!("Your shell, read, write and edit tools run on the user's Mac, in your work\ndir, {work}/<you> (Acorn's: {work}/main), where relative paths start.")
 }
 
 /// A hired agent's prompt: its part, then the view's and the Mac's docs.
@@ -199,8 +190,8 @@ The view: the whole chat between Acorn and the user, oldest first, inside
 
 A summary tags each item with its kind: user (the user's words), unii
 (Acorn's replies), tool (Acorn's tool calls), echo (their results), note
-(memories from before this chat), or work (the report of an agent, a
-hired agent or a computer task, starting \"[Name]\"). A short message is its own line, word for word. Recent lines
+(memories from before this chat), or work (the report of a hired agent,
+starting \"[Name]\"). A short message is its own line, word for word. Recent lines
 cover one message each; the older the messages, the more a line covers.
 A message not summarized yet shows as \"{wait}\".
 No message appears in full, not even the last ones. A text too long for
@@ -220,20 +211,6 @@ an agent's whole chat.
     )
 }
 
-/// A computer task's prompt.
-pub const HANDS: &str = "You are the hands of Acorn, an AI agent that works for one user: you use
-the user's Mac through your computer tool (screenshots, the mouse and the
-keyboard). Your first message is your
-chat with Acorn so far, its lines as \"i|kind: text\": what you are
-(note), your task (user), and later all you did and were told. Do the task, following the user's
-instructions at the end of this prompt, and do nothing it does not ask
-for: pay, buy, send or delete only what it names, and if a page asks
-for a password, a card or a confirmation it does not cover, stop and
-report that. Acorn may send you more messages while you work: follow them. No
-one sees your work but Acorn, and only your final reply: your report,
-saying what you did, what you found that the task asks for, and what
-failed.";
-
 /// A prompt with the user's rules after it (config `rules`).
 pub fn system(head: &str) -> String {
     let rules = config::get().rules.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default();
@@ -241,10 +218,9 @@ pub fn system(head: &str) -> String {
 }
 
 /// An agent's log starts with a note of what it is: SUB_NOTE, and its
-/// effort if not the configured one; or HANDS_NOTE.
+/// effort if not the configured one.
 pub const SUB_NOTE: &str = "subagent";
 pub const SUB_AT: &str = " at effort ";
-pub const HANDS_NOTE: &str = "computer task on ";
 
 /// Who calls: Acorn itself, or an agent by name.
 pub const MAIN: &str = "main";
@@ -260,7 +236,7 @@ fn boss() -> Vec<Spec> {
     let efforts = effort::names();
     vec![
         spec("hire", "Hire one agent per task, a freelancer working in the background, all in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. An agent sees the view and the user's instructions, but knows what you want only from its task, so say all it needs. It works in a dir of its own, not yours: name each file by its absolute path. Never for a person the user wants to keep: that is create_assistant.", json!({"tasks": {"type": "array", "items": {"type": "string"}}, "effort": {"type": "string", "enum": efforts, "description": "How hard they think; by default, as hard as you."}}), &["tasks"]),
-        spec("tell", "Send a message to an agent (one you hired or a computer task), by name. One at work stops what it is doing to read it, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".", json!({"name": {"type": "string"}, "message": {"type": "string"}}), &["name", "message"]),
+        spec("tell", "Send a message to an agent you hired, by name. One at work stops what it is doing to read it, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".", json!({"name": {"type": "string"}, "message": {"type": "string"}}), &["name", "message"]),
         spec("fire", "Fire an agent at work, by name, or all of yours with no name, when the user says so or its work is no longer wanted. It stops at once, without a report.", json!({"name": {"type": "string"}}), &[]),
     ]
 }
@@ -303,18 +279,10 @@ fn kit(work: &Path, who: &str) -> Vec<Spec> {
     mac.chain(web::tools()).collect()
 }
 
-fn hand() -> Spec {
-    spec("computer", "Start a task on the screen of the user's Mac, done with its mouse and keyboard by an agent that sees screenshots, and return its name at once. Its report reaches you as a message \"[Name] report\". It knows only the task, so say all it needs. One at a time.", json!({"task": {"type": "string"}}), &["task"])
-}
-
 /// What a caller may use: an assistant with the user all; one answering
 /// in a thread (`thread`) its work tools alone; a hired agent its own and
-/// the Mac's; a computer task its computer tool. work: its assistant's
-/// work dir.
-pub fn list(work: &Path, who: &str, hands: bool, thread: bool) -> Vec<Spec> {
-    if hands {
-        return vec![crate::computer::spec()];
-    }
+/// the Mac's. work: its assistant's work dir.
+pub fn list(work: &Path, who: &str, thread: bool) -> Vec<Spec> {
     let mut specs = own();
     if who == MAIN {
         specs.extend(boss());
@@ -324,7 +292,6 @@ pub fn list(work: &Path, who: &str, hands: bool, thread: bool) -> Vec<Spec> {
             specs.extend(home());
         }
         specs.extend(kit(work, who));
-        specs.push(hand());
     } else {
         specs.extend(kit(work, who));
     }
