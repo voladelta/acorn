@@ -3,7 +3,7 @@
 //! The sidebar, as the nsh gallery's: Acorn's name, then the assistants
 //! (Acorn, Max, then those they made, oldest first: `create_assistant`),
 //! each a row; the one shown has a bar and a fill, one at work a dot.
-//! Cmd+B (or the header's button) hides it.
+//! Cmd+B (or the button atop it) hides it.
 
 use crate::look::*;
 use crate::Ui;
@@ -27,9 +27,14 @@ pub fn bar(ui: Ui) -> impl IntoElement {
                     .items_center()
                     .gap_2()
                     .h(px(52.0))
-                    .px_5()
+                    .pl_5()
+                    .pr_3()
+                    .border_b_1()
+                    .border_color(hair())
                     .child(text("🌰").text_size(px(20.0)))
-                    .child(text("Acorn").font_family(BRAND).text_size(px(20.0)).font_weight(FontWeight::SEMIBOLD)),
+                    .child(text("Acorn").font_family(BRAND).text_size(px(20.0)).font_weight(FontWeight::SEMIBOLD))
+                    .child(view().flex_1())
+                    .child(crate::side_chip(ui)),
             )
             .child(
                 scroll().flex_1().child(

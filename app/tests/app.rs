@@ -35,12 +35,12 @@ fn each_assistant_opens_its_own_chat() {
     let wait = Duration::from_secs(20);
     app.wait_for_within("text:Acorn is an AI, not a person, and can make mistakes.", wait).unwrap();
     app.wait_for_within("Hello! This is Acorn.", wait).unwrap();
-    app.wait_for_within("text:high effort", wait).unwrap();
+    app.wait_for_within("text:Acorn  high effort", wait).unwrap();
 
     for (name, effort) in [("Max", "max"), ("Pip", "low"), ("Acorn", "high"), ("Max", "max")] {
         app.press(&format!("text:{name}")).unwrap();
         app.wait_for_within(&format!("Hello! This is {name}."), wait).unwrap();
-        app.wait_for_within(&format!("text:{effort} effort"), wait).unwrap();
+        app.wait_for_within(&format!("text:{name}  {effort} effort"), wait).unwrap();
         for other in ["Acorn", "Max", "Pip"].into_iter().filter(|o| *o != name) {
             assert!(!app.shows(&format!("Hello! This is {other}.")), "{name}'s chat, not {other}'s");
         }

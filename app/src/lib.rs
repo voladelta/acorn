@@ -264,8 +264,9 @@ fn keys(ui: Ui) {
     on_key("mod+b", move |_| ui.side.update(|s| *s = !*s));
 }
 
-/// The sidebar's button, the assistant's name and effort (back to its
-/// chat), an import's progress, the menu.
+/// The sidebar's button (while the sidebar is hidden; shown, it has its
+/// own), the assistant's name and effort (back to its chat), an import's
+/// progress, the menu.
 fn header(ui: Ui) -> impl IntoElement {
     let importing = move || ui.model.with(|m| m.state.as_ref().and_then(|s| s.importing.clone()));
     let effort = move || ui.model.with(|m| m.pick().map(|p| format!("{} effort", p.label())).unwrap_or_default());
@@ -277,15 +278,22 @@ fn header(ui: Ui) -> impl IntoElement {
         .px_5()
         .border_b_1()
         .border_color(hair())
-        .child(chip(|| "◧".to_string(), move || ui.side.update(|s| *s = !*s)).tooltip(hint("Hide or show the assistants (⌘B)")))
+        .child(when(move || !ui.side.get(), move || side_chip(ui)))
         .child(
-            view()
-                .flex_row()
-                .items_baseline()
-                .gap_2()
+            // One paragraph, two runs: they share its baseline (flex has none for text).
+            text(move || ui.me().name)
+                .font_family(BRAND)
+                .text_size(px(18.0))
+                .font_weight(FontWeight::SEMIBOLD)
                 .on_press(move || ui.act(Act::Goto(None)))
-                .child(text(move || ui.me().name).font_family(BRAND).text_size(px(18.0)).font_weight(FontWeight::SEMIBOLD))
-                .child(text(effort).text_size(px(12.5)).text_color(mid()).tooltip(hint(move || ui.model.with(|m| m.pick().map(|p| p.effort.hint()).unwrap_or_default())))),
+                .child(
+                    text(move || format!("  {}", effort()))
+                        .font_family("system-ui")
+                        .text_size(px(12.5))
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(mid())
+                        .tooltip(hint(move || ui.model.with(|m| m.pick().map(|p| p.effort.hint()).unwrap_or_default()))),
+                ),
         )
         .child(view().flex_1())
         .child(when(move || importing().is_some(), move || {
@@ -297,6 +305,11 @@ fn header(ui: Ui) -> impl IntoElement {
 /// A hint shown as the pointer rests on what it explains.
 pub fn hint(t: impl IntoReactive<SharedString>) -> AnyElement {
     text(t).text_size(px(12.0)).px_2().py_1().rounded(px(6.0)).bg(ink()).text_color(paper()).into_element()
+}
+
+/// The button that hides or shows the sidebar.
+pub fn side_chip(ui: Ui) -> View {
+    chip(|| "◧".to_string(), move || ui.side.update(|s| *s = !*s)).tooltip(hint("Hide or show the assistants (⌘B)"))
 }
 
 /// A gray button of the header.
