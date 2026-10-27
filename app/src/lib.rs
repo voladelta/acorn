@@ -216,7 +216,8 @@ pub fn App() -> impl IntoElement {
 }
 
 /// Every chat opened, its events heard as long as the window: whether each
-/// works, an assistant created (listed), a hidden chat's notes (named),
+/// works, an assistant created (listed) or deleted (dropped, and the one
+/// you talk to Acorn, if it was), a hidden chat's notes (named),
 /// always; the rest, of the chat shown.
 fn hear(ui: Ui) {
     let (tx, mut heard) = tokio::sync::mpsc::unbounded_channel::<(String, Event)>();
@@ -242,6 +243,15 @@ fn hear(ui: Ui) {
             }
             if let Event::Assistant(made) = ev {
                 ui.assistants.update(|all| all.push(made));
+                continue;
+            }
+            if let Event::Gone(gone) = ev {
+                ui.assistants.update(|all| all.retain(|a| a.id != gone));
+                ui.working.update(|w| w.retain(|chat| hub::whose(chat) != gone && !chat.ends_with(&format!("/{gone}"))));
+                let shown = ui.shown.get_untracked();
+                if ui.talk.get_untracked() == gone || hub::whose(&shown) == gone || shown.ends_with(&format!("/{gone}")) {
+                    ui.talk_to(ui.assistants.with_untracked(|all| all[0].id.clone()));
+                }
                 continue;
             }
             if ui.shown.get_untracked() != id {

@@ -8,7 +8,9 @@
 //! message) and an effort, kept in
 //! $ACORN_DIR/assistants.json, oldest first. How hard one thinks is part
 //! of who it is, never shown. Each has its own chat (`chats`/<id>) and its
-//! own work dir; Acorn's are the config's.
+//! own work dir; Acorn's are the config's. One made may be deleted as asked
+//! (`delete_assistant`): its chat, its threads and its work dir go to the
+//! Trash, whence the user may bring them back.
 
 use crate::config;
 use crate::effort::Effort;
@@ -132,6 +134,50 @@ fn saved() -> Vec<Assistant> {
     })
 }
 
+/// An assistant made, by name (any case), deleted from assistants.json;
+/// never Acorn, Max, or the one asking (`me`, its id).
+pub fn remove(name: &str, me: &str) -> Result<Assistant, String> {
+    let _filing = FILING.lock().unwrap_or_else(|e| e.into_inner());
+    let name = name.trim();
+    let Some(gone) = all().into_iter().find(|a| a.name.eq_ignore_ascii_case(name)) else {
+        return Err(format!("No assistant {name}; list_assistants names them."));
+    };
+    if gone.is_acorn() || gone.id == MAX {
+        return Err(format!("{} stays: only assistants made can be deleted.", gone.name));
+    }
+    if gone.id == me {
+        return Err("That's you: another assistant can delete you.".into());
+    }
+    let mine: Vec<Assistant> = saved().into_iter().filter(|a| a.id != gone.id).collect();
+    write(&mine)?;
+    Ok(gone)
+}
+
+/// A deleted assistant's files, moved to the Trash in one folder: its
+/// chat (with the threads where others asked it), its threads where it
+/// asked others, its work dir. The folder.
+pub fn trash(gone: &Assistant) -> Result<PathBuf, String> {
+    let chats = &config::get().chats;
+    let stamp = chrono::Local::now().format("%Y-%m-%d %H.%M.%S");
+    let to = config::home().join(".Trash").join(format!("Acorn {} {stamp}", gone.name));
+    let mut moves = vec![(chats.join(&gone.id), to.join("chat")), (gone.work(), to.join("work"))];
+    for other in std::fs::read_dir(chats).into_iter().flatten().flatten() {
+        let thread = other.path().join("with").join(&gone.id);
+        moves.push((thread, to.join("asked").join(other.file_name())));
+    }
+    for (from, to) in moves.into_iter().filter(|(from, _)| from.exists()) {
+        let moved = to.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::rename(&from, &to));
+        moved.map_err(|e| format!("{} couldn't go to the Trash: {e}", from.display()))?;
+    }
+    Ok(to)
+}
+
+fn write(mine: &[Assistant]) -> Result<(), String> {
+    let dir = &config::get().dir;
+    let text = serde_json::to_string_pretty(mine).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(dir).and_then(|_| std::fs::write(dir.join(FILE), text)).map_err(|e| format!("{FILE}: {e}"))
+}
+
 /// A new assistant, saved: its id the name's letters and digits, made
 /// unique among the assistants and the chats on disk (a chat it didn't
 /// start is never taken over).
@@ -156,8 +202,6 @@ pub fn add(name: &str, about: &str, instructions: &str, welcome: &str, effort: E
     let made = Assistant { id, name: name.into(), about: about.into(), instructions: instructions.trim().into(), welcome: welcome.trim().into(), effort };
     let mut mine = saved();
     mine.push(made.clone());
-    let dir = &config::get().dir;
-    let text = serde_json::to_string_pretty(&mine).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(dir).and_then(|_| std::fs::write(dir.join(FILE), text)).map_err(|e| format!("{FILE}: {e}"))?;
+    write(&mine)?;
     Ok(made)
 }

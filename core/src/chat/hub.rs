@@ -70,6 +70,20 @@ pub fn all() -> Vec<Arc<Engine>> {
     slots.iter().filter_map(|s| s.try_lock()?.clone()).collect()
 }
 
+/// A deleted assistant's chats closed, its and every thread it is in:
+/// their work stops, and none opens again from here.
+pub fn close(id: &str) {
+    let ours = |chat: &str| chat == id || chat.split_once('/').is_some_and(|(answers, asks)| answers == id || asks == id);
+    let slots: Vec<Slot> = {
+        let mut open = OPEN.lock();
+        let gone: Vec<String> = open.keys().filter(|k| ours(k)).cloned().collect();
+        gone.iter().filter_map(|k| open.remove(k)).collect()
+    };
+    for engine in slots.iter().filter_map(|s| s.lock().clone()) {
+        engine.close();
+    }
+}
+
 /// Where a chat lives: an assistant's, `chats`/<id>; a thread, in its
 /// answerer's, `with`/<asker>.
 pub fn dir(id: &str) -> PathBuf {
@@ -93,6 +107,11 @@ fn open(id: String, me: &Assistant, with: Option<&Assistant>) -> Result<Arc<Engi
     let mut slot = slot.lock();
     if let Some(engine) = &*slot {
         return Ok(engine.clone());
+    }
+    // Checked with its slot in OPEN, so a delete either closes it or is seen here.
+    let all = assistant::all();
+    if let Some(gone) = std::iter::once(me).chain(with).find(|a| !all.iter().any(|b| b.id == a.id)) {
+        return Err(format!("{} was deleted.", gone.name));
     }
     match Engine::start(id.clone(), me.clone(), with.cloned(), heard.clone()) {
         Ok(engine) => {

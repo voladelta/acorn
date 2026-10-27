@@ -106,6 +106,8 @@ pub enum Event {
     Use { id: u64, spend: Spend },
     /// An assistant made (`create_assistant`), to list and start.
     Assistant(crate::assistant::Assistant),
+    /// An assistant deleted (`delete_assistant`), by id, to drop.
+    Gone(String),
 }
 
 /// What the app sends: the person's words, and looks. Every other act is

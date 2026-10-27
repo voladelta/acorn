@@ -187,6 +187,19 @@ impl Engine {
                     Err(why) => Out::fail(why),
                 }
             }
+            "delete_assistant" => {
+                let me = self.lock().me.id.clone();
+                let gone = match crate::assistant::remove(&str("name"), &me) {
+                    Ok(gone) => gone,
+                    Err(why) => return Out::fail(why),
+                };
+                super::hub::close(&gone.id);
+                self.lock().all(Event::Gone(gone.id.clone()));
+                match crate::assistant::trash(&gone) {
+                    Ok(to) => Out::ok(format!("Deleted {}; their chat and files are in the Trash, in \"{}\".", gone.name, to.file_name().unwrap_or_default().to_string_lossy())),
+                    Err(why) => Out::fail(format!("Deleted {} from the sidebar, but {why}", gone.name)),
+                }
+            }
             "computer" if hands => computer::act(&input, cancel).await,
             "computer" => self.computer(input["task"].as_str().unwrap_or_default()),
             "web_search" | "web_fetch" => crate::web::run(name, &input, cancel).await,

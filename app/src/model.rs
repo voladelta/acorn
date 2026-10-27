@@ -188,7 +188,7 @@ impl Model {
                     entry.spend = Some(spend);
                 }
             }
-            Event::Assistant(_) => {}
+            Event::Assistant(_) | Event::Gone(_) => {}
         }
         then
     }

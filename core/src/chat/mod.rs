@@ -255,15 +255,18 @@ impl Engine {
 
     /// As Acorn quits: all work stops, and what it ran is left to resume.
     pub fn quit(&self) {
-        {
-            let mut chat = self.lock();
-            chat.stop(None);
-            chat.mem.done = true;
-            for (call, _, _) in &chat.compactions {
-                call.stop();
-            }
-        }
+        self.close();
         crate::machine::end();
+    }
+
+    /// Its work stopped: its turn, its agents, its summaries.
+    pub fn close(&self) {
+        let mut chat = self.lock();
+        chat.stop(None);
+        chat.mem.done = true;
+        for (call, _, _) in &chat.compactions {
+            call.stop();
+        }
     }
 
     /// Once the chat's messages before `end` are built (not an import's):

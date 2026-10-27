@@ -1,5 +1,6 @@
 //! Assistants made as `create_assistant` makes them: saved, listed after
-//! Acorn and Max, each with its own chat id, work dir and prompt.
+//! Acorn and Max, each with its own chat id, work dir and prompt; deleted
+//! as `delete_assistant` deletes them, their files to the Trash.
 
 use acorn_core::assistant::{self, Assistant};
 use acorn_core::effort::Effort;
@@ -11,6 +12,7 @@ fn made_assistants_are_saved_and_listed() {
     unsafe {
         std::env::set_var("ACORN_DIR", dir.path().join("home"));
         std::env::set_var("ACORN_CHATS", dir.path().join("chats"));
+        std::env::set_var("HOME", dir.path());
     }
     std::fs::create_dir_all(dir.path().join("chats/abc")).unwrap();
 
@@ -40,4 +42,21 @@ fn made_assistants_are_saved_and_listed() {
     assert!(Assistant::acorn().personality().is_empty() && Assistant::acorn().work().ends_with("home/work"));
     assert_eq!((Assistant::acorn().about, Assistant::max().about), ("General assistant".to_string(), "Thoughtful expert".to_string()));
     assert_eq!(Assistant::max().effort, Effort::Max);
+
+    // Deleted: gone from the list, its chat, its work and its threads where it asked others in one Trash folder.
+    let chats = dir.path().join("chats");
+    for d in [chats.join("abc-2"), chats.join("max/with/abc-2"), chats.join("max/with/maxtwo"), abc.work()] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    assert!(assistant::remove("Acorn", "max").is_err() && assistant::remove("max", "abc-2").is_err(), "Acorn and Max stay");
+    assert!(assistant::remove("abc", "abc-2").is_err(), "not yourself");
+    assert!(assistant::remove("Nobody", "max").is_err());
+    let gone = assistant::remove(" ABC ", "max").unwrap();
+    assert_eq!(gone, abc);
+    assert_eq!(names(assistant::all()), ["Acorn", "Max", "Max Two"]);
+    let to = assistant::trash(&gone).unwrap();
+    assert!(to.starts_with(dir.path().join(".Trash")) && to.file_name().unwrap().to_string_lossy().starts_with("Acorn Abc "));
+    assert!(to.join("chat").is_dir() && to.join("work").is_dir() && to.join("asked/max").is_dir());
+    assert!(!chats.join("abc-2").exists() && !chats.join("max/with/abc-2").exists() && !abc.work().exists());
+    assert!(chats.join("max/with/maxtwo").exists(), "others' threads stay");
 }
