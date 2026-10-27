@@ -13,7 +13,10 @@ const SECRET: &str = "hunter2-sk-live-0123456789";
 fn build(mem: &mut Memory) {
   loop {
     let (free, jobs) = mem.starts();
-    let jobs: Vec<_> = jobs.into_iter().map(|(p, text)| (p, memory::cut(&memory::flat(&text)).to_string())).collect();
+    let jobs: Vec<_> = jobs
+      .into_iter()
+      .map(|(p, text)| (p, memory::cut(&memory::flat(&text)).to_string()))
+      .collect();
     if free.is_empty() && jobs.is_empty() {
       break;
     }
@@ -34,10 +37,14 @@ fn wipe(mem: &mut Memory) {
 
 /// Whether any of the chat's files holds `text`.
 fn on_disk(dir: &std::path::Path, text: &str) -> bool {
-  std::fs::read_dir(dir).unwrap().flatten().filter(|e| e.path().is_file()).any(|e| {
-    let data = std::fs::read(e.path()).unwrap();
-    data.windows(text.len()).any(|w| w == text.as_bytes())
-  })
+  std::fs::read_dir(dir)
+    .unwrap()
+    .flatten()
+    .filter(|e| e.path().is_file())
+    .any(|e| {
+      let data = std::fs::read(e.path()).unwrap();
+      data.windows(text.len()).any(|w| w == text.as_bytes())
+    })
 }
 
 #[test]
@@ -53,8 +60,14 @@ fn memory_in_sqlite() {
   // logged, built, opened again as it was
   let mut mem = Memory::load(&dir).unwrap();
   for k in 0..12 {
-    let text = if k == 5 { format!("my key is {SECRET}") } else { format!("message {k} {}", "x".repeat(k * 90)) };
-    mem.push(vec![Msg::new(if k % 2 == 0 { Kind::User } else { Kind::Acorn }, text)]).unwrap();
+    let text = if k == 5 {
+      format!("my key is {SECRET}")
+    } else {
+      format!("message {k} {}", "x".repeat(k * 90))
+    };
+    mem
+      .push(vec![Msg::new(if k % 2 == 0 { Kind::User } else { Kind::Acorn }, text)])
+      .unwrap();
   }
   mem.push(vec![Msg::new(Kind::Echo, "y".repeat(70_000))]).unwrap();
   build(&mut mem);
@@ -77,10 +90,16 @@ fn memory_in_sqlite() {
   for part in [Part::new(0, 5), Part::new(1, 2), Part::new(2, 1), Part::new(3, 0)] {
     assert!(mem.node(part).is_none(), "{part:?} was built from it");
   }
-  assert!(mem.node(Part::new(0, 4)).is_some() && mem.node(Part::new(1, 3)).is_some(), "the rest stays");
+  assert!(
+    mem.node(Part::new(0, 4)).is_some() && mem.node(Part::new(1, 3)).is_some(),
+    "the rest stays"
+  );
   assert!(mem.view.parts.iter().all(|p| mem.text(*p).find(SECRET).is_none()));
   build(&mut mem);
-  assert!(mem.node(Part::new(3, 0)).is_some_and(|t| !t.contains(SECRET)), "built anew without it");
+  assert!(
+    mem.node(Part::new(3, 0)).is_some_and(|t| !t.contains(SECRET)),
+    "built anew without it"
+  );
   let owed = dir.join("chat.db.wipe");
   assert!(owed.exists(), "a wipe is owed");
   drop(mem);
@@ -88,7 +107,10 @@ fn memory_in_sqlite() {
   assert_eq!(mem.message(5).unwrap().text, PURGED);
   assert!(mem.purged > mem.wiped, "a quit doesn't lose the wipe owed");
   wipe(&mut mem);
-  assert!(!owed.exists() && !on_disk(&dir, SECRET), "erased from chat.db and its WAL");
+  assert!(
+    !owed.exists() && !on_disk(&dir, SECRET),
+    "erased from chat.db and its WAL"
+  );
   assert!(mem.purge(None, 999).unwrap().starts_with("No message"));
 
   // a long message, its secret on every line, purged from every page
@@ -105,12 +127,20 @@ fn memory_in_sqlite() {
   mem.wiped(upto);
   assert!(owed.exists(), "a purge during a wipe owes another");
   wipe(&mut mem);
-  assert!(!owed.exists() && !on_disk(&dir, SECRET), "no stale copy left in chat.db");
+  assert!(
+    !owed.exists() && !on_disk(&dir, SECRET),
+    "no stale copy left in chat.db"
+  );
   build(&mut mem);
 
   // a quit in the middle of a message: its pages so far dropped
   let count = mem.count;
-  mem.push(vec![Msg { more: true, ..Msg::new(Kind::Acorn, "half") }]).unwrap();
+  mem
+    .push(vec![Msg {
+      more: true,
+      ..Msg::new(Kind::Acorn, "half")
+    }])
+    .unwrap();
   drop(mem);
   let mut mem = Memory::load(&dir).unwrap();
   assert_eq!(mem.count, count);
@@ -120,7 +150,9 @@ fn memory_in_sqlite() {
   // an agent's log
   let name = mem.agent_new().unwrap();
   mem.agent_push(&name, Kind::Note, "subagent").unwrap();
-  mem.agent_push(&name, Kind::Echo, &format!("cat .env: {SECRET}")).unwrap();
+  mem
+    .agent_push(&name, Kind::Echo, &format!("cat .env: {SECRET}"))
+    .unwrap();
   assert_eq!(mem.agent_names(), std::slice::from_ref(&name));
   assert_eq!(mem.agent(&name).unwrap().len(), 2);
   mem.purge(Some(&name), 1).unwrap();
@@ -140,32 +172,66 @@ fn memory_in_sqlite() {
     chat: "main".into(),
     msg: 3,
   };
-  assert!(facts::remember("main", fact(false, "User", "editor", "vim", false)).unwrap().contains("every assistant"));
+  assert!(
+    facts::remember("main", fact(false, "User", "editor", "vim", false))
+      .unwrap()
+      .contains("every assistant")
+  );
   let said = facts::remember("max", fact(false, " user ", "Editor", "Helix", false)).unwrap();
   assert!(said.contains("replaces #1 vim"), "{said}");
   facts::remember("max", fact(true, "user", "editor", "emacs", false)).unwrap();
   facts::remember("main", fact(false, "user", "language", "Rust", true)).unwrap();
   facts::remember("main", fact(false, "user", "language", "Go", true)).unwrap();
-  assert!(facts::remember("main", fact(false, "user", "language", "Go", true)).unwrap().starts_with("Already kept"));
+  assert!(
+    facts::remember("main", fact(false, "user", "language", "Go", true))
+      .unwrap()
+      .starts_with("Already kept")
+  );
   let main = facts::prompt("main");
-  assert!(main.contains("user / editor: Helix") && main.contains("language: Rust") && main.contains("language: Go") && !main.contains("emacs"), "{main}");
+  assert!(
+    main.contains("user / editor: Helix")
+      && main.contains("language: Rust")
+      && main.contains("language: Go")
+      && !main.contains("emacs"),
+    "{main}"
+  );
   let max = facts::prompt("max");
-  assert!(max.contains("user / editor: emacs (yours)") && !max.contains("Helix"), "max's own shadows everyone's: {max}");
-  assert!(facts::forget("main", 3).unwrap().starts_with("No fact"), "main doesn't see max's");
+  assert!(
+    max.contains("user / editor: emacs (yours)") && !max.contains("Helix"),
+    "max's own shadows everyone's: {max}"
+  );
+  assert!(
+    facts::forget("main", 3).unwrap().starts_with("No fact"),
+    "main doesn't see max's"
+  );
   assert!(facts::forget("max", 3).unwrap().starts_with("Forgot"));
   assert!(facts::prompt("max").contains("Helix"));
   facts::remember("main", fact(false, "user", "password", SECRET, false)).unwrap();
-  let id = facts::prompt("main").lines().find(|l| l.contains(SECRET)).and_then(|l| l[1..].split(' ').next()?.parse::<u64>().ok()).unwrap();
+  let id = facts::prompt("main")
+    .lines()
+    .find(|l| l.contains(SECRET))
+    .and_then(|l| l[1..].split(' ').next()?.parse::<u64>().ok())
+    .unwrap();
   facts::forget("main", id).unwrap();
-  assert!(!on_disk(&home.path().join("home"), SECRET), "a fact forgotten is erased");
+  assert!(
+    !on_disk(&home.path().join("home"), SECRET),
+    "a fact forgotten is erased"
+  );
   assert!(facts::prompt("nobody").contains("Helix") && !facts::prompt("nobody").contains("emacs"));
 
   // a view's last lines: messages not summarized yet as their kind and text
   let mut thread = Memory::load(&home.path().join("chats/max/with/main")).unwrap();
-  for (kind, text) in [(Kind::User, "first"), (Kind::User, "is the deploy safe?"), (Kind::Acorn, "no:\nthe key leaks")] {
+  for (kind, text) in [
+    (Kind::User, "first"),
+    (Kind::User, "is the deploy safe?"),
+    (Kind::Acorn, "no:\nthe key leaks"),
+  ] {
     thread.push(vec![Msg::new(kind, text)]).unwrap();
   }
   thread.fit(false);
-  assert_eq!(thread.view_lines(2), ["1+1|user: is the deploy safe?", "2+1|unii: no: the key leaks"]);
+  assert_eq!(
+    thread.view_lines(2),
+    ["1+1|user: is the deploy safe?", "2+1|unii: no: the key leaks"]
+  );
   assert_eq!(thread.view_lines(usize::MAX).len(), 3);
 }

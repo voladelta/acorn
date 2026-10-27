@@ -41,12 +41,18 @@ pub fn random() -> String {
 pub fn is_name(s: &str) -> bool {
   let words = |list: &str| list.split_whitespace().map(word).collect::<Vec<_>>();
   let (adjs, nouns) = (words(ADJS), words(NOUNS));
-  adjs.iter().any(|a| s.strip_prefix(a.as_str()).map(|r| r.strip_prefix('-').unwrap_or(r)).is_some_and(|r| nouns.iter().any(|n| n == r)))
+  adjs.iter().any(|a| {
+    s.strip_prefix(a.as_str())
+      .map(|r| r.strip_prefix('-').unwrap_or(r))
+      .is_some_and(|r| nouns.iter().any(|n| n == r))
+  })
 }
 
 fn word(w: &str) -> String {
   let mut c = w.chars();
-  c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+  c.next()
+    .map(|f| f.to_uppercase().chain(c).collect())
+    .unwrap_or_default()
 }
 
 #[cfg(test)]

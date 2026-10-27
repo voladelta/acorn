@@ -31,8 +31,14 @@ impl Memory {
       .iter()
       .filter_map(|name| {
         let fit = dir.join(format!("{name}.jpg"));
-        let (file, mime) =
-          if fit.exists() { (fit, "image/jpeg".to_string()) } else { (dir.join(name), format!("image/{}", name.rsplit('.').next().unwrap_or("png"))) };
+        let (file, mime) = if fit.exists() {
+          (fit, "image/jpeg".to_string())
+        } else {
+          (
+            dir.join(name),
+            format!("image/{}", name.rsplit('.').next().unwrap_or("png")),
+          )
+        };
         let data = base64::engine::general_purpose::STANDARD.encode(fs::read(file).ok()?);
         Some(Img { mime, data })
       })
@@ -74,7 +80,11 @@ pub fn image_add(dir: &Path, bytes: &[u8]) -> Result<String> {
   let images = dir.join(IMAGES);
   fs::create_dir_all(&images)?;
   if fit {
-    let small = img.resize_exact((w as f64 * k).round() as u32, (h as f64 * k).round() as u32, image::imageops::FilterType::Lanczos3);
+    let small = img.resize_exact(
+      (w as f64 * k).round() as u32,
+      (h as f64 * k).round() as u32,
+      image::imageops::FilterType::Lanczos3,
+    );
     let mut out = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&small.to_rgb8())?;
     let file = images.join(format!("{name}.jpg"));

@@ -26,7 +26,9 @@ fn a_message_cuts_in_on_a_reply() {
   let _dir = chat();
   let mut app = Headless::start(EngineConfig::new(Root::of::<acorn::App>())).unwrap();
   app.first_render().unwrap();
-  app.wait_for_within("Hello! This is Acorn.", Duration::from_secs(20)).unwrap();
+  app
+    .wait_for_within("Hello! This is Acorn.", Duration::from_secs(20))
+    .unwrap();
 
   // a reply written, not a tool's work: only a reply (or its thinking)
   // streams, and either may be what's cut
@@ -37,18 +39,38 @@ fn a_message_cuts_in_on_a_reply() {
     )
     .unwrap();
   app.submit("label:Message Acorn").unwrap();
-  app.wait_until("the reply streaming", Duration::from_secs(180), |s| s.texts().iter().any(|t| t.contains("vingt-cinq"))).unwrap();
+  app
+    .wait_until("the reply streaming", Duration::from_secs(180), |s| {
+      s.texts().iter().any(|t| t.contains("vingt-cinq"))
+    })
+    .unwrap();
 
-  app.type_text("label:Message Acorn", "Stop. Reply with exactly the word: pecan").unwrap();
+  app
+    .type_text("label:Message Acorn", "Stop. Reply with exactly the word: pecan")
+    .unwrap();
   app.submit("label:Message Acorn").unwrap();
   app.wait_for_within("text:— cut off", Duration::from_secs(10)).unwrap();
-  app.wait_until("the answer to the cut-in", Duration::from_secs(180), |s| s.texts().iter().any(|t| t.trim().trim_end_matches('.') == "pecan")).unwrap();
   app
-    .wait_until("the cut-in's call accepted, the count stopped", Duration::from_secs(1), |s| {
-      let texts = s.texts();
-      assert!(!texts.iter().any(|t| t.starts_with("No reply")), "the request after the cut was accepted: {texts:?}");
-      assert!(!texts.iter().any(|t| t.contains("cinq cent quatre-vingt-dix")), "the count stopped where it was cut");
-      true
+    .wait_until("the answer to the cut-in", Duration::from_secs(180), |s| {
+      s.texts().iter().any(|t| t.trim().trim_end_matches('.') == "pecan")
     })
+    .unwrap();
+  app
+    .wait_until(
+      "the cut-in's call accepted, the count stopped",
+      Duration::from_secs(1),
+      |s| {
+        let texts = s.texts();
+        assert!(
+          !texts.iter().any(|t| t.starts_with("No reply")),
+          "the request after the cut was accepted: {texts:?}"
+        );
+        assert!(
+          !texts.iter().any(|t| t.contains("cinq cent quatre-vingt-dix")),
+          "the count stopped where it was cut"
+        );
+        true
+      },
+    )
     .unwrap();
 }

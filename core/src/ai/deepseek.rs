@@ -63,7 +63,10 @@ pub struct Step {
 }
 
 pub fn body(ask: &Ask, items: &[Item], tools: &[Spec]) -> Value {
-  let tools: Vec<Value> = tools.iter().map(|t| json!({"type": "function", "name": t.name, "description": t.info, "parameters": t.schema})).collect();
+  let tools: Vec<Value> = tools
+    .iter()
+    .map(|t| json!({"type": "function", "name": t.name, "description": t.info, "parameters": t.schema}))
+    .collect();
   let mut body = json!({
       "model": MODEL,
       "stream": true,
@@ -119,9 +122,11 @@ impl Got {
     let str = |k: &str| ev[k].as_str().unwrap_or_default();
     match str("type") {
       "response.output_text.delta" => on(Kind::Acorn, str("delta"), false),
-      "response.output_item.added" if ev["item"]["type"] == "function_call" => {
-        on(Kind::Tool, &format!("{} ", ev["item"]["name"].as_str().unwrap_or_default()), true)
-      }
+      "response.output_item.added" if ev["item"]["type"] == "function_call" => on(
+        Kind::Tool,
+        &format!("{} ", ev["item"]["name"].as_str().unwrap_or_default()),
+        true,
+      ),
       "response.function_call_arguments.delta" => on(Kind::Tool, str("delta"), false),
       "response.reasoning_text.delta" => on(Kind::Mind, str("delta"), false),
       "response.completed" | "response.incomplete" | "response.failed" => {
@@ -149,7 +154,10 @@ impl Got {
 
   /// The step a stream gave (its usage stays).
   pub fn step(&mut self) -> Step {
-    let res = self.res.take().unwrap_or_else(|| json!({"status": "failed", "error": self.error.take(), "output": []}));
+    let res = self
+      .res
+      .take()
+      .unwrap_or_else(|| json!({"status": "failed", "error": self.error.take(), "output": []}));
     let out: Vec<Value> = res["output"].as_array().cloned().unwrap_or_default();
     let uses: Vec<Use> = out
       .iter()
@@ -172,18 +180,29 @@ impl Got {
       .map(|c| c["refusal"].as_str().unwrap_or_default().to_string())
       .collect();
     let entries = out.iter().flat_map(entries).collect();
-    let mut step = Step { out, uses, entries, halt: Halt::Done, why: String::new() };
+    let mut step = Step {
+      out,
+      uses,
+      entries,
+      halt: Halt::Done,
+      why: String::new(),
+    };
     match res["status"].as_str() {
       Some("failed") => {
         let (code, kind) = (&res["error"]["code"], &res["error"]["type"]);
-        let busy =
-          ["server_error", "rate_limit_error"].iter().any(|c| code == c) || ["server_error", "overloaded_error", "rate_limit_error"].iter().any(|t| kind == t);
+        let busy = ["server_error", "rate_limit_error"].iter().any(|c| code == c)
+          || ["server_error", "overloaded_error", "rate_limit_error"]
+            .iter()
+            .any(|t| kind == t);
         step.halt = if busy { Halt::Busy } else { Halt::Fail };
         step.why = res["error"]["message"].as_str().unwrap_or("failed").into();
       }
       Some("incomplete") => {
         step.halt = Halt::Fail;
-        step.why = format!("incomplete: {}", res["incomplete_details"]["reason"].as_str().unwrap_or("undefined"));
+        step.why = format!(
+          "incomplete: {}",
+          res["incomplete_details"]["reason"].as_str().unwrap_or("undefined")
+        );
       }
       _ if !refusals.is_empty() => {
         step.halt = Halt::Fail;
@@ -198,22 +217,52 @@ impl Got {
 /// The messages of an output item: a thought, a reply, a tool call.
 fn entries(o: &Value) -> Vec<Entry> {
   fn texts(v: &Value) -> impl Iterator<Item = String> + '_ {
-    v.as_array().into_iter().flatten().map(|s| s["text"].as_str().unwrap_or_default().to_string())
+    v.as_array()
+      .into_iter()
+      .flatten()
+      .map(|s| s["text"].as_str().unwrap_or_default().to_string())
   }
   match o["type"].as_str() {
     Some("reasoning") => {
-      let text = texts(&o["summary"]).chain(texts(&o["content"])).collect::<Vec<_>>().join("\n\n");
+      let text = texts(&o["summary"])
+        .chain(texts(&o["content"]))
+        .collect::<Vec<_>>()
+        .join("\n\n");
       let text = text.trim();
-      if text.is_empty() { vec![] } else { vec![Entry { kind: Kind::Mind, text: text.into(), of: None }] }
+      if text.is_empty() {
+        vec![]
+      } else {
+        vec![Entry {
+          kind: Kind::Mind,
+          text: text.into(),
+          of: None,
+        }]
+      }
     }
     Some("message") => {
       let text = texts(&o["content"]).collect::<String>();
       let text = text.trim();
-      if text.is_empty() { vec![] } else { vec![Entry { kind: Kind::Acorn, text: text.into(), of: None }] }
+      if text.is_empty() {
+        vec![]
+      } else {
+        vec![Entry {
+          kind: Kind::Acorn,
+          text: text.into(),
+          of: None,
+        }]
+      }
     }
     Some("function_call") => {
-      let text = format!("{} {}", o["name"].as_str().unwrap_or_default(), o["arguments"].as_str().unwrap_or_default());
-      vec![Entry { kind: Kind::Tool, text, of: o["call_id"].as_str().map(str::to_string) }]
+      let text = format!(
+        "{} {}",
+        o["name"].as_str().unwrap_or_default(),
+        o["arguments"].as_str().unwrap_or_default()
+      );
+      vec![Entry {
+        kind: Kind::Tool,
+        text,
+        of: o["call_id"].as_str().map(str::to_string),
+      }]
     }
     _ => vec![],
   }

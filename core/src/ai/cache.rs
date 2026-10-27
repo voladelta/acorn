@@ -63,7 +63,9 @@ impl Drop for Flight {
 /// block's hash seeded by the one before.
 fn keys(ask: &Ask) -> Vec<u64> {
   let blocks = &ask.blocks[..ask.blocks.len().saturating_sub(1)];
-  let Some(last) = blocks.iter().rposition(|b| b.mark) else { return Vec::new() };
+  let Some(last) = blocks.iter().rposition(|b| b.mark) else {
+    return Vec::new();
+  };
   let mut h = DefaultHasher::new();
   (super::deepseek::MODEL, ask.effort.as_str(), &ask.system, &ask.user).hash(&mut h);
   let mut key = h.finish();
@@ -100,7 +102,13 @@ pub async fn wait(ask: &Ask) -> Flight {
           let key = *keys.last().unwrap();
           cache.retain(|_, c| live(c));
           let (tx, rx) = watch::channel(false);
-          cache.insert(key, Cached { until: now, ready: Some(rx) });
+          cache.insert(
+            key,
+            Cached {
+              until: now,
+              ready: Some(rx),
+            },
+          );
           return Flight { lead: Some((key, tx)) };
         }
       }

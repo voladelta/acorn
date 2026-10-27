@@ -80,7 +80,13 @@ pub enum Row {
   Box { seg: Seg, text: String, rows: Vec<Row> },
   /// A message whole: who said it (named on its frame), its text (a
   /// report's, its replies), its call if a tool call.
-  Msg { kind: Kind, who: String, text: String, call: Option<Call>, images: Vec<String> },
+  Msg {
+    kind: Kind,
+    who: String,
+    text: String,
+    call: Option<Call>,
+    images: Vec<String>,
+  },
   /// What a turn used, under its last message.
   Use(Spend),
   /// A line about the page.
@@ -130,23 +136,40 @@ impl Model {
           self.fold = Some(parts);
         }
       }
-      Event::Entry { agent: Some(name), entry, .. } => {
+      Event::Entry {
+        agent: Some(name),
+        entry,
+        ..
+      } => {
         if let Some(log) = self.pages.get_mut(&name).and_then(|p| p.log.as_mut()) {
           log.push(entry);
         }
       }
-      Event::Entry { agent: None, id: Some(id), entry } => {
+      Event::Entry {
+        agent: None,
+        id: Some(id),
+        entry,
+      } => {
         self.whole.insert(id, entry);
         self.parts.push((id, 1));
       }
-      Event::Entry { agent: None, id: None, entry } => {
+      Event::Entry {
+        agent: None,
+        id: None,
+        entry,
+      } => {
         if entry.kind == Kind::Mind
           && let Some(&(id, n)) = self.parts.last()
         {
           self.minds.entry(id + n - 1).or_default().push(entry.text);
         }
       }
-      Event::Delta { agent, kind, text, fresh } => {
+      Event::Delta {
+        agent,
+        kind,
+        text,
+        fresh,
+      } => {
         if let Some(live) = self.live_of(agent.as_deref()) {
           live_push(live, kind, &text, fresh);
         }
@@ -249,24 +272,40 @@ impl Model {
 
   /// A chat's model, empty, opening with `head`.
   pub fn headed(head: String) -> Model {
-    Model { head: Some(head), ..Model::default() }
+    Model {
+      head: Some(head),
+      ..Model::default()
+    }
   }
 
   /// The page shown, as items (each a part's rows, or an agent's entry).
   pub fn body(&self) -> Vec<Vec<Row>> {
     if let Some(name) = &self.page {
       let page = self.pages.get(name);
-      let at = if self.agents().contains(name) { "at work" } else { "done" };
+      let at = if self.agents().contains(name) {
+        "at work"
+      } else {
+        "done"
+      };
       let head = vec![Row::Cap(format!("{name} · {at}"))];
-      let log = page.and_then(|p| p.log.as_ref()).into_iter().flatten().map(|e| entry_rows(e.kind, &e.text, &e.images));
-      return std::iter::once(head).chain(log).filter(|rows| !rows.is_empty()).collect();
+      let log = page
+        .and_then(|p| p.log.as_ref())
+        .into_iter()
+        .flatten()
+        .map(|e| entry_rows(e.kind, &e.text, &e.images));
+      return std::iter::once(head)
+        .chain(log)
+        .filter(|rows| !rows.is_empty())
+        .collect();
     }
     if let Some(tops) = &self.fold {
       let rows = tops.iter().map(|&(id, n)| self.part_rows(id, n, u64::MAX, false));
       return std::iter::once(vec![Row::Cap(FOLD.into())]).chain(rows).collect();
     }
     let head = self.head.iter().map(|h| vec![Row::Cap(h.clone())]);
-    head.chain(self.parts.iter().map(|&(id, n)| self.part_rows(id, n, self.turn, true))).collect()
+    head
+      .chain(self.parts.iter().map(|&(id, n)| self.part_rows(id, n, self.turn, true)))
+      .collect()
   }
 
   /// What streams on the page shown, and what the turn waits on.
@@ -311,26 +350,43 @@ impl Model {
     if !self.open.get(&(id, n)).copied().unwrap_or(talks) {
       return vec![self.sum_row(id, n)];
     }
-    let text = if n == 1 { "collapse".to_string() } else { format!("▾ {n} messages · collapse") };
+    let text = if n == 1 {
+      "collapse".to_string()
+    } else {
+      format!("▾ {n} messages · collapse")
+    };
     let rows = if n > 1 {
       let half = n / 2;
       let mut rows = self.part_rows(id, half, t, talk);
       rows.extend(self.part_rows(id + half, half, t, talk));
       rows
     } else {
-      let mut rows = entry.map(|e| entry_rows(e.kind, &e.text, &e.images)).unwrap_or_default();
+      let mut rows = entry
+        .map(|e| entry_rows(e.kind, &e.text, &e.images))
+        .unwrap_or_default();
       rows.extend(entry.and_then(|e| e.spend).filter(|s| s.n > 0).map(Row::Use));
       rows
     };
-    vec![Row::Box { seg: (id, n), text, rows }]
+    vec![Row::Box {
+      seg: (id, n),
+      text,
+      rows,
+    }]
   }
 
   /// A block; one whose summary isn't known yet says WAIT. A line of one
   /// message that is a tool call word for word shows as the call.
   fn sum_row(&self, id: u64, n: u64) -> Row {
     let text = self.nodes.get(&(id, n)).map_or(WAIT, |node| node.text.as_str());
-    let call = (n == 1).then(|| text.strip_prefix("tool: ").map(call::parse)).flatten().filter(|c| !c.name.is_empty());
-    Row::Sum { seg: (id, n), text: text::flat(text), call }
+    let call = (n == 1)
+      .then(|| text.strip_prefix("tool: ").map(call::parse))
+      .flatten()
+      .filter(|c| !c.name.is_empty());
+    Row::Sum {
+      seg: (id, n),
+      text: text::flat(text),
+      call,
+    }
   }
 }
 
@@ -348,19 +404,36 @@ pub fn entry_rows(kind: Kind, text: &str, images: &[String]) -> Vec<Row> {
   if call.is_none() && text.trim().is_empty() && images.is_empty() {
     return vec![];
   }
-  vec![Row::Msg { kind, who, text, call, images: images.to_vec() }]
+  vec![Row::Msg {
+    kind,
+    who,
+    text,
+    call,
+    images: images.to_vec(),
+  }]
 }
 
 /// An import's progress.
 pub fn progress_show(p: &Progress) -> String {
   let merges: u64 = p.open.iter().sum();
   let phase = if p.open.first().is_some_and(|&n| n > 0) {
-    format!("Summarizing messages: {} of {}", text::grouped(p.msgs - p.open[0]), text::grouped(p.msgs))
+    format!(
+      "Summarizing messages: {} of {}",
+      text::grouped(p.msgs - p.open[0]),
+      text::grouped(p.msgs)
+    )
   } else {
     let minutes = ((p.total - p.done) * PACE).ceil();
-    format!("Merging the top of the tree: {merges} {} left · about {minutes} min", if merges == 1 { "merge" } else { "merges" })
+    format!(
+      "Merging the top of the tree: {merges} {} left · about {minutes} min",
+      if merges == 1 { "merge" } else { "merges" }
+    )
   };
-  if p.why.is_some() { format!("{phase} · paused") } else { phase }
+  if p.why.is_some() {
+    format!("{phase} · paused")
+  } else {
+    phase
+  }
 }
 
 #[cfg(test)]
@@ -368,16 +441,34 @@ mod tests {
   use super::*;
 
   fn entry(kind: Kind, text: &str) -> Entry {
-    Entry { kind, text: text.into(), date: "2026-10-26T10:00:00.000Z".into(), images: vec![], spend: None }
+    Entry {
+      kind,
+      text: text.into(),
+      date: "2026-10-26T10:00:00.000Z".into(),
+      images: vec![],
+      spend: None,
+    }
   }
 
   #[test]
   fn the_chat_shows_blocks_then_the_turn_whole() {
     let mut m = Model::default();
-    m.hear(Event::Know { whole: vec![(0, entry(Kind::User, "hi")), (1, entry(Kind::Tool, "shell {\"command\":\"ls\"}"))], nodes: vec![] });
-    m.hear(Event::View { parts: vec![(0, 1), (1, 1)], turn: 1 });
+    m.hear(Event::Know {
+      whole: vec![
+        (0, entry(Kind::User, "hi")),
+        (1, entry(Kind::Tool, "shell {\"command\":\"ls\"}")),
+      ],
+      nodes: vec![],
+    });
+    m.hear(Event::View {
+      parts: vec![(0, 1), (1, 1)],
+      turn: 1,
+    });
     let body = m.body();
-    assert!(matches!(&body[0][0], Row::Box { .. }), "a user's message before the turn opens");
+    assert!(
+      matches!(&body[0][0], Row::Box { .. }),
+      "a user's message before the turn opens"
+    );
     assert!(matches!(&body[1][0], Row::Msg { call: Some(c), .. } if c.name == "shell"));
   }
 
@@ -387,12 +478,48 @@ mod tests {
   #[test]
   fn a_message_is_the_only_act() {
     let mut m = Model::default();
-    m.hear(Event::State(State { busy: true, wait: Wait::None, agents: vec!["FireAnt".into()], goal: Some("tests pass".into()), importing: None, today: None }));
-    assert!(m.act(Act::Send { text: " ".into(), images: vec![] }).cmds.is_empty(), "an empty Enter stops nothing");
+    m.hear(Event::State(State {
+      busy: true,
+      wait: Wait::None,
+      agents: vec!["FireAnt".into()],
+      goal: Some("tests pass".into()),
+      importing: None,
+      today: None,
+    }));
+    assert!(
+      m.act(Act::Send {
+        text: " ".into(),
+        images: vec![]
+      })
+      .cmds
+      .is_empty(),
+      "an empty Enter stops nothing"
+    );
     m.act(Act::Goto(Some("FireAnt".into())));
     m.act(Act::Fold(true));
-    assert!(matches!(m.act(Act::Send { text: "stop".into(), images: vec![] }).cmds[..], [Command::Say { .. }]));
-    assert_eq!((m.page.as_deref(), m.fold.is_some()), (None, false), "back to the chat, where the reply comes");
-    assert!(matches!(m.act(Act::Send { text: "/goal ship it".into(), images: vec![] }).cmds[..], [Command::Say { .. }]), "no slash words: words");
+    assert!(matches!(
+      m.act(Act::Send {
+        text: "stop".into(),
+        images: vec![]
+      })
+      .cmds[..],
+      [Command::Say { .. }]
+    ));
+    assert_eq!(
+      (m.page.as_deref(), m.fold.is_some()),
+      (None, false),
+      "back to the chat, where the reply comes"
+    );
+    assert!(
+      matches!(
+        m.act(Act::Send {
+          text: "/goal ship it".into(),
+          images: vec![]
+        })
+        .cmds[..],
+        [Command::Say { .. }]
+      ),
+      "no slash words: words"
+    );
   }
 }

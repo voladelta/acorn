@@ -34,7 +34,14 @@ struct Kept {
 
 impl From<Kept> for Spend {
   fn from(k: Kept) -> Spend {
-    Spend { n: k.n, input: k.input, read: k.read, output: k.output, usd: k.usd, at: k.at }
+    Spend {
+      n: k.n,
+      input: k.input,
+      read: k.read,
+      output: k.output,
+      usd: k.usd,
+      at: k.at,
+    }
   }
 }
 
@@ -69,9 +76,22 @@ pub(super) fn told(days: i64) -> String {
     }
     .to_string()
   };
-  let line = |what: String, s: &Spend| format!("{what}: {} calls, {} tokens in ({} cached), {} out, ${:.4}", s.n, s.input + s.read, s.read, s.output, s.usd);
+  let line = |what: String, s: &Spend| {
+    format!(
+      "{what}: {} calls, {} tokens in ({} cached), {} out, ${:.4}",
+      s.n,
+      s.input + s.read,
+      s.read,
+      s.output,
+      s.usd
+    )
+  };
   let total = all.values().fold(Spend::default(), |a, s| a + *s);
-  let mut lines: Vec<String> = all.iter().rev().map(|((day, k), s)| line(format!("{day} {}", kind(k)), s)).collect();
+  let mut lines: Vec<String> = all
+    .iter()
+    .rev()
+    .map(|((day, k), s)| line(format!("{day} {}", kind(k)), s))
+    .collect();
   lines.push(line(format!("All {days} days"), &total));
   lines.join("\n")
 }
@@ -79,12 +99,26 @@ pub(super) fn told(days: i64) -> String {
 impl Chat {
   pub(super) fn used(&mut self, kind: Served, used: Used) {
     let input = used.usage.input + used.usage.write;
-    let row = params![used.at, kind.as_str(), input, used.usage.read, used.usage.output, used.micros];
+    let row = params![
+      used.at,
+      kind.as_str(),
+      input,
+      used.usage.read,
+      used.usage.output,
+      used.micros
+    ];
     if let Err(err) = self.mem.db.execute("insert into uses values (?, ?, ?, ?, ?, ?)", row) {
       eprintln!("acorn: usage: {err}");
     }
     if kind == Served::Chat && self.busy {
-      let spend = Spend { n: 1, input, read: used.usage.read, output: used.usage.output, usd: used.micros as f64 / 1e6, at: used.at };
+      let spend = Spend {
+        n: 1,
+        input,
+        read: used.usage.read,
+        output: used.usage.output,
+        usd: used.micros as f64 / 1e6,
+        at: used.at,
+      };
       self.spend = self.spend + spend;
     }
     self.tell_state();
@@ -100,9 +134,20 @@ impl Chat {
     self.hold(move |chat| {
       let id = chat.mem.count.saturating_sub(1);
       let spend = chat.turn_use(id).unwrap_or_default() + spend;
-      let kept = Kept { n: spend.n, input: spend.input, read: spend.read, output: spend.output, usd: spend.usd, at: spend.at };
+      let kept = Kept {
+        n: spend.n,
+        input: spend.input,
+        read: spend.read,
+        output: spend.output,
+        usd: spend.usd,
+        at: spend.at,
+      };
       let json = serde_json::to_string(&kept).unwrap_or_default();
-      if let Err(err) = chat.mem.db.execute("insert or replace into turns values (?, ?)", params![id, json]) {
+      if let Err(err) = chat
+        .mem
+        .db
+        .execute("insert or replace into turns values (?, ?)", params![id, json])
+      {
         eprintln!("acorn: usage: {err}");
       }
       chat.all(Event::Use { id, spend });
@@ -111,7 +156,12 @@ impl Chat {
 
   /// What the turn ending at message id used (None: none ended there).
   pub(super) fn turn_use(&self, id: u64) -> Option<Spend> {
-    let json: String = self.mem.db.query_row("select use from turns where msg = ?", [id], |r| r.get(0)).optional().ok()??;
+    let json: String = self
+      .mem
+      .db
+      .query_row("select use from turns where msg = ?", [id], |r| r.get(0))
+      .optional()
+      .ok()??;
     serde_json::from_str::<Kept>(&json).ok().map(Spend::from)
   }
 

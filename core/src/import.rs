@@ -34,7 +34,10 @@ const PRICE: (f64, f64, f64) = (187.0, 735.0, 628.0);
 pub const APPS: [&str; 2] = ["Claude", "ChatGPT"];
 
 /// Where each app's website gives its export, a zip it emails.
-pub const EXPORTS: [(&str, &str); 2] = [("Claude", "Settings › Privacy › Export data"), ("ChatGPT", "Settings › Data controls › Export data")];
+pub const EXPORTS: [(&str, &str); 2] = [
+  ("Claude", "Settings › Privacy › Export data"),
+  ("ChatGPT", "Settings › Data controls › Export data"),
+];
 
 /// Sessions all imported before.
 pub const OLD: &str = "Nothing new: these chats are in Acorn's memory already.";
@@ -131,7 +134,11 @@ pub fn homes() -> Vec<PathBuf> {
   let home = crate::config::home();
   let claude = std::env::var_os("CLAUDE_CONFIG_DIR").map_or_else(|| home.join(".claude"), PathBuf::from);
   let codex = std::env::var_os("CODEX_HOME").map_or_else(|| home.join(".codex"), PathBuf::from);
-  vec![claude.join("projects"), codex.join("sessions"), codex.join("archived_sessions")]
+  vec![
+    claude.join("projects"),
+    codex.join("sessions"),
+    codex.join("archived_sessions"),
+  ]
 }
 
 /// The sessions of Claude Code's and Codex's dirs (one missing has none),
@@ -142,7 +149,12 @@ pub fn find(exports: &[PathBuf]) -> Result<Vec<Session>, String> {
     let mut files = Vec::new();
     walk(&dir, &mut files);
     files.sort();
-    found.extend(files.into_iter().filter(|f| is_log(f)).filter_map(|f| session(Source::Log(f), "", "")));
+    found.extend(
+      files
+        .into_iter()
+        .filter(|f| is_log(f))
+        .filter_map(|f| session(Source::Log(f), "", "")),
+    );
   }
   for file in exports {
     if !file.exists() {
@@ -156,23 +168,42 @@ pub fn find(exports: &[PathBuf]) -> Result<Vec<Session>, String> {
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
   for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
     let path = e.path();
-    if path.is_dir() { walk(&path, out) } else { out.push(path) }
+    if path.is_dir() {
+      walk(&path, out)
+    } else {
+      out.push(path)
+    }
   }
 }
 
 /// A path the import reads: a session's file.
 fn is_log(path: &Path) -> bool {
   let p = path.to_string_lossy();
-  let session = ["projects/", "sessions/", "archived_sessions/"].iter().any(|d| p.contains(d));
+  let session = ["projects/", "sessions/", "archived_sessions/"]
+    .iter()
+    .any(|d| p.contains(d));
   session && p.ends_with(".jsonl") && !p.contains("subagents/")
 }
 
 /// A session read for its heads (a log's app and where are told by its
 /// lines); None: no messages.
 fn session(source: Source, app: &str, place: &str) -> Option<Session> {
-  let mut s = Session { app: app.into(), place: place.into(), start: String::new(), source, heads: Vec::new() };
+  let mut s = Session {
+    app: app.into(),
+    place: place.into(),
+    start: String::new(),
+    source,
+    heads: Vec::new(),
+  };
   let mut heads = Vec::new();
-  s.read(|m| heads.push(Head { kind: m.kind, date: m.date.clone(), size: size(m.kind, &m.text), n: heads.len() }));
+  s.read(|m| {
+    heads.push(Head {
+      kind: m.kind,
+      date: m.date.clone(),
+      size: size(m.kind, &m.text),
+      n: heads.len(),
+    })
+  });
   s.heads = heads;
   s.start = s.heads.first()?.date.clone();
   Some(s)
@@ -189,7 +220,9 @@ impl Session {
         for line in std::io::BufReader::new(f).split(b'\n').map_while(Result::ok) {
           // a log is another app's file: one odd line never fails
           // its session, nor the import of all the others
-          let Ok(j) = serde_json::from_slice::<Value>(&line) else { continue };
+          let Ok(j) = serde_json::from_slice::<Value>(&line) else {
+            continue;
+          };
           let msgs = self.line(&j, &date);
           if let Some(m) = msgs.last() {
             date.clone_from(&m.date);
@@ -204,19 +237,38 @@ impl Session {
   /// session, a Claude Code log a Claude one.
   fn line(&mut self, j: &Value, last: &str) -> Vec<Msg> {
     if self.app.is_empty() {
-      self.app = if j["type"] == "session_meta" { "ChatGPT" } else { "Claude" }.into();
+      self.app = if j["type"] == "session_meta" {
+        "ChatGPT"
+      } else {
+        "Claude"
+      }
+      .into();
     }
-    if self.app == "ChatGPT" { self.codex(j, last) } else { self.claude(j, last) }
+    if self.app == "ChatGPT" {
+      self.codex(j, last)
+    } else {
+      self.claude(j, last)
+    }
   }
 
   /// A session: the app, where, when.
   fn name(&self) -> String {
-    format!("{} {}, from {}", self.app, self.place, local_time(&self.start).get(..16).unwrap_or_default())
+    format!(
+      "{} {}, from {}",
+      self.app,
+      self.place,
+      local_time(&self.start).get(..16).unwrap_or_default()
+    )
   }
 
   /// As it opens: its note.
   fn note(&self) -> Msg {
-    Msg { kind: Kind::Note, text: format!("{} (imported)", self.name()), date: self.start.clone(), more: false }
+    Msg {
+      kind: Kind::Note,
+      text: format!("{} (imported)", self.name()),
+      date: self.start.clone(),
+      more: false,
+    }
   }
 
   /// Its name in Done (its note's) and in Want's off.
@@ -228,12 +280,22 @@ impl Session {
   /// As listed to pick, in columns: its day, its messages at a glance,
   /// where (a folder short, a chat's title).
   pub fn cells(&self) -> [String; 3] {
-    let day = chrono::DateTime::parse_from_rfc3339(&self.start).map(|d| d.format("%b %d, %Y").to_string()).unwrap_or_default();
+    let day = chrono::DateTime::parse_from_rfc3339(&self.start)
+      .map(|d| d.format("%b %d, %Y").to_string())
+      .unwrap_or_default();
     let place = match self.place.strip_prefix("session in ") {
       Some(dir) => path_short(dir),
       None => {
-        let title = self.place.strip_prefix("chat \"").and_then(|t| t.strip_suffix('"')).unwrap_or(&self.place);
-        if title.is_empty() { "untitled".into() } else { title.into() }
+        let title = self
+          .place
+          .strip_prefix("chat \"")
+          .and_then(|t| t.strip_suffix('"'))
+          .unwrap_or(&self.place);
+        if title.is_empty() {
+          "untitled".into()
+        } else {
+          title.into()
+        }
       }
     };
     [day, count_short(self.heads.len()), place]
@@ -258,7 +320,11 @@ impl Session {
 /// app's name, whatever it was, and the time, whose zone was whoever
 /// imported it).
 pub fn key(text: &str, date: &str) -> String {
-  let from = [" session in ", " chat \""].iter().filter_map(|m| text.find(m)).min().unwrap_or(0);
+  let from = [" session in ", " chat \""]
+    .iter()
+    .filter_map(|m| text.find(m))
+    .min()
+    .unwrap_or(0);
   let text = &text[from..];
   let text = match text.rfind(", from ") {
     Some(k) if !text[k + 7..].contains(',') => &text[..k],
@@ -333,7 +399,11 @@ fn pick(sessions: &[Session], want: &Want, done: &Done) -> Vec<Session> {
     .into_iter()
     .filter_map(|mut s| {
       let last = done.get(&s.id());
-      s.heads.retain(|m| (want.tools || matches!(m.kind, Kind::User | Kind::Acorn)) && m.date.as_str() >= want.since.as_str() && is_new(&m.date, last));
+      s.heads.retain(|m| {
+        (want.tools || matches!(m.kind, Kind::User | Kind::Acorn))
+          && m.date.as_str() >= want.since.as_str()
+          && is_new(&m.date, last)
+      });
       (!s.heads.is_empty()).then_some(s)
     })
     .collect()
@@ -341,18 +411,50 @@ fn pick(sessions: &[Session], want: &Want, done: &Done) -> Vec<Session> {
 
 /// The sessions found, as an import into a chat of `count` messages.
 pub fn plan(sessions: &[Session], want: &Want, done: &Done, count: u64) -> Plan {
-  let all = pick(sessions, &Want { since: String::new(), ..want.clone() }, done);
+  let all = pick(
+    sessions,
+    &Want {
+      since: String::new(),
+      ..want.clone()
+    },
+    done,
+  );
   let shown = pick(&all, want, &Done::new());
   let picked: Vec<Session> = shown.iter().filter(|s| !want.off.contains(&s.id())).cloned().collect();
   let first = all.iter().map(|s| s.heads[0].date.clone()).min().unwrap_or_default();
-  let sizes: Vec<usize> = picked.iter().flat_map(|s| std::iter::once(size(Kind::Note, &s.note().text)).chain(s.heads.iter().map(|m| m.size))).collect();
-  Plan { msgs: sizes.len() - picked.len(), first: first.get(..10).unwrap_or_default().into(), usd: usd(count, &sizes), sessions: shown, picked, sizes }
+  let sizes: Vec<usize> = picked
+    .iter()
+    .flat_map(|s| std::iter::once(size(Kind::Note, &s.note().text)).chain(s.heads.iter().map(|m| m.size)))
+    .collect();
+  Plan {
+    msgs: sizes.len() - picked.len(),
+    first: first.get(..10).unwrap_or_default().into(),
+    usd: usd(count, &sizes),
+    sessions: shown,
+    picked,
+    sizes,
+  }
 }
 
 impl Plan {
   pub fn found(&self, want: &Want) -> Found {
-    let rows = self.sessions.iter().map(|s| Row { id: s.id(), app: s.app.clone(), cells: s.cells(), picked: !want.off.contains(&s.id()) }).collect();
-    Found { rows, msgs: self.msgs, first: self.first.clone(), usd: self.usd, want: want.clone() }
+    let rows = self
+      .sessions
+      .iter()
+      .map(|s| Row {
+        id: s.id(),
+        app: s.app.clone(),
+        cells: s.cells(),
+        picked: !want.off.contains(&s.id()),
+      })
+      .collect();
+    Found {
+      rows,
+      msgs: self.msgs,
+      first: self.first.clone(),
+      usd: self.usd,
+      want: want.clone(),
+    }
   }
 }
 
@@ -374,10 +476,18 @@ pub fn guess(a: u64, sizes: &[usize]) -> Vec<Vec<u64>> {
   let (mut l, mut i) = (0usize, a as i64);
   while !nodes.is_empty() {
     usd.push(nodes.iter().map(|&n| node_usd(n)).collect());
-    let line = |k: i64| if k < 0 { Node { bytes: LINE, depth: l } } else { node_line(nodes[k as usize]) };
+    let line = |k: i64| {
+      if k < 0 {
+        Node { bytes: LINE, depth: l }
+      } else {
+        node_line(nodes[k as usize])
+      }
+    };
     let from = i.div_euclid(2);
     let to = (i + nodes.len() as i64).div_euclid(2);
-    nodes = (0..to - from).map(|j| node_merge(line(2 * (from + j) - i), line(2 * (from + j) + 1 - i))).collect();
+    nodes = (0..to - from)
+      .map(|j| node_merge(line(2 * (from + j) - i), line(2 * (from + j) + 1 - i)))
+      .collect();
     l += 1;
     i = i.div_euclid(2);
   }
@@ -405,11 +515,24 @@ fn node_usd(node: Node) -> u64 {
 
 /// A node's line: its source if it fits, else a summary one deeper.
 fn node_line(node: Node) -> Node {
-  if node.bytes > NODE { Node { bytes: LINE, depth: node.depth + 1 } } else { Node { bytes: node.bytes, depth: 0 } }
+  if node.bytes > NODE {
+    Node {
+      bytes: LINE,
+      depth: node.depth + 1,
+    }
+  } else {
+    Node {
+      bytes: node.bytes,
+      depth: 0,
+    }
+  }
 }
 
 fn node_merge(a: Node, b: Node) -> Node {
-  Node { bytes: a.bytes + 1 + b.bytes, depth: a.depth.max(b.depth) }
+  Node {
+    bytes: a.bytes + 1 + b.bytes,
+    depth: a.depth.max(b.depth),
+  }
 }
 
 // Export
@@ -422,21 +545,37 @@ fn export(file: &Path) -> Result<Vec<Session>, String> {
   let mut data = std::fs::read(file).map_err(|e| e.to_string())?;
   if data.starts_with(b"PK") {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| e.to_string())?;
-    let name = zip.file_names().find(|n| *n == "conversations.json" || n.ends_with("/conversations.json")).map(str::to_string);
-    let Some(name) = name else { return Err("No conversations.json in the zip.".into()) };
+    let name = zip
+      .file_names()
+      .find(|n| *n == "conversations.json" || n.ends_with("/conversations.json"))
+      .map(str::to_string);
+    let Some(name) = name else {
+      return Err("No conversations.json in the zip.".into());
+    };
     let mut json = Vec::new();
-    zip.by_name(&name).map_err(|e| e.to_string())?.read_to_end(&mut json).map_err(|e| e.to_string())?;
+    zip
+      .by_name(&name)
+      .map_err(|e| e.to_string())?
+      .read_to_end(&mut json)
+      .map_err(|e| e.to_string())?;
     data = json;
   }
   let chats: Vec<Value> = serde_json::from_slice(&data).map_err(|_| NOT_EXPORT.to_string())?;
-  if !chats.iter().all(|c| !c["mapping"].is_null() || c["chat_messages"].is_array()) {
+  if !chats
+    .iter()
+    .all(|c| !c["mapping"].is_null() || c["chat_messages"].is_array())
+  {
     return Err(NOT_EXPORT.into());
   }
   Ok(
     chats
       .iter()
       .filter_map(|chat| {
-        let (app, msgs) = if chat["mapping"].is_null() { ("Claude", chat_claude(chat)) } else { ("ChatGPT", chat_openai(chat)) };
+        let (app, msgs) = if chat["mapping"].is_null() {
+          ("Claude", chat_claude(chat))
+        } else {
+          ("ChatGPT", chat_openai(chat))
+        };
         let title = chat["title"].as_str().or(chat["name"].as_str()).unwrap_or_default();
         session(Source::Msgs(Arc::new(msgs)), app, &format!("chat \"{title}\""))
       })
@@ -462,16 +601,30 @@ fn chat_openai(chat: &Value) -> Vec<Msg> {
   for m in nodes {
     let kind = match m["author"]["role"].as_str() {
       Some("user") => Some(Kind::User),
-      Some("assistant") => Some(if m["recipient"] == "all" { Kind::Acorn } else { Kind::Tool }),
+      Some("assistant") => Some(if m["recipient"] == "all" {
+        Kind::Acorn
+      } else {
+        Kind::Tool
+      }),
       Some("tool") => Some(Kind::Echo),
       _ => None,
     };
     let ctype = m["content"]["content_type"].as_str().unwrap_or("undefined");
     let hidden = m["metadata"]["is_visually_hidden_from_conversation"] == true;
     date = date_of(&m["create_time"], &date);
-    let Some(kind) = kind.filter(|_| !hidden && ctype != "thoughts" && ctype != "reasoning_recap") else { continue };
-    let parts = if m["content"]["parts"].is_array() { m["content"]["parts"].clone() } else { Value::Array(vec![m["content"]["text"].clone()]) };
-    let head = if kind == Kind::Tool { format!("{} ", m["recipient"].as_str().unwrap_or("undefined")) } else { String::new() };
+    let Some(kind) = kind.filter(|_| !hidden && ctype != "thoughts" && ctype != "reasoning_recap") else {
+      continue;
+    };
+    let parts = if m["content"]["parts"].is_array() {
+      m["content"]["parts"].clone()
+    } else {
+      Value::Array(vec![m["content"]["text"].clone()])
+    };
+    let head = if kind == Kind::Tool {
+      format!("{} ", m["recipient"].as_str().unwrap_or("undefined"))
+    } else {
+      String::new()
+    };
     out.extend(msgs_of(kind, &format!("{head}{}", parts_text(&parts)), &date));
   }
   out
@@ -485,12 +638,21 @@ fn chat_claude(chat: &Value) -> Vec<Msg> {
   let mut out = Vec::new();
   for m in chat["chat_messages"].as_array().into_iter().flatten() {
     date = date_of(&m["created_at"], &date);
-    let kind = if m["sender"] == "human" { Kind::User } else { Kind::Acorn };
+    let kind = if m["sender"] == "human" {
+      Kind::User
+    } else {
+      Kind::Acorn
+    };
     let mut blocks = match m["content"].as_array() {
       Some(c) => c.clone(),
       None => vec![serde_json::json!({"type": "text", "text": m["text"].as_str().unwrap_or_default()})],
     };
-    for f in m["attachments"].as_array().into_iter().chain(m["files"].as_array()).flatten() {
+    for f in m["attachments"]
+      .as_array()
+      .into_iter()
+      .chain(m["files"].as_array())
+      .flatten()
+    {
       blocks.push(serde_json::json!({"type": "text", "text": format!("[file {}]", f["file_name"].as_str().unwrap_or("undefined"))}));
     }
     out.extend(blocks_msgs(kind, &blocks, &date));
@@ -507,7 +669,10 @@ impl Session {
   fn claude(&mut self, j: &Value, last: &str) -> Vec<Msg> {
     let date = date_of(&j["timestamp"], last);
     let t = j["type"].as_str().unwrap_or_default();
-    let own = (t == "user" || t == "assistant") && j["isMeta"] != true && j["isSidechain"] != true && j["isCompactSummary"] != true;
+    let own = (t == "user" || t == "assistant")
+      && j["isMeta"] != true
+      && j["isSidechain"] != true
+      && j["isCompactSummary"] != true;
     let content = &j["message"]["content"];
     let blocks = match content {
       _ if !own => vec![],
@@ -521,7 +686,11 @@ impl Session {
       self.place = format!("session in {cwd}");
     }
     if t == "attachment" && j["attachment"]["type"] == "queued_command" {
-      return msgs_of(Kind::User, j["attachment"]["prompt"].as_str().unwrap_or_default(), &date);
+      return msgs_of(
+        Kind::User,
+        j["attachment"]["prompt"].as_str().unwrap_or_default(),
+        &date,
+      );
     }
     blocks_msgs(if t == "user" { Kind::User } else { Kind::Acorn }, &blocks, &date)
   }
@@ -532,7 +701,11 @@ impl Session {
     let date = date_of(&j["timestamp"], last);
     if j["type"] == "session_meta" {
       let agent = !p["source"]["subagent"].is_null() || !p["source"]["internal"].is_null();
-      self.place = if agent { String::new() } else { format!("session in {}", p["cwd"].as_str().unwrap_or("undefined")) };
+      self.place = if agent {
+        String::new()
+      } else {
+        format!("session in {}", p["cwd"].as_str().unwrap_or("undefined"))
+      };
     }
     if j["type"] != "response_item" || self.place.is_empty() {
       return vec![];
@@ -545,12 +718,30 @@ impl Session {
           Some("assistant") => Kind::Acorn,
           _ => return vec![],
         };
-        let parts: Vec<Value> = p["content"].as_array().into_iter().flatten().filter(|c| !injected(c["text"].as_str().unwrap_or_default())).cloned().collect();
+        let parts: Vec<Value> = p["content"]
+          .as_array()
+          .into_iter()
+          .flatten()
+          .filter(|c| !injected(c["text"].as_str().unwrap_or_default()))
+          .cloned()
+          .collect();
         msgs_of(kind, &parts_text(&Value::Array(parts)), &date)
       }
-      Some("function_call") => msgs_of(Kind::Tool, &format!("{} {}", str(&p["name"]), str(&p["arguments"])), &date),
-      Some("custom_tool_call") => msgs_of(Kind::Tool, &format!("{} {}", str(&p["name"]), serde_json::json!({"input": p["input"]})), &date),
-      Some("local_shell_call") => msgs_of(Kind::Tool, &format!("shell {}", serde_json::json!({"command": p["action"]["command"]})), &date),
+      Some("function_call") => msgs_of(
+        Kind::Tool,
+        &format!("{} {}", str(&p["name"]), str(&p["arguments"])),
+        &date,
+      ),
+      Some("custom_tool_call") => msgs_of(
+        Kind::Tool,
+        &format!("{} {}", str(&p["name"]), serde_json::json!({"input": p["input"]})),
+        &date,
+      ),
+      Some("local_shell_call") => msgs_of(
+        Kind::Tool,
+        &format!("shell {}", serde_json::json!({"command": p["action"]["command"]})),
+        &date,
+      ),
       Some("function_call_output" | "custom_tool_call_output") => msgs_of(Kind::Echo, &parts_text(&p["output"]), &date),
       _ => vec![],
     }
@@ -561,12 +752,19 @@ impl Session {
 /// results) as a message, its texts and images; then its calls, each its
 /// name and input, and their results.
 fn blocks_msgs(kind: Kind, blocks: &[Value], date: &str) -> Vec<Msg> {
-  let say: Vec<Value> =
-    blocks.iter().filter(|b| b["type"] == "image" || (b["type"] == "text" && !skipped(b["text"].as_str().unwrap_or_default()))).cloned().collect();
+  let say: Vec<Value> = blocks
+    .iter()
+    .filter(|b| b["type"] == "image" || (b["type"] == "text" && !skipped(b["text"].as_str().unwrap_or_default())))
+    .cloned()
+    .collect();
   let mut out = msgs_of(kind, &parts_text(&Value::Array(say)), date);
   for b in blocks {
     match b["type"].as_str() {
-      Some("tool_use") => out.extend(msgs_of(Kind::Tool, &format!("{} {}", b["name"].as_str().unwrap_or("undefined"), b["input"]), date)),
+      Some("tool_use") => out.extend(msgs_of(
+        Kind::Tool,
+        &format!("{} {}", b["name"].as_str().unwrap_or("undefined"), b["input"]),
+        date,
+      )),
       Some("tool_result") => out.extend(msgs_of(Kind::Echo, &parts_text(&b["content"]), date)),
       _ => {}
     }
@@ -579,14 +777,21 @@ fn injected(text: &str) -> bool {
   if text.starts_with("# AGENTS.md") {
     return true;
   }
-  let Some(rest) = text.strip_prefix('<') else { return false };
-  let name = rest.bytes().take_while(|b| b.is_ascii_lowercase() || *b == b'_').count();
+  let Some(rest) = text.strip_prefix('<') else {
+    return false;
+  };
+  let name = rest
+    .bytes()
+    .take_while(|b| b.is_ascii_lowercase() || *b == b'_')
+    .count();
   name > 0 && matches!(rest.as_bytes().get(name), Some(b' ' | b'>'))
 }
 
 /// What Claude Code logs as a person's that no person said.
 fn skipped(text: &str) -> bool {
-  ["<command-", "<local-command", "[Request interrupted"].iter().any(|p| text.starts_with(p))
+  ["<command-", "<local-command", "[Request interrupted"]
+    .iter()
+    .any(|p| text.starts_with(p))
 }
 
 /// A time as ISO: a log's or Claude's site's string, ChatGPT's seconds;
@@ -594,10 +799,13 @@ fn skipped(text: &str) -> bool {
 fn date_of(at: &Value, last: &str) -> String {
   let ms = match at {
     Value::Number(n) => n.as_f64().map(|s| (s * 1000.0) as i64),
-    Value::String(s) => chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| d.timestamp_millis()),
+    Value::String(s) => chrono::DateTime::parse_from_rfc3339(s)
+      .ok()
+      .map(|d| d.timestamp_millis()),
     _ => None,
   };
-  ms.and_then(chrono::DateTime::from_timestamp_millis).map_or_else(|| last.to_string(), |d| d.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+  ms.and_then(chrono::DateTime::from_timestamp_millis)
+    .map_or_else(|| last.to_string(), |d| d.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
 }
 
 /// A message in its pages.
@@ -607,7 +815,16 @@ fn msgs_of(kind: Kind, text: &str, date: &str) -> Vec<Msg> {
   }
   let pages = clip::pages(text);
   let n = pages.len();
-  pages.into_iter().enumerate().map(|(k, text)| Msg { kind, text, date: date.into(), more: k < n - 1 }).collect()
+  pages
+    .into_iter()
+    .enumerate()
+    .map(|(k, text)| Msg {
+      kind,
+      text,
+      date: date.into(),
+      more: k < n - 1,
+    })
+    .collect()
 }
 
 /// Content as text: a string, or parts (texts, images).
@@ -619,8 +836,15 @@ fn parts_text(content: &Value) -> String {
       .map(|c| match c.as_str().or_else(|| c["text"].as_str()) {
         Some(text) => text.to_string(),
         None => {
-          let t = c["type"].as_str().or_else(|| c["content_type"].as_str()).unwrap_or("undefined");
-          if t.contains("image") { "[image]".into() } else { String::new() }
+          let t = c["type"]
+            .as_str()
+            .or_else(|| c["content_type"].as_str())
+            .unwrap_or("undefined");
+          if t.contains("image") {
+            "[image]".into()
+          } else {
+            String::new()
+          }
         }
       })
       .collect::<Vec<_>>()
@@ -635,7 +859,10 @@ mod tests {
 
   #[test]
   fn keys_drop_the_app_and_time() {
-    let k = key("Claude session in /x/y, from 2026-01-02 03:04 (imported)", "2026-01-02T03:04:00.000Z");
+    let k = key(
+      "Claude session in /x/y, from 2026-01-02 03:04 (imported)",
+      "2026-01-02T03:04:00.000Z",
+    );
     assert_eq!(k, "2026-01-02T03:04:00.000Z  session in /x/y");
     assert_eq!(path_short("/Users/me/code/a/b/app/src"), "~/code/…/app/src");
     assert_eq!(path_short("/Users/me/code"), "~/code");

@@ -42,7 +42,10 @@ pub struct Live {
 pub fn live_push(live: &mut Vec<Live>, kind: Kind, text: &str, fresh: bool) {
   match live.last_mut() {
     Some(top) if top.kind == kind && !fresh => top.text.push_str(text),
-    _ => live.push(Live { kind, text: text.to_string() }),
+    _ => live.push(Live {
+      kind,
+      text: text.to_string(),
+    }),
   }
 }
 

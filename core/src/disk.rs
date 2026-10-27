@@ -20,8 +20,14 @@ static DISK: OnceLock<Disk> = OnceLock::new();
 
 fn disk() -> &'static Disk {
   DISK.get_or_init(|| {
-    std::thread::Builder::new().name("acorn-disk".into()).spawn(flusher).expect("the disk thread starts");
-    Disk { dirty: Mutex::new(HashSet::new()), wake: Condvar::new() }
+    std::thread::Builder::new()
+      .name("acorn-disk".into())
+      .spawn(flusher)
+      .expect("the disk thread starts");
+    Disk {
+      dirty: Mutex::new(HashSet::new()),
+      wake: Condvar::new(),
+    }
   })
 }
 

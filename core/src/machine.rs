@@ -36,7 +36,11 @@ static RUN: LazyLock<String> = LazyLock::new(|| format!("{:016x}", rand::random:
 static SHELLS: LazyLock<Mutex<HashMap<i32, Arc<AtomicBool>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn spec(name: &'static str, info: impl Into<String>, fields: Value, need: &[&str]) -> Spec {
-  Spec { name, info: info.into(), schema: json!({"type": "object", "properties": fields, "required": need}) }
+  Spec {
+    name,
+    info: info.into(),
+    schema: json!({"type": "object", "properties": fields, "required": need}),
+  }
 }
 
 pub fn tools() -> Vec<Spec> {
@@ -86,7 +90,12 @@ pub async fn run(name: &str, input: &Value, cwd: PathBuf, cancel: CancellationTo
   let file = cwd.join(str("path"));
   let done = match name {
     "shell" => return shell(&cwd, &str("command"), cancel).await,
-    "read" => read(&file, num("offset").unwrap_or(1.0), num("limit").unwrap_or(f64::INFINITY), num("at").unwrap_or(0.0)),
+    "read" => read(
+      &file,
+      num("offset").unwrap_or(1.0),
+      num("limit").unwrap_or(f64::INFINITY),
+      num("at").unwrap_or(0.0),
+    ),
     "write" => write(&file, &str("path"), &str("content")),
     "edit" => edit(&cwd, &input["edits"]),
     _ => return Out::fail(format!("No tool {name}.")),
@@ -163,8 +172,16 @@ pub async fn shell(cwd: &Path, command: &str, cancel: CancellationToken) -> Out 
   };
   let text = out.text();
   let text = text.strip_suffix('\n').unwrap_or(&text);
-  let head = if text.is_empty() { String::new() } else { format!("{text}\n") };
-  Out { text: format!("{head}({exit} in {time})"), fail: exit != "exit 0", ..Out::default() }
+  let head = if text.is_empty() {
+    String::new()
+  } else {
+    format!("{text}\n")
+  };
+  Out {
+    text: format!("{head}({exit} in {time})"),
+    fail: exit != "exit 0",
+    ..Out::default()
+  }
 }
 
 fn signal_name(sig: i32) -> String {
@@ -180,7 +197,10 @@ fn signal_name(sig: i32) -> String {
     (14, "SIGALRM"),
     (15, "SIGTERM"),
   ];
-  names.iter().find(|(n, _)| *n == sig).map_or_else(|| format!("signal {sig}"), |(_, name)| name.to_string())
+  names
+    .iter()
+    .find(|(n, _)| *n == sig)
+    .map_or_else(|| format!("signal {sig}"), |(_, name)| name.to_string())
 }
 
 /// Whether a shell's process group may still hold a job: the shell runs,
@@ -214,9 +234,17 @@ pub fn end() {
   }
   // SAFETY: getuid has no preconditions.
   let uid = unsafe { libc::getuid() }.to_string();
-  let Ok(ps) = std::process::Command::new("ps").args(["-wwE", "-U", &uid, "-o", "pid=,command="]).output() else { return };
+  let Ok(ps) = std::process::Command::new("ps")
+    .args(["-wwE", "-U", &uid, "-o", "pid=,command="])
+    .output()
+  else {
+    return;
+  };
   let mark = format!("ACORN_RUN={}", *RUN);
-  for line in String::from_utf8_lossy(&ps.stdout).lines().filter(|l| l.contains(&mark)) {
+  for line in String::from_utf8_lossy(&ps.stdout)
+    .lines()
+    .filter(|l| l.contains(&mark))
+  {
     if let Some(pid) = line.split_whitespace().next().and_then(|p| p.parse().ok()) {
       kill(pid);
     }
@@ -236,9 +264,21 @@ pub fn read(file: &Path, offset: f64, limit: f64, at: f64) -> anyhow::Result<Out
   let text = String::from_utf8_lossy(&data);
   let lines: Vec<&str> = text.strip_suffix('\n').unwrap_or(&text).split('\n').collect();
   let from = offset.max(1.0) as usize;
-  let rows: Vec<&str> = lines.iter().skip(from - 1).take(if limit.is_finite() { limit.max(0.0) as usize } else { usize::MAX }).copied().collect();
+  let rows: Vec<&str> = lines
+    .iter()
+    .skip(from - 1)
+    .take(if limit.is_finite() {
+      limit.max(0.0) as usize
+    } else {
+      usize::MAX
+    })
+    .copied()
+    .collect();
   if rows.is_empty() {
-    return Ok(Out::fail(format!("No lines from line {from}: the file has {}.", lines.len())));
+    return Ok(Out::fail(format!(
+      "No lines from line {from}: the file has {}.",
+      lines.len()
+    )));
   }
   let text = rows.join("\n");
   let n = text.chars().count();
@@ -310,12 +350,22 @@ pub fn edit(cwd: &Path, edits: &Value) -> anyhow::Result<Out> {
       None
     };
     if let Some(why) = why {
-      return Ok(Out::fail(format!("Edit {} ({path}): {why}. No file was changed.", k + 1)));
+      return Ok(Out::fail(format!(
+        "Edit {} ({path}): {why}. No file was changed.",
+        k + 1
+      )));
     }
     let text = text.replace(old, e["new"].as_str().unwrap_or_default());
     match known {
       Some(k) => files[k].1.text = text,
-      None => files.push((file, File { shown: path, was: was.unwrap_or_default(), text })),
+      None => files.push((
+        file,
+        File {
+          shown: path,
+          was: was.unwrap_or_default(),
+          text,
+        },
+      )),
     }
   }
   if files.is_empty() {
@@ -324,7 +374,13 @@ pub fn edit(cwd: &Path, edits: &Value) -> anyhow::Result<Out> {
   for (file, f) in &files {
     fs::write(file, &f.text)?;
   }
-  Ok(Out::ok(files.iter().map(|(_, f)| diff(&f.shown, &f.was, &f.text)).collect::<Vec<_>>().join("\n")))
+  Ok(Out::ok(
+    files
+      .iter()
+      .map(|(_, f)| diff(&f.shown, &f.was, &f.text))
+      .collect::<Vec<_>>()
+      .join("\n"),
+  ))
 }
 
 // Diff
@@ -361,8 +417,15 @@ pub fn diff(file: &str, was: &str, now: &str) -> String {
     let run = &ops[a..b];
     let olds = run.iter().filter(|(s, _)| *s != '+').count();
     let news = run.iter().filter(|(s, _)| *s != '-').count();
-    let head = format!("@@ -{},{olds} +{},{news} @@", at[a].0 + usize::from(olds > 0), at[a].1 + usize::from(news > 0));
-    let body: String = run.iter().map(|(s, x)| format!("\n{s}{}", x.strip_suffix('\n').unwrap_or(x))).collect();
+    let head = format!(
+      "@@ -{},{olds} +{},{news} @@",
+      at[a].0 + usize::from(olds > 0),
+      at[a].1 + usize::from(news > 0)
+    );
+    let body: String = run
+      .iter()
+      .map(|(s, x)| format!("\n{s}{}", x.strip_suffix('\n').unwrap_or(x)))
+      .collect();
     out.add(&format!("\n{head}{body}"));
   }
   out.text()
@@ -371,7 +434,16 @@ pub fn diff(file: &str, was: &str, now: &str) -> String {
 /// A text's lines, each with its "\n" (the last may lack it), and the
 /// "\ No newline at end of file" git puts after such a line in a diff.
 fn text_lines(text: &str) -> Vec<String> {
-  text.split_inclusive('\n').map(|l| if l.ends_with('\n') { l.to_string() } else { format!("{l}\n\\ No newline at end of file") }).collect()
+  text
+    .split_inclusive('\n')
+    .map(|l| {
+      if l.ends_with('\n') {
+        l.to_string()
+      } else {
+        format!("{l}\n\\ No newline at end of file")
+      }
+    })
+    .collect()
 }
 
 /// The shortest script from lines a to lines b: their lines kept (the
@@ -380,7 +452,10 @@ fn text_lines(text: &str) -> Vec<String> {
 /// the match runs without them.
 fn lines_diff(a: &[String], b: &[String]) -> Vec<(char, String)> {
   use std::collections::HashSet;
-  let (in_a, in_b): (HashSet<&str>, HashSet<&str>) = (a.iter().map(String::as_str).collect(), b.iter().map(String::as_str).collect());
+  let (in_a, in_b): (HashSet<&str>, HashSet<&str>) = (
+    a.iter().map(String::as_str).collect(),
+    b.iter().map(String::as_str).collect(),
+  );
   let ia: Vec<usize> = (0..a.len()).filter(|&i| in_b.contains(a[i].as_str())).collect();
   let ib: Vec<usize> = (0..b.len()).filter(|&j| in_a.contains(b[j].as_str())).collect();
   let xa: Vec<&str> = ia.iter().map(|&i| a[i].as_str()).collect();
@@ -389,7 +464,9 @@ fn lines_diff(a: &[String], b: &[String]) -> Vec<(char, String)> {
   lines_match(&xa, &xb, (0, xa.len(), 0, xb.len()), &mut pairs);
   let mut ops = Vec::new();
   let (mut i, mut j) = (0, 0);
-  let push = |ops: &mut Vec<(char, String)>, s: char, xs: &[String], from: usize, to: usize| ops.extend(xs[from..to].iter().map(|x| (s, x.clone())));
+  let push = |ops: &mut Vec<(char, String)>, s: char, xs: &[String], from: usize, to: usize| {
+    ops.extend(xs[from..to].iter().map(|x| (s, x.clone())))
+  };
   for (p, q) in pairs {
     push(&mut ops, '-', a, i, ia[p]);
     push(&mut ops, '+', b, j, ib[q]);
@@ -442,7 +519,11 @@ fn snake(a: &[&str], b: &[&str], (a0, a1, b0, b1): Box4) -> Box4 {
   for d in 0.. {
     let mut k = -d;
     while k <= d {
-      let mut x = if k == -d || (k != d && vf[ix(k - 1)] < vf[ix(k + 1)]) { vf[ix(k + 1)] } else { vf[ix(k - 1)] + 1 };
+      let mut x = if k == -d || (k != d && vf[ix(k - 1)] < vf[ix(k + 1)]) {
+        vf[ix(k + 1)]
+      } else {
+        vf[ix(k - 1)] + 1
+      };
       let x0 = x;
       while x < n && x - k < m && a[a0 + x as usize] == b[b0 + (x - k) as usize] {
         x += 1;
@@ -450,13 +531,22 @@ fn snake(a: &[&str], b: &[&str], (a0, a1, b0, b1): Box4) -> Box4 {
       vf[ix(k)] = x;
       let c = delta - k;
       if delta % 2 != 0 && c.abs() < d && x + vb[ix(c)] >= n {
-        return (a0 + x0 as usize, a0 + x as usize, (b0 as isize + x0 - k) as usize, (b0 as isize + x - k) as usize);
+        return (
+          a0 + x0 as usize,
+          a0 + x as usize,
+          (b0 as isize + x0 - k) as usize,
+          (b0 as isize + x - k) as usize,
+        );
       }
       k += 2;
     }
     let mut c = -d;
     while c <= d {
-      let mut x = if c == -d || (c != d && vb[ix(c - 1)] < vb[ix(c + 1)]) { vb[ix(c + 1)] } else { vb[ix(c - 1)] + 1 };
+      let mut x = if c == -d || (c != d && vb[ix(c - 1)] < vb[ix(c + 1)]) {
+        vb[ix(c + 1)]
+      } else {
+        vb[ix(c - 1)] + 1
+      };
       let x0 = x;
       while x < n && x - c < m && a[a1 - 1 - x as usize] == b[(b1 as isize - 1 - x + c) as usize] {
         x += 1;
@@ -464,7 +554,12 @@ fn snake(a: &[&str], b: &[&str], (a0, a1, b0, b1): Box4) -> Box4 {
       vb[ix(c)] = x;
       let k = delta - c;
       if delta % 2 == 0 && k.abs() <= d && x + vf[ix(k)] >= n {
-        return (a1 - x as usize, a1 - x0 as usize, (b1 as isize - x + c) as usize, (b1 as isize - x0 + c) as usize);
+        return (
+          a1 - x as usize,
+          a1 - x0 as usize,
+          (b1 as isize - x + c) as usize,
+          (b1 as isize - x0 + c) as usize,
+        );
       }
       c += 2;
     }
@@ -481,7 +576,10 @@ mod tests {
     let was = "a\nb\nc\nd\n";
     let now = "a\nB\nc\nd\ne";
     let d = diff("f", was, now);
-    assert_eq!(d, "--- f\n+++ f\n@@ -1,4 +1,5 @@\n a\n-b\n+B\n c\n d\n+e\n\\ No newline at end of file");
+    assert_eq!(
+      d,
+      "--- f\n+++ f\n@@ -1,4 +1,5 @@\n a\n-b\n+B\n c\n d\n+e\n\\ No newline at end of file"
+    );
     assert_eq!(diff("f", "x\n", "x\n"), "f is unchanged.");
     assert!(diff("new", "", "1\n2\n").starts_with("--- new\n+++ new\n@@ -0,0 +1,2 @@\n+1\n+2"));
   }
@@ -491,8 +589,18 @@ mod tests {
     let a: String = (0..200).map(|i| format!("{i}\n")).collect();
     let b: String = (0..200).filter(|i| i % 7 != 0).map(|i| format!("{i}\n")).collect();
     let d = diff("f", &a, &b);
-    assert_eq!(d.lines().filter(|l| l.starts_with('-') && !l.starts_with("---")).count(), 29);
-    assert_eq!(d.lines().filter(|l| l.starts_with('+') && !l.starts_with("+++")).count(), 0);
+    assert_eq!(
+      d.lines()
+        .filter(|l| l.starts_with('-') && !l.starts_with("---"))
+        .count(),
+      29
+    );
+    assert_eq!(
+      d.lines()
+        .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+        .count(),
+      0
+    );
   }
 
   #[test]

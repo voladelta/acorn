@@ -41,7 +41,11 @@ pub fn open_all() {
   for me in &all {
     let _ = chat(me);
     let with = std::fs::read_dir(config::get().chats.join(&me.id).join(WITH));
-    let asks = with.into_iter().flatten().flatten().filter_map(|e| e.file_name().into_string().ok());
+    let asks = with
+      .into_iter()
+      .flatten()
+      .flatten()
+      .filter_map(|e| e.file_name().into_string().ok());
     for asks in asks.filter_map(|id| all.iter().find(|a| a.id == id)) {
       let _ = thread(me, asks);
     }
@@ -73,7 +77,12 @@ pub fn all() -> Vec<Arc<Engine>> {
 /// An archived assistant's chats closed, its and every thread it is in:
 /// their work stops, and none opens again from here.
 pub fn close(id: &str) {
-  let ours = |chat: &str| chat == id || chat.split_once('/').is_some_and(|(answers, asks)| answers == id || asks == id);
+  let ours = |chat: &str| {
+    chat == id
+      || chat
+        .split_once('/')
+        .is_some_and(|(answers, asks)| answers == id || asks == id)
+  };
   let slots: Vec<Slot> = {
     let mut open = OPEN.lock();
     let gone: Vec<String> = open.keys().filter(|k| ours(k)).cloned().collect();
@@ -102,7 +111,9 @@ pub fn whose(id: &str) -> &str {
 const WITH: &str = "with";
 
 fn open(id: String, me: &Assistant, with: Option<&Assistant>) -> Result<Arc<Engine>, String> {
-  let Some(heard) = HEARD.get() else { return Err("no one listens to the chats".into()) };
+  let Some(heard) = HEARD.get() else {
+    return Err("no one listens to the chats".into());
+  };
   let slot = OPEN.lock().entry(id.clone()).or_default().clone();
   let mut slot = slot.lock();
   if let Some(engine) = &*slot {
@@ -110,7 +121,10 @@ fn open(id: String, me: &Assistant, with: Option<&Assistant>) -> Result<Arc<Engi
   }
   // Checked with its slot in OPEN, so an archive either closes it or is seen here.
   let all = assistant::all();
-  if let Some(gone) = std::iter::once(me).chain(with).find(|a| !all.iter().any(|b| b.id == a.id)) {
+  if let Some(gone) = std::iter::once(me)
+    .chain(with)
+    .find(|a| !all.iter().any(|b| b.id == a.id))
+  {
     return Err(format!("{} is archived.", gone.name));
   }
   match Engine::start(id.clone(), me.clone(), with.cloned(), heard.clone()) {

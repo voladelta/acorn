@@ -28,10 +28,19 @@ pub fn chat(ui: Ui) -> impl IntoElement {
     move || items.with(Vec::len),
     move |at| {
       let item = computed(move || items.with(|v| v.get(at.index()).cloned()));
-      column().child(dynamic(move || item.get().unwrap_or_default().into_iter().map(|r| row(ui, r)).collect::<Vec<_>>()))
+      column().child(dynamic(move || {
+        item
+          .get()
+          .unwrap_or_default()
+          .into_iter()
+          .map(|r| row(ui, r))
+          .collect::<Vec<_>>()
+      }))
     },
   )
-  .footer(column().pb(px(28.0)).child(dynamic(move || tail.get().into_iter().map(|r| row(ui, r)).collect::<Vec<_>>())))
+  .footer(column().pb(px(28.0)).child(dynamic(move || {
+    tail.get().into_iter().map(|r| row(ui, r)).collect::<Vec<_>>()
+  })))
   // each row its assistant's: another's chat never shows in its cells
   .keys(move || {
     let shown = ui.shown.get();
@@ -48,12 +57,23 @@ pub fn chat(ui: Ui) -> impl IntoElement {
 
 /// A page's column of the chat, centered.
 fn column() -> View {
-  view().w_full().max_w(px(COL)).self_center().px_5().gap(px(14.0)).pt(px(14.0))
+  view()
+    .w_full()
+    .max_w(px(COL))
+    .self_center()
+    .px_5()
+    .gap(px(14.0))
+    .pt(px(14.0))
 }
 
 fn row(ui: Ui, it: Row) -> AnyElement {
   match it {
-    Row::Cap(cap) => text(cap).font_family(SERIF).italic().text_size(px(14.5)).text_color(mid()).into_element(),
+    Row::Cap(cap) => text(cap)
+      .font_family(SERIF)
+      .italic()
+      .text_size(px(14.5))
+      .text_color(mid())
+      .into_element(),
     Row::Use(spend) => text(move || text::use_text(&spend, ui.now.get()))
       .font_family(MONO)
       .text_size(px(12.0))
@@ -62,7 +82,11 @@ fn row(ui: Ui, it: Row) -> AnyElement {
       .mt(px(-6.0))
       .tooltip(crate::hint(text::use_hint(&spend)))
       .into_element(),
-    Row::Sum { seg, text: summary, call } => view()
+    Row::Sum {
+      seg,
+      text: summary,
+      call,
+    } => view()
       .flex_row()
       .gap_3()
       .px(px(14.0))
@@ -72,10 +96,22 @@ fn row(ui: Ui, it: Row) -> AnyElement {
       .hover(|s| s.bg(hover()))
       .on_press(move || ui.act(Act::Open(seg)))
       .tooltip(crate::hint(format!("{} messages, summarized: click to open", seg.1)))
-      .child(text(seg.1.to_string()).min_w(px(38.0)).text_size(px(11.5)).line_height(px(24.0)).font_weight(FontWeight::SEMIBOLD).text_color(mid()))
+      .child(
+        text(seg.1.to_string())
+          .min_w(px(38.0))
+          .text_size(px(11.5))
+          .line_height(px(24.0))
+          .font_weight(FontWeight::SEMIBOLD)
+          .text_color(mid()),
+      )
       .child(match call {
         Some(call) => call_head(&call, true).flex_1().into_element(),
-        None => text(summary).flex_1().font_family(SERIF).text_size(px(15.0)).line_height(px(23.0)).into_element(),
+        None => text(summary)
+          .flex_1()
+          .font_family(SERIF)
+          .text_size(px(15.0))
+          .line_height(px(23.0))
+          .into_element(),
       })
       .into_element(),
     Row::Box { seg, text: bar, rows } => view()
@@ -97,7 +133,13 @@ fn row(ui: Ui, it: Row) -> AnyElement {
       )
       .child(rows.into_iter().map(|r| row(ui, r)).collect::<Vec<_>>())
       .into_element(),
-    Row::Msg { kind, who, text: body, call, images } => message(ui, kind, who, body, call, images),
+    Row::Msg {
+      kind,
+      who,
+      text: body,
+      call,
+      images,
+    } => message(ui, kind, who, body, call, images),
   }
 }
 
@@ -126,12 +168,21 @@ fn message(ui: Ui, kind: Kind, who: String, body: String, call: Option<Call>, im
       .rounded(px(14.0))
       .child({
         let name = who.clone();
-        text(who).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(mid()).cursor_pointer().on_press(move || ui.open_name(&name))
+        text(who)
+          .text_size(px(12.0))
+          .font_weight(FontWeight::SEMIBOLD)
+          .text_color(mid())
+          .cursor_pointer()
+          .on_press(move || ui.open_name(&name))
       })
       .child(plain(ui, &body, 16.0))
       .into_element(),
     Kind::Tool => {
-      let call = call.unwrap_or(Call { name: String::new(), head: body, blocks: vec![] });
+      let call = call.unwrap_or(Call {
+        name: String::new(),
+        head: body,
+        blocks: vec![],
+      });
       view()
         .px(px(14.0))
         .py(px(9.0))
@@ -139,54 +190,94 @@ fn message(ui: Ui, kind: Kind, who: String, body: String, call: Option<Call>, im
         .bg(block())
         .gap_1()
         .child(call_head(&call, false))
-        .child(call.blocks.iter().map(|b| framed(if b.k.is_empty() { None } else { Some(b.k.clone()) }, code(&b.x))).collect::<Vec<_>>())
+        .child(
+          call
+            .blocks
+            .iter()
+            .map(|b| framed(if b.k.is_empty() { None } else { Some(b.k.clone()) }, code(&b.x)))
+            .collect::<Vec<_>>(),
+        )
         .into_element()
     }
-    Kind::Echo => view().gap_2().child(text::output(&body).into_iter().map(file).collect::<Vec<_>>()).into_element(),
+    Kind::Echo => view()
+      .gap_2()
+      .child(text::output(&body).into_iter().map(file).collect::<Vec<_>>())
+      .into_element(),
     Kind::Mind | Kind::Note => {
       let (said, cut) = text::cut_off(&body);
       view()
         .gap_1()
-        .child((!who.is_empty()).then(|| text(who).text_size(px(12.0)).font_weight(FontWeight::BOLD).text_color(soft())))
-        .child(markdown(ui, said).text_size(px(14.5)).line_height(px(23.0)).text_color(mid()).italic())
+        .child((!who.is_empty()).then(|| {
+          text(who)
+            .text_size(px(12.0))
+            .font_weight(FontWeight::BOLD)
+            .text_color(soft())
+        }))
+        .child(
+          markdown(ui, said)
+            .text_size(px(14.5))
+            .line_height(px(23.0))
+            .text_color(mid())
+            .italic(),
+        )
         .child(cut.then(cut_mark))
         .into_element()
     }
     Kind::Acorn => {
       let (said, cut) = text::cut_off(&body);
-      view().child(markdown(ui, said).text_size(px(16.0)).line_height(px(25.0))).child(cut.then(cut_mark)).child(pics).into_element()
+      view()
+        .child(markdown(ui, said).text_size(px(16.0)).line_height(px(25.0)))
+        .child(cut.then(cut_mark))
+        .child(pics)
+        .into_element()
     }
   }
 }
 
 /// Where a message cut in on what was being said or thought.
 fn cut_mark() -> Text {
-  text("— cut off").font_family(SERIF).italic().text_size(px(14.5)).text_color(mid())
+  text("— cut off")
+    .font_family(SERIF)
+    .italic()
+    .text_size(px(14.5))
+    .text_color(mid())
 }
 
 /// Markdown, each agent's name a link to its page.
 fn markdown(ui: Ui, body: &str) -> nsh_base::TextViewElement {
-  text_view().markdown(text::link_names(body)).selectable(true).text_color(ink()).on_link_press(move |e: &TextViewLinkPressEvent| {
-    match e.url.strip_prefix("agent:") {
+  text_view()
+    .markdown(text::link_names(body))
+    .selectable(true)
+    .text_color(ink())
+    .on_link_press(move |e: &TextViewLinkPressEvent| match e.url.strip_prefix("agent:") {
       Some(name) => ui.open_name(name),
       None => {
         drop(open_url(e.url.to_string()));
       }
-    }
-  })
+    })
 }
 
 /// Text as it is: paragraphs and lines, each agent's name a link.
 fn plain(ui: Ui, body: &str, size: f32) -> impl IntoElement {
-  let mut line = text("").text_size(px(size)).line_height(px(size * 1.55)).selectable(true);
+  let mut line = text("")
+    .text_size(px(size))
+    .line_height(px(size * 1.55))
+    .selectable(true);
   let mut rest = body;
   while let Some(at) = rest.find('[') {
     let tail = &rest[at + 1..];
-    match tail.find(']').filter(|&close| acorn_core::names::is_name(&tail[..close])) {
+    match tail
+      .find(']')
+      .filter(|&close| acorn_core::names::is_name(&tail[..close]))
+    {
       Some(close) => {
         let name = tail[..close].to_string();
         line = line.child(rest[..at].to_string());
-        line = line.child(text(format!("[{name}]")).underline().on_press(move || ui.open_name(&name)));
+        line = line.child(
+          text(format!("[{name}]"))
+            .underline()
+            .on_press(move || ui.open_name(&name)),
+        );
         rest = &tail[close + 1..];
       }
       None => {
@@ -200,7 +291,11 @@ fn plain(ui: Ui, body: &str, size: f32) -> impl IntoElement {
 
 /// A tool call's head: its emoji, its name in bold, then the call.
 fn call_head(call: &Call, folded: bool) -> Text {
-  let head = if folded { crate::call::line(call) } else { call.head.clone() };
+  let head = if folded {
+    crate::call::line(call)
+  } else {
+    call.head.clone()
+  };
   text("")
     .font_family(MONO)
     .text_size(px(12.5))
@@ -212,7 +307,11 @@ fn call_head(call: &Call, folded: bool) -> Text {
 }
 
 fn code(x: &str) -> Text {
-  text(x.to_string()).font_family(MONO).text_size(px(12.5)).line_height(px(19.0)).selectable(true)
+  text(x.to_string())
+    .font_family(MONO)
+    .text_size(px(12.5))
+    .line_height(px(19.0))
+    .selectable(true)
 }
 
 /// Lines in a frame, a name on its top edge.
@@ -224,7 +323,13 @@ fn framed(name: Option<String>, body: impl IntoElement) -> View {
     .px(px(10.0))
     .py(px(6.0))
     .gap_1()
-    .child(name.map(|n| text(n).font_family(MONO).text_size(px(12.0)).text_color(ink()).font_weight(FontWeight::SEMIBOLD)))
+    .child(name.map(|n| {
+      text(n)
+        .font_family(MONO)
+        .text_size(px(12.0))
+        .text_color(ink())
+        .font_weight(FontWeight::SEMIBOLD)
+    }))
     .child(body)
 }
 
@@ -234,7 +339,11 @@ fn file(out: Out) -> View {
   match out {
     Out::File { k, n, x } => {
       let width = (n + x.len() as u64).to_string().len();
-      let mut lines = text("").font_family(MONO).text_size(px(12.5)).line_height(px(19.0)).selectable(true);
+      let mut lines = text("")
+        .font_family(MONO)
+        .text_size(px(12.5))
+        .line_height(px(19.0))
+        .selectable(true);
       for (k, line) in x.into_iter().enumerate() {
         lines = lines.child(number(n + k as u64, width)).child(format!("{line}\n"));
       }
@@ -242,7 +351,11 @@ fn file(out: Out) -> View {
     }
     Out::Diff { k, x } => {
       let width = x.iter().flatten().map(|l| l.n).max().unwrap_or(1).to_string().len();
-      let mut lines = text("").font_family(MONO).text_size(px(12.5)).line_height(px(19.0)).selectable(true);
+      let mut lines = text("")
+        .font_family(MONO)
+        .text_size(px(12.5))
+        .line_height(px(19.0))
+        .selectable(true);
       for (h, hunk) in x.into_iter().enumerate() {
         if h > 0 {
           lines = lines.child(text(format!("{:>width$}\n", "⋯")).text_color(soft()));
@@ -253,7 +366,9 @@ fn file(out: Out) -> View {
             '-' => del(),
             _ => mid(),
           };
-          lines = lines.child(number(l.n, width)).child(text(format!("{}{}\n", l.s, l.x)).text_color(color));
+          lines = lines
+            .child(number(l.n, width))
+            .child(text(format!("{}{}\n", l.s, l.x)).text_color(color));
         }
       }
       framed(Some(k), lines)
@@ -270,9 +385,16 @@ fn pictures(ui: Ui, names: &[String]) -> View {
       .map(|name| {
         let url = format!("file://{}", dir.join(name).display());
         let open = url.clone();
-        image(url).h(px(120.0)).w(px(160.0)).resize_mode(ResizeMode::Cover).rounded(px(8.0)).border_1().border_color(hair()).on_press(move || {
-          drop(open_url(open.clone()));
-        })
+        image(url)
+          .h(px(120.0))
+          .w(px(160.0))
+          .resize_mode(ResizeMode::Cover)
+          .rounded(px(8.0))
+          .border_1()
+          .border_color(hair())
+          .on_press(move || {
+            drop(open_url(open.clone()));
+          })
       })
       .collect::<Vec<_>>(),
   )
@@ -295,7 +417,11 @@ pub fn pending(images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
               .rounded(px(8.0))
               .bg(block())
               .on_press(move || images.update(|i| drop(i.remove(k))))
-              .child(text(format!("🖼 image {} ✕", k + 1)).text_size(px(12.5)).text_color(mid()))
+              .child(
+                text(format!("🖼 image {} ✕", k + 1))
+                  .text_size(px(12.5))
+                  .text_color(mid()),
+              )
           })
           .collect::<Vec<_>>()
       }))
@@ -314,7 +440,12 @@ pub fn attach(images: Signal<Vec<Vec<u8>>>) {
 
 /// A paste's images join those waiting.
 pub fn pasted(images: Signal<Vec<Vec<u8>>>, e: &PasteEvent) {
-  let pics: Vec<Vec<u8>> = e.files.iter().filter(|f| f.mime.starts_with("image/")).map(|f| f.data.clone()).collect();
+  let pics: Vec<Vec<u8>> = e
+    .files
+    .iter()
+    .filter(|f| f.mime.starts_with("image/"))
+    .map(|f| f.data.clone())
+    .collect();
   if !pics.is_empty() {
     images.update(|i| i.extend(pics));
   }

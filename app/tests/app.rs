@@ -42,13 +42,21 @@ fn each_assistant_opens_its_own_chat() {
   app.wait_for_within("Hello! This is Acorn.", wait).unwrap();
   app.wait_for_within("text:Acorn  ·  General assistant", wait).unwrap();
 
-  for (name, about) in [("Max", "Thoughtful expert"), ("Pip", "Personal stylist"), ("Acorn", "General assistant"), ("Max", "Thoughtful expert")] {
+  for (name, about) in [
+    ("Max", "Thoughtful expert"),
+    ("Pip", "Personal stylist"),
+    ("Acorn", "General assistant"),
+    ("Max", "Thoughtful expert"),
+  ] {
     app.press(&format!("text:{name}")).unwrap();
     app.wait_for_within(&format!("Hello! This is {name}."), wait).unwrap();
     app.wait_for_within(&format!("text:{name}  ·  {about}"), wait).unwrap();
     assert!(!app.shows("effort"), "who it is, not how hard it thinks");
     for other in ["Acorn", "Max", "Pip"].into_iter().filter(|o| *o != name) {
-      assert!(!app.shows(&format!("Hello! This is {other}.")), "{name}'s chat, not {other}'s");
+      assert!(
+        !app.shows(&format!("Hello! This is {other}.")),
+        "{name}'s chat, not {other}'s"
+      );
     }
   }
   // `@` names the others as you type; Return takes the first, and `@Name` alone talks to them.
@@ -69,7 +77,9 @@ fn each_assistant_opens_its_own_chat() {
   app.type_text("label:Message Max", "@a").unwrap();
   app.wait_for_within("text:@Acorn", wait).unwrap();
   app.press_key("escape").unwrap();
-  app.wait_until("the names closed", wait, |s| s.texts().iter().all(|t| *t != "@Acorn")).unwrap();
+  app
+    .wait_until("the names closed", wait, |s| s.texts().iter().all(|t| *t != "@Acorn"))
+    .unwrap();
   app.type_text("label:Message Max", "").unwrap();
 
   for id in ["default", "max", "pip"] {

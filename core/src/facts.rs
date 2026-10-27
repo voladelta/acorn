@@ -71,37 +71,67 @@ pub fn remember(me: &str, fact: Fact) -> Result<String> {
   let mut replaced = Vec::new();
   if fact.many {
     let same: Option<i64> = tx
-      .query_row("select id from facts where owner = ? and subject = ? and predicate = ? and value = ?", params![owner, subject, predicate, value], |r| {
-        r.get(0)
-      })
+      .query_row(
+        "select id from facts where owner = ? and subject = ? and predicate = ? and value = ?",
+        params![owner, subject, predicate, value],
+        |r| r.get(0),
+      )
       .optional()?;
     if let Some(id) = same {
       return Ok(format!("Already kept, as #{id}."));
     }
   } else {
     let mut q = tx.prepare("select id, value from facts where owner = ? and subject = ? and predicate = ?")?;
-    replaced = q.query_map(slot, |r| Ok(format!("#{} {}", r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    replaced = q
+      .query_map(slot, |r| {
+        Ok(format!("#{} {}", r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+      })?
+      .collect::<rusqlite::Result<_>>()?;
     drop(q);
-    tx.execute("delete from facts where owner = ? and subject = ? and predicate = ?", slot)?;
+    tx.execute(
+      "delete from facts where owner = ? and subject = ? and predicate = ?",
+      slot,
+    )?;
   }
   tx.execute(
     "insert into facts (owner, subject, predicate, value, many, chat, msg, at) values (?, ?, ?, ?, ?, ?, ?, ?)",
-    params![owner, subject, predicate, value, fact.many, fact.chat, fact.msg, crate::now_ms()],
+    params![
+      owner,
+      subject,
+      predicate,
+      value,
+      fact.many,
+      fact.chat,
+      fact.msg,
+      crate::now_ms()
+    ],
   )?;
   let id = tx.last_insert_rowid();
   tx.commit()?;
   if !replaced.is_empty() {
     crate::memory::erase(&db)?;
   }
-  let whose = if fact.mine { "for you alone" } else { "for every assistant" };
-  let was = if replaced.is_empty() { String::new() } else { format!("; it replaces {}", replaced.join(", ")) };
+  let whose = if fact.mine {
+    "for you alone"
+  } else {
+    "for every assistant"
+  };
+  let was = if replaced.is_empty() {
+    String::new()
+  } else {
+    format!("; it replaces {}", replaced.join(", "))
+  };
   Ok(format!("Kept #{id} {subject} / {predicate}: {value}, {whose}{was}."))
 }
 
 /// Fact #id forgotten for good, if assistant `me` sees it.
 pub fn forget(me: &str, id: u64) -> Result<String> {
   let db = db()?;
-  if db.execute("delete from facts where id = ? and owner in (?, ?)", params![id, EVERYONE, me])? == 0 {
+  if db.execute(
+    "delete from facts where id = ? and owner in (?, ?)",
+    params![id, EVERYONE, me],
+  )? == 0
+  {
     return Ok(format!("No fact #{id}."));
   }
   crate::memory::erase(&db)?;
@@ -111,7 +141,8 @@ pub fn forget(me: &str, id: u64) -> Result<String> {
 /// The facts assistant `me` sees, for its system prompt (none: "").
 pub fn prompt(me: &str) -> String {
   let rows = db().and_then(|db| {
-    let mut q = db.prepare("select id, owner, subject, predicate, value, many from facts where owner in (?, ?) order by id")?;
+    let mut q =
+      db.prepare("select id, owner, subject, predicate, value, many from facts where owner in (?, ?) order by id")?;
     let rows = q.query_map(params![EVERYONE, me], |r| {
       Ok((
         r.get::<_, i64>(0)?,
@@ -128,12 +159,20 @@ pub fn prompt(me: &str) -> String {
     eprintln!("facts: {err}");
     Vec::new()
   });
-  let mine: HashSet<(&str, &str)> = rows.iter().filter(|r| r.1 && !r.5).map(|r| (r.2.as_str(), r.3.as_str())).collect();
+  let mine: HashSet<(&str, &str)> = rows
+    .iter()
+    .filter(|r| r.1 && !r.5)
+    .map(|r| (r.2.as_str(), r.3.as_str()))
+    .collect();
   let lines: Vec<String> = rows
     .iter()
     .filter(|r| r.1 || !mine.contains(&(r.2.as_str(), r.3.as_str())))
     .map(|(id, own, subject, predicate, value, _)| {
-      format!("#{id} {subject} / {predicate}: {}{}\n", crate::memory::flat(value), if *own { " (yours)" } else { "" })
+      format!(
+        "#{id} {subject} / {predicate}: {}{}\n",
+        crate::memory::flat(value),
+        if *own { " (yours)" } else { "" }
+      )
     })
     .collect();
   if lines.is_empty() {
@@ -145,7 +184,11 @@ pub fn prompt(me: &str) -> String {
     size > BUDGET
   });
   let from = from.map_or(0, |k| k + 1);
-  let older = if from == 0 { String::new() } else { format!("({from} older facts are not shown.)\n") };
+  let older = if from == 0 {
+    String::new()
+  } else {
+    format!("({from} older facts are not shown.)\n")
+  };
   format!(
     "\n\n# Facts\n\nWhat the user asked you to keep (remember, forget), oldest first, as \"#id subject / predicate: value\"; \"(yours)\" marks a fact for you alone, not every assistant. A fact holds until the user changes it.\n\n{older}{}",
     lines[from..].concat()

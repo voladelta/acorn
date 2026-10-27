@@ -85,7 +85,10 @@ pub struct Block {
 
 impl Block {
   pub fn new(text: impl Into<String>, mark: bool) -> Block {
-    Block { text: text.into(), mark }
+    Block {
+      text: text.into(),
+      mark,
+    }
   }
 }
 

@@ -101,7 +101,11 @@ impl Assistant {
   /// its own in it (no agent's name: those are capitalized words).
   pub fn work(&self) -> PathBuf {
     let work = &config::get().work;
-    if self.is_acorn() { work.clone() } else { work.join("assistants").join(&self.id) }
+    if self.is_acorn() {
+      work.clone()
+    } else {
+      work.join("assistants").join(&self.id)
+    }
   }
 
   /// What its chat opens with, and the line its memory keeps of it:
@@ -115,10 +119,18 @@ impl Assistant {
     }
     let name = &self.name;
     let text = match self.welcome.trim() {
-      "" => format!("Hello! This is {name}.\n\nOne chat between us, forever, and a memory that grows. Tell me what you need."),
+      "" => format!(
+        "Hello! This is {name}.\n\nOne chat between us, forever, and a memory that grows. Tell me what you need."
+      ),
       welcome => welcome.to_string(),
     };
-    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(240).collect();
+    let flat: String = text
+      .split_whitespace()
+      .collect::<Vec<_>>()
+      .join(" ")
+      .chars()
+      .take(240)
+      .collect();
     (text, format!("unii: hello: {name}, {}: {flat}", self.about.trim()))
   }
 
@@ -133,7 +145,10 @@ impl Assistant {
       "" => String::new(),
       more => format!("\n\n{more}"),
     };
-    format!("\n\n# This assistant\n\nIn this chat the user calls you {}{about}.{more}", self.name)
+    format!(
+      "\n\n# This assistant\n\nIn this chat the user calls you {}{about}.{more}",
+      self.name
+    )
   }
 
   /// What a thread's prompt says of it as the one asking there: another
@@ -174,7 +189,9 @@ fn everyone() -> Vec<Assistant> {
 
 fn saved() -> Vec<Assistant> {
   let file = config::get().dir.join(FILE);
-  let Ok(text) = std::fs::read_to_string(&file) else { return Vec::new() };
+  let Ok(text) = std::fs::read_to_string(&file) else {
+    return Vec::new();
+  };
   serde_json::from_str(&text).unwrap_or_else(|err| {
     eprintln!("acorn: {FILE}: {err}");
     Vec::new()
@@ -205,14 +222,23 @@ fn mark(name: &str, archived: bool, may: impl Fn(&Assistant) -> Result<(), Strin
   let _filing = FILING.lock();
   let name = name.trim();
   let Some(it) = everyone().into_iter().find(|a| a.named(name)) else {
-    return Err(format!("No assistant {name}; list_assistants names them, the archived too."));
+    return Err(format!(
+      "No assistant {name}; list_assistants names them, the archived too."
+    ));
   };
   may(&it)?;
   if it.archived == archived {
-    return Err(format!("{} is {}.", it.name, if archived { "archived already" } else { "not archived" }));
+    return Err(format!(
+      "{} is {}.",
+      it.name,
+      if archived { "archived already" } else { "not archived" }
+    ));
   }
   let mut mine = saved();
-  mine.iter_mut().filter(|a| a.id == it.id).for_each(|a| a.archived = archived);
+  mine
+    .iter_mut()
+    .filter(|a| a.id == it.id)
+    .for_each(|a| a.archived = archived);
   write(&mine)?;
   Ok(Assistant { archived, ..it })
 }
@@ -220,7 +246,9 @@ fn mark(name: &str, archived: bool, may: impl Fn(&Assistant) -> Result<(), Strin
 fn write(mine: &[Assistant]) -> Result<(), String> {
   let dir = &config::get().dir;
   let text = serde_json::to_string_pretty(mine).map_err(|e| e.to_string())?;
-  std::fs::create_dir_all(dir).and_then(|_| std::fs::write(dir.join(FILE), text)).map_err(|e| format!("{FILE}: {e}"))
+  std::fs::create_dir_all(dir)
+    .and_then(|_| std::fs::write(dir.join(FILE), text))
+    .map_err(|e| format!("{FILE}: {e}"))
 }
 
 /// A new assistant, saved: its id the name's letters and digits, made
@@ -238,15 +266,33 @@ pub fn add(name: &str, about: &str, instructions: &str, welcome: &str, effort: E
   }
   let all = everyone();
   if let Some(same) = all.iter().find(|a| a.named(name)) {
-    let archived = if same.archived { " (archived: restore_assistant brings them back)" } else { "" };
+    let archived = if same.archived {
+      " (archived: restore_assistant brings them back)"
+    } else {
+      ""
+    };
     return Err(format!("There is already an assistant named {name}{archived}."));
   }
-  let slug: String = name.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect();
+  let slug: String = name
+    .chars()
+    .filter(char::is_ascii_alphanumeric)
+    .map(|c| c.to_ascii_lowercase())
+    .collect();
   let base = if slug.is_empty() { "assistant".to_string() } else { slug };
   let taken = |id: &str| all.iter().any(|a| a.id == id) || config::get().chats.join(id).exists();
-  let id = std::iter::once(base.clone()).chain((2..).map(|n| format!("{base}-{n}"))).find(|id| !taken(id)).unwrap_or(base);
-  let made =
-    Assistant { id, name: name.into(), about: about.into(), instructions: instructions.trim().into(), welcome: welcome.trim().into(), effort, archived: false };
+  let id = std::iter::once(base.clone())
+    .chain((2..).map(|n| format!("{base}-{n}")))
+    .find(|id| !taken(id))
+    .unwrap_or(base);
+  let made = Assistant {
+    id,
+    name: name.into(),
+    about: about.into(),
+    instructions: instructions.trim().into(),
+    welcome: welcome.trim().into(),
+    effort,
+    archived: false,
+  };
   let mut mine = saved();
   mine.push(made.clone());
   write(&mine)?;

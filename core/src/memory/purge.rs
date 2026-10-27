@@ -46,12 +46,20 @@ impl Memory {
     let mut images = Vec::new();
     let tx = self.db.transaction()?;
     for i in a..=b {
-      let Some(mut root) = tx.query_row("select * from msgs where log = ? and i = ?", params![log, i], from_row).optional()? else { continue };
+      let Some(mut root) = tx
+        .query_row("select * from msgs where log = ? and i = ?", params![log, i], from_row)
+        .optional()?
+      else {
+        continue;
+      };
       images.append(&mut root.images);
       root.text = PURGED.into();
       root.line = None;
       root.size = root.show().len();
-      tx.execute("update msgs set text = ?, images = '[]', line = null, size = ? where log = ? and i = ?", params![root.text, root.size, log, i])?;
+      tx.execute(
+        "update msgs set text = ?, images = '[]', line = null, size = ? where log = ? and i = ?",
+        params![root.text, root.size, log, i],
+      )?;
     }
     for &slot in &gone {
       tx.execute("delete from nodes where slot = ?", [slot])?;
@@ -61,12 +69,23 @@ impl Memory {
       Some(name) => format!("Purged message {id} of {name}'s chat."),
       None => {
         self.unbuild(a, b, &gone);
-        let pages = if a == b { String::new() } else { format!(" (its pages {a} to {b})") };
-        format!("Purged message {id}{pages} and the {} summaries made from it; they are being written anew without it.", gone.len())
+        let pages = if a == b {
+          String::new()
+        } else {
+          format!(" (its pages {a} to {b})")
+        };
+        format!(
+          "Purged message {id}{pages} and the {} summaries made from it; they are being written anew without it.",
+          gone.len()
+        )
       }
     };
     for name in images {
-      let used = self.db.query_row("select exists (select 1 from msgs where images like '%' || ? || '%')", [&name], |r| r.get::<_, bool>(0));
+      let used = self.db.query_row(
+        "select exists (select 1 from msgs where images like '%' || ? || '%')",
+        [&name],
+        |r| r.get::<_, bool>(0),
+      );
       match used {
         Ok(true) => {}
         Ok(false) => {
@@ -111,7 +130,12 @@ impl Memory {
     }
     for k in 0..2 {
       let view = if k == 0 { &self.view } else { &self.seen };
-      let parts: Vec<Part> = view.parts.clone().into_iter().flat_map(|p| self.open_up(p, gone)).collect();
+      let parts: Vec<Part> = view
+        .parts
+        .clone()
+        .into_iter()
+        .flat_map(|p| self.open_up(p, gone))
+        .collect();
       let size = parts.iter().map(|&p| self.size(p)).sum();
       let view = if k == 0 { &mut self.view } else { &mut self.seen };
       (view.parts, view.size) = (parts, size);

@@ -71,7 +71,9 @@ pub fn page_end(s: &str, at: usize) -> usize {
   if cap == rest.len() {
     return s.chars().count();
   }
-  rest[..cap].rfind('\n').map_or(at + CAP, |nl| at + rest[..=nl].chars().count())
+  rest[..cap]
+    .rfind('\n')
+    .map_or(at + CAP, |nl| at + rest[..=nl].chars().count())
 }
 
 /// A text in pages.
@@ -94,7 +96,11 @@ pub fn page(s: &str, at: usize) -> String {
   let at = at.min(n);
   let end = page_end(s, at);
   let text = &s[byte_at(s, at)..byte_at(s, end)];
-  if end < n { format!("{text}\n[characters {}-{end} of {n}; go on with at {end}]", at + 1) } else { text.to_string() }
+  if end < n {
+    format!("{text}\n[characters {}-{end} of {n}; go on with at {end}]", at + 1)
+  } else {
+    text.to_string()
+  }
 }
 
 #[cfg(test)]

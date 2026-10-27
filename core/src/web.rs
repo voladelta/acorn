@@ -69,7 +69,11 @@ pub async fn run(name: &str, input: &Value, cancel: CancellationToken) -> Out {
       match post(FETCH, &json!({"url": url}), &cancel).await {
         Ok(got) => {
           let title = got["title"].as_str().unwrap_or_default();
-          let page = format!("# {}\n{url}\n\n{}", if title.is_empty() { "(no title)" } else { title }, got["content"].as_str().unwrap_or_default());
+          let page = format!(
+            "# {}\n{url}\n\n{}",
+            if title.is_empty() { "(no title)" } else { title },
+            got["content"].as_str().unwrap_or_default()
+          );
           Out::ok(clip::page(&page, input["at"].as_u64().unwrap_or(0) as usize))
         }
         Err(why) => Out::fail(why),
@@ -92,9 +96,19 @@ pub fn results(got: &Value) -> String {
     .map(|(i, r)| {
       let date = str(r, "date");
       let date = date.get(..10).unwrap_or(&date);
-      let site = [str(r, "site_name"), date.to_string()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", ");
-      let site = if site.is_empty() { String::new() } else { format!(" ({site})") };
-      let text = Some(str(r, "summary")).filter(|s| !s.is_empty()).unwrap_or_else(|| str(r, "snippet"));
+      let site = [str(r, "site_name"), date.to_string()]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+      let site = if site.is_empty() {
+        String::new()
+      } else {
+        format!(" ({site})")
+      };
+      let text = Some(str(r, "summary"))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| str(r, "snippet"));
       format!("{}. {}{site}\n{}\n{text}", i + 1, str(r, "title"), str(r, "url"))
     })
     .collect::<Vec<_>>()
@@ -151,7 +165,10 @@ mod tests {
         {"title": "V4", "url": "https://a.com/v4", "snippet": "short", "summary": "long", "site_name": "A", "date": "2026-06-01T00:00:00+00:00"},
         {"title": "B", "url": "https://b.com", "snippet": "only a snippet", "summary": "", "site_name": null, "date": null},
     ]});
-    assert_eq!(results(&got), "1. V4 (A, 2026-06-01)\nhttps://a.com/v4\nlong\n\n2. B\nhttps://b.com\nonly a snippet");
+    assert_eq!(
+      results(&got),
+      "1. V4 (A, 2026-06-01)\nhttps://a.com/v4\nlong\n\n2. B\nhttps://b.com\nonly a snippet"
+    );
     assert_eq!(results(&json!({"results": []})), "No results.");
   }
 
@@ -160,11 +177,30 @@ mod tests {
   #[tokio::test]
   #[ignore]
   async fn search_and_fetch_read_the_web() {
-    let found = run("web_search", &json!({"query": "rust-lang site:github.com", "count": 3}), CancellationToken::new()).await;
-    assert!(!found.fail && found.text.starts_with("1. ") && found.text.contains("github.com"), "{}", found.text);
-    let page = run("web_fetch", &json!({"url": "https://example.com"}), CancellationToken::new()).await;
+    let found = run(
+      "web_search",
+      &json!({"query": "rust-lang site:github.com", "count": 3}),
+      CancellationToken::new(),
+    )
+    .await;
+    assert!(
+      !found.fail && found.text.starts_with("1. ") && found.text.contains("github.com"),
+      "{}",
+      found.text
+    );
+    let page = run(
+      "web_fetch",
+      &json!({"url": "https://example.com"}),
+      CancellationToken::new(),
+    )
+    .await;
     assert!(!page.fail && page.text.contains("Example Domain"), "{}", page.text);
-    let bad = run("web_fetch", &json!({"url": "ftp://example.com"}), CancellationToken::new()).await;
+    let bad = run(
+      "web_fetch",
+      &json!({"url": "ftp://example.com"}),
+      CancellationToken::new(),
+    )
+    .await;
     assert!(bad.fail);
   }
 }

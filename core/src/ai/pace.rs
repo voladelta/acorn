@@ -119,7 +119,9 @@ impl Sem {
   /// Those waiting start, as the limit lets them.
   fn dispatch(&mut self) {
     while (self.in_flight as f64) < self.concurrency.floor() {
-      let Some(go) = self.wait[0].pop_front().or_else(|| self.wait[1].pop_front()) else { break };
+      let Some(go) = self.wait[0].pop_front().or_else(|| self.wait[1].pop_front()) else {
+        break;
+      };
       // one stopped while it waited is gone: the next goes
       if go.send(self.round).is_ok() {
         self.start();
@@ -173,11 +175,18 @@ pub fn landed(model: &str, round: u64, limited: bool) {
   sem.in_flight = sem.in_flight.saturating_sub(1);
   if limited && round == sem.round {
     let first = sem.concurrency.is_infinite();
-    let base = if first { (sem.starts.len() as f64).max(1.0) } else { sem.concurrency };
+    let base = if first {
+      (sem.starts.len() as f64).max(1.0)
+    } else {
+      sem.concurrency
+    };
     sem.concurrency = (base * CUT).max(MIN_CONCURRENCY);
     sem.round += 1;
     if first {
-      eprintln!("{model}: rate limited: paced at {:.1} requests in flight", sem.concurrency);
+      eprintln!(
+        "{model}: rate limited: paced at {:.1} requests in flight",
+        sem.concurrency
+      );
     }
   } else if !limited && sem.concurrency < MAX_CONCURRENCY {
     sem.concurrency = (sem.concurrency + RISE).min(MAX_CONCURRENCY);

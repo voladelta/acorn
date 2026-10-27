@@ -55,28 +55,57 @@ pub fn report_read(text: &str) -> Option<(String, String)> {
 }
 
 pub fn parse(text: &str) -> Call {
-  let plain = || Call { name: String::new(), head: text.to_string(), blocks: vec![] };
-  let Some((name, json)) = text.split_once(' ').filter(|(n, j)| !n.is_empty() && !n.contains(char::is_whitespace) && j.starts_with('{')) else {
+  let plain = || Call {
+    name: String::new(),
+    head: text.to_string(),
+    blocks: vec![],
+  };
+  let Some((name, json)) = text
+    .split_once(' ')
+    .filter(|(n, j)| !n.is_empty() && !n.contains(char::is_whitespace) && j.starts_with('{'))
+  else {
     return plain();
   };
   let Some(input) = input_parse(json) else { return plain() };
-  let name = name.strip_prefix("mcp__").and_then(|n| n.split_once("__").map(|(_, n)| n)).unwrap_or(name);
+  let name = name
+    .strip_prefix("mcp__")
+    .and_then(|n| n.split_once("__").map(|(_, n)| n))
+    .unwrap_or(name);
   let (head, blocks) = shown(name, input);
-  Call { name: name.to_string(), head, blocks }
+  Call {
+    name: name.to_string(),
+    head,
+    blocks,
+  }
 }
 
 /// The call on one line, after its name: its head, then each block,
 /// spaces folded.
 pub fn line(c: &Call) -> String {
-  let blocks = c.blocks.iter().map(|b| if b.k.is_empty() { b.x.clone() } else { format!("{}: {}", b.k, b.x) });
-  std::iter::once(c.head.clone()).chain(blocks).collect::<Vec<_>>().join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+  let blocks = c.blocks.iter().map(|b| {
+    if b.k.is_empty() {
+      b.x.clone()
+    } else {
+      format!("{}: {}", b.k, b.x)
+    }
+  });
+  std::iter::once(c.head.clone())
+    .chain(blocks)
+    .collect::<Vec<_>>()
+    .join(" ")
+    .split_whitespace()
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 fn shown(name: &str, x: Map<String, Value>) -> (String, Vec<Code>) {
   let str = |k: &str| x.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
   match name {
     "shell" => (str("command"), vec![]),
-    "read" => (format!("{}{}", str("path"), lines_show(x.get("offset"), x.get("limit"))), vec![]),
+    "read" => (
+      format!("{}{}", str("path"), lines_show(x.get("offset"), x.get("limit"))),
+      vec![],
+    ),
     "write" => (str("path"), vec![]),
     "edit" if x.get("edits").is_some_and(Value::is_array) => {
       let mut files: Vec<String> = Vec::new();
@@ -97,9 +126,16 @@ fn shown(name: &str, x: Map<String, Value>) -> (String, Vec<Code>) {
     "web_search" => (str("query"), vec![]),
     "web_fetch" => (str("url"), vec![]),
     "hire" | "spawn" => {
-      let tasks: Vec<&Value> = x.get("tasks").and_then(Value::as_array).map(|t| t.iter().collect()).unwrap_or_default();
+      let tasks: Vec<&Value> = x
+        .get("tasks")
+        .and_then(Value::as_array)
+        .map(|t| t.iter().collect())
+        .unwrap_or_default();
       let n = tasks.len();
-      let effort = x.get("effort").and_then(Value::as_str).map_or(String::new(), |e| format!(" · {e}"));
+      let effort = x
+        .get("effort")
+        .and_then(Value::as_str)
+        .map_or(String::new(), |e| format!(" · {e}"));
       let head = format!("{n} {}{effort}", if n == 1 { "agent" } else { "agents" });
       (head, tasks.into_iter().flat_map(text_block).collect())
     }
@@ -114,12 +150,19 @@ fn input_shown(input: Map<String, Value>) -> (String, Vec<Code>) {
   let (mut args, mut blocks) = (Vec::new(), Vec::new());
   for (k, v) in input {
     let json = v.to_string();
-    let word = v.as_str().is_none_or(|s| !s.contains(|c: char| c.is_whitespace() || c == '"' || c == '\\'));
+    let word = v
+      .as_str()
+      .is_none_or(|s| !s.contains(|c: char| c.is_whitespace() || c == '"' || c == '\\'));
     if json.chars().count() <= SHORT && word {
       args.push(json);
     } else {
-      let x = v.as_str().map_or_else(|| serde_json::to_string_pretty(&v).unwrap_or_default(), str::to_string);
-      blocks.push(Code { k: if alone { String::new() } else { k }, x });
+      let x = v
+        .as_str()
+        .map_or_else(|| serde_json::to_string_pretty(&v).unwrap_or_default(), str::to_string);
+      blocks.push(Code {
+        k: if alone { String::new() } else { k },
+        x,
+      });
     }
   }
   (args.join(" "), blocks)
@@ -127,7 +170,10 @@ fn input_shown(input: Map<String, Value>) -> (String, Vec<Code>) {
 
 fn text_block(x: &Value) -> Vec<Code> {
   match x.as_str() {
-    Some(s) if !s.is_empty() => vec![Code { k: String::new(), x: s.strip_suffix('\n').unwrap_or(s).to_string() }],
+    Some(s) if !s.is_empty() => vec![Code {
+      k: String::new(),
+      x: s.strip_suffix('\n').unwrap_or(s).to_string(),
+    }],
     _ => vec![],
   }
 }
@@ -135,7 +181,10 @@ fn text_block(x: &Value) -> Vec<Code> {
 /// The message or line zoom and date name: `#6243`, `#6243+8` (n > 1), an
 /// agent's name as is.
 fn msg_show(id: Option<&Value>, n: Option<&Value>) -> String {
-  let many = n.and_then(Value::as_u64).filter(|&n| n > 1).map_or(String::new(), |n| format!("+{n}"));
+  let many = n
+    .and_then(Value::as_u64)
+    .filter(|&n| n > 1)
+    .map_or(String::new(), |n| format!("+{n}"));
   match id {
     Some(Value::Number(id)) => format!("#{id}{many}"),
     Some(Value::String(s)) => s.clone(),
@@ -150,7 +199,9 @@ fn lines_show(offset: Option<&Value>, limit: Option<&Value>) -> String {
     return String::new();
   }
   let from = offset.and_then(Value::as_i64).unwrap_or(1);
-  let to = limit.and_then(Value::as_i64).map_or(String::new(), |l| (from + l - 1).to_string());
+  let to = limit
+    .and_then(Value::as_i64)
+    .map_or(String::new(), |l| (from + l - 1).to_string());
   format!(":{from}-{to}")
 }
 
@@ -174,8 +225,15 @@ fn input_parse(text: &str) -> Option<Map<String, Value>> {
       field = i;
     }
   }
-  let open = if quote { format!("{}\"", if esc { &text[..text.len() - 1] } else { text }) } else { text.to_string() };
-  let full = open.trim_end_matches(|c: char| c.is_whitespace() || c == ',').to_string() + &shut.iter().rev().collect::<String>();
+  let open = if quote {
+    format!("{}\"", if esc { &text[..text.len() - 1] } else { text })
+  } else {
+    text.to_string()
+  };
+  let full = open
+    .trim_end_matches(|c: char| c.is_whitespace() || c == ',')
+    .to_string()
+    + &shut.iter().rev().collect::<String>();
   object(&full).or_else(|| object(&format!("{}}}", &text[..field])))
 }
 
@@ -203,6 +261,9 @@ mod tests {
     let c = parse(r#"web_search {"query":"acorn site:github.com","count":3}"#);
     assert_eq!(c.head, "acorn site:github.com");
     assert_eq!(parse("no call").name, "");
-    assert_eq!(report_read("[RedAnt]\ndone\n\nFull chat: zoom(\"RedAnt\")"), Some(("RedAnt".into(), "done".into())));
+    assert_eq!(
+      report_read("[RedAnt]\ndone\n\nFull chat: zoom(\"RedAnt\")"),
+      Some(("RedAnt".into(), "done".into()))
+    );
   }
 }

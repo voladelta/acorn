@@ -67,7 +67,11 @@ impl Config {
     let get = |key: &str, def: &str| -> String {
       std::env::var(format!("ACORN_{}", key.to_uppercase()))
         .ok()
-        .or_else(|| file.get(key).map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string)))
+        .or_else(|| {
+          file
+            .get(key)
+            .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string))
+        })
         .unwrap_or_else(|| def.to_string())
     };
     let chat = get("chat", "default");
@@ -76,7 +80,10 @@ impl Config {
     }
     let agents = get("agents", "");
     let rules = get("rules", "");
-    let key = std::env::var(KEY_VAR).ok().filter(|k| !k.trim().is_empty()).unwrap_or_else(|| get("deepseek_api_key", ""));
+    let key = std::env::var(KEY_VAR)
+      .ok()
+      .filter(|k| !k.trim().is_empty())
+      .unwrap_or_else(|| get("deepseek_api_key", ""));
     Ok(Config {
       chats: expand(&get("chats", "~/.chats")),
       work: expand(&get("work", &format!("{}/work", dir.display()))),
@@ -84,8 +91,16 @@ impl Config {
       after: get("after", ""),
       pick: run("pick", &get("pick", "high"))?,
       compactor: run("compactor", &get("compactor", "low"))?,
-      agents: if agents.is_empty() { None } else { Some(run("agents", &agents)?) },
-      view: get("view", "").parse().ok().filter(|&v| v > 0).map_or(MOST_VIEW, |v: usize| v.min(MOST_VIEW)),
+      agents: if agents.is_empty() {
+        None
+      } else {
+        Some(run("agents", &agents)?)
+      },
+      view: get("view", "")
+        .parse()
+        .ok()
+        .filter(|&v| v > 0)
+        .map_or(MOST_VIEW, |v: usize| v.min(MOST_VIEW)),
       key: key.trim().to_string(),
       chat,
       dir,
@@ -95,7 +110,9 @@ impl Config {
 
 /// A path, "~/" as home.
 pub fn expand(path: &str) -> PathBuf {
-  path.strip_prefix("~/").map_or_else(|| PathBuf::from(path), |rest| home().join(rest))
+  path
+    .strip_prefix("~/")
+    .map_or_else(|| PathBuf::from(path), |rest| home().join(rest))
 }
 
 pub fn home() -> PathBuf {

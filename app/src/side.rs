@@ -36,7 +36,12 @@ pub fn bar(ui: Ui) -> impl IntoElement {
             .border_b_1()
             .border_color(hair())
             .child(text("🌰").text_size(px(20.0)))
-            .child(text("Acorn").font_family(BRAND).text_size(px(20.0)).font_weight(FontWeight::SEMIBOLD))
+            .child(
+              text("Acorn")
+                .font_family(BRAND)
+                .text_size(px(20.0))
+                .font_weight(FontWeight::SEMIBOLD),
+            )
             .child(view().flex_1())
             .child(crate::side_chip(ui)),
         )
@@ -56,7 +61,9 @@ pub fn bar(ui: Ui) -> impl IntoElement {
                   .pt_3()
                   .pb(px(6.0)),
               )
-              .child(dynamic(move || ui.assistants.get().into_iter().map(|a| row(ui, a)).collect::<Vec<_>>())),
+              .child(dynamic(move || {
+                ui.assistants.get().into_iter().map(|a| row(ui, a)).collect::<Vec<_>>()
+              })),
           ),
         )
     },
@@ -79,10 +86,23 @@ fn row(ui: Ui, a: Assistant) -> impl IntoElement {
   let mark = if a.is_acorn() {
     text("🌰").text_size(px(15.0)).into_element()
   } else {
-    let initial = a.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
-    text(initial).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD).text_color(mid()).into_element()
+    let initial = a
+      .name
+      .chars()
+      .next()
+      .map(|c| c.to_uppercase().to_string())
+      .unwrap_or_default();
+    text(initial)
+      .text_size(px(12.0))
+      .font_weight(FontWeight::SEMIBOLD)
+      .text_color(mid())
+      .into_element()
   };
-  let tip = if a.about.is_empty() { a.name.clone() } else { format!("{} · {}", a.name, a.about) };
+  let tip = if a.about.is_empty() {
+    a.name.clone()
+  } else {
+    format!("{} · {}", a.name, a.about)
+  };
   let (on2, on3, on4) = (on.clone(), on.clone(), on.clone());
   view()
     .flex_row()
@@ -95,9 +115,46 @@ fn row(ui: Ui, a: Assistant) -> impl IntoElement {
     .hover(|s| s.bg(hover()))
     .cursor_pointer()
     .tooltip(crate::hint(tip))
-    .on_press(move || if ui.talk.get_untracked() == id { ui.back() } else { ui.talk_to(id.clone()) })
-    .child(view().absolute().left(px(0.0)).top(px(9.0)).w(px(3.0)).h(px(18.0)).rounded(px(1.5)).bg(ink()).opacity(move || if on2() { 1.0_f32 } else { 0.0 }))
-    .child(view().size(px(22.0)).rounded(px(6.0)).bg(move || if on3() { paper() } else { block() }).items_center().justify_center().child(mark))
-    .child(text(a.name).flex_1().number_of_lines(1).text_size(px(14.0)).font_weight(FontWeight::MEDIUM).text_color(move || if on4() { ink() } else { mid() }))
-    .child(view().size(px(7.0)).rounded_full().bg(ink()).opacity(move || if works() { 1.0_f32 } else { 0.0 }))
+    .on_press(move || {
+      if ui.talk.get_untracked() == id {
+        ui.back()
+      } else {
+        ui.talk_to(id.clone())
+      }
+    })
+    .child(
+      view()
+        .absolute()
+        .left(px(0.0))
+        .top(px(9.0))
+        .w(px(3.0))
+        .h(px(18.0))
+        .rounded(px(1.5))
+        .bg(ink())
+        .opacity(move || if on2() { 1.0_f32 } else { 0.0 }),
+    )
+    .child(
+      view()
+        .size(px(22.0))
+        .rounded(px(6.0))
+        .bg(move || if on3() { paper() } else { block() })
+        .items_center()
+        .justify_center()
+        .child(mark),
+    )
+    .child(
+      text(a.name)
+        .flex_1()
+        .number_of_lines(1)
+        .text_size(px(14.0))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(move || if on4() { ink() } else { mid() }),
+    )
+    .child(
+      view()
+        .size(px(7.0))
+        .rounded_full()
+        .bg(ink())
+        .opacity(move || if works() { 1.0_f32 } else { 0.0 }),
+    )
 }

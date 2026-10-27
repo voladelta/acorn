@@ -26,7 +26,11 @@ impl Memory {
   pub fn fit(&mut self, next: bool) {
     let mut gone = Vec::new();
     let mut changed = false;
-    let sides: Vec<u64> = [0, 1].into_iter().filter(|&s| self.hold[s].is_none()).map(|s| self.first(0, s)).collect();
+    let sides: Vec<u64> = [0, 1]
+      .into_iter()
+      .filter(|&s| self.hold[s].is_none())
+      .map(|s| self.first(0, s))
+      .collect();
     let count = self.count;
     let seen_end = sides.into_iter().fold(count, u64::min);
     let mut views = [std::mem::take(&mut self.view), std::mem::take(&mut self.seen)];
@@ -97,7 +101,9 @@ impl Memory {
         return;
       }
       let k = k as usize;
-      let (Some(a), Some(Some(b))) = (view[k], view.get(next[k]).copied()) else { return };
+      let (Some(a), Some(Some(b))) = (view[k], view.get(next[k]).copied()) else {
+        return;
+      };
       if a.i % 2 != 0 || b.l != a.l || b.i != a.i + 1 || !self.built(a.up()) {
         return;
       }
@@ -126,7 +132,11 @@ impl Memory {
       offer(&mut heap, &view, &next, prev[k]);
       offer(&mut heap, &view, &next, k as isize);
     }
-    Merged { parts: view.into_iter().flatten().collect(), size, gone }
+    Merged {
+      parts: view.into_iter().flatten().collect(),
+      size,
+      gone,
+    }
   }
 
   /// The views' lines built before message `end`, in blocks (the last cut
@@ -134,11 +144,18 @@ impl Memory {
   /// mark ends the prefix single flight keys (`ai::cache`); DeepSeek
   /// caches prefixes itself.
   pub fn blocks(&self, end: u64, parts: &[Part]) -> Vec<crate::Block> {
-    let lines: Vec<String> = parts.iter().filter(|p| p.span().1 < end && self.built(**p)).map(|&p| format!("{}\n", line(p, self.text(p)))).collect();
+    let lines: Vec<String> = parts
+      .iter()
+      .filter(|p| p.span().1 < end && self.built(**p))
+      .map(|&p| format!("{}\n", line(p, self.text(p))))
+      .collect();
     let whole = lines.len() / BLOCK;
     let mut blocks = vec![crate::Block::new("<chat>\n", whole == 0)];
     for k in 0..whole {
-      blocks.push(crate::Block::new(lines[k * BLOCK..(k + 1) * BLOCK].concat(), k == whole - 1));
+      blocks.push(crate::Block::new(
+        lines[k * BLOCK..(k + 1) * BLOCK].concat(),
+        k == whole - 1,
+      ));
     }
     blocks.push(crate::Block::new(lines[whole * BLOCK..].concat() + "</chat>\n", false));
     blocks
@@ -154,7 +171,10 @@ impl Memory {
       _ => line(p, WAIT),
     };
     let parts = &self.view.parts;
-    parts[parts.len().saturating_sub(n)..].iter().map(|&p| shown(p)).collect()
+    parts[parts.len().saturating_sub(n)..]
+      .iter()
+      .map(|&p| shown(p))
+      .collect()
   }
 
   /// The chat's view before message `end`, as a call's blocks.
@@ -172,7 +192,10 @@ impl Memory {
   pub fn zoom(&mut self, id: u64, n: u64, at: usize) -> String {
     let Some(part) = self.part(id, n) else {
       let roots: Vec<String> = roots(self.count).into_iter().map(Part::name).collect();
-      return format!("No line {id}+{n}: n is a power of 2, id a multiple of n. The tree's roots: {}.", roots.join(", "));
+      return format!(
+        "No line {id}+{n}: n is a power of 2, id a multiple of n. The tree's roots: {}.",
+        roots.join(", ")
+      );
     };
     match part.halves() {
       None => {
@@ -195,7 +218,9 @@ impl Memory {
   }
 
   pub fn date(&self, id: u64) -> String {
-    self.message(id).map_or_else(|| format!("No message {id}."), |root| root.when())
+    self
+      .message(id)
+      .map_or_else(|| format!("No message {id}."), |root| root.when())
   }
 
   /// Where a page of the chat starts: the last message starting a turn
@@ -204,14 +229,20 @@ impl Memory {
   pub fn turn(&self) -> u64 {
     let from = self.view.parts.iter().rposition(|p| p.l > 0).map_or(0, |k| k + 1);
     let whole = &self.view.parts[from..];
-    let user = whole.iter().rev().find(|p| self.message(p.i).is_some_and(|m| matches!(m.kind, Kind::User | Kind::Work)));
+    let user = whole.iter().rev().find(|p| {
+      self
+        .message(p.i)
+        .is_some_and(|m| matches!(m.kind, Kind::User | Kind::Work))
+    });
     user.or_else(|| whole.first()).map_or(self.count, |p| p.i)
   }
 
   /// Level l's nodes built, in order.
   pub fn level(&self, l: u32) -> Vec<(Part, String)> {
     let n = 1u64 << l;
-    (0..self.count / n).filter_map(|i| self.node(Part::new(l, i)).map(|t| (Part::new(l, i), t))).collect()
+    (0..self.count / n)
+      .filter_map(|i| self.node(Part::new(l, i)).map(|t| (Part::new(l, i), t)))
+      .collect()
   }
 
   /// The tree's levels: as many as the count's bits.

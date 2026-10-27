@@ -205,7 +205,10 @@ impl Engine {
       let mut chat = engine.lock();
       if chat.mem.count == 0 && chat.with.is_none() {
         let (hello, line) = chat.me.hello();
-        let hello = Msg { line: Some(line), ..Msg::new(Kind::Acorn, &hello) };
+        let hello = Msg {
+          line: Some(line),
+          ..Msg::new(Kind::Acorn, &hello)
+        };
         chat.mem.push(vec![hello])?;
       }
       let turn = chat.mem.turn();
@@ -234,7 +237,10 @@ impl Engine {
     chat.seen.clear();
     chat.tell_state();
     chat.show();
-    chat.all(Event::Live { agent: None, live: chat.live.clone() });
+    chat.all(Event::Live {
+      agent: None,
+      live: chat.live.clone(),
+    });
   }
 
   /// A person's act, or a read.
@@ -339,7 +345,10 @@ impl Chat {
   /// thread's asker, then the facts it sees), its assistant's effort.
   pub fn share(&self) -> ai::Ask {
     let asks = self.with.as_ref().map(|a| a.asking()).unwrap_or_default();
-    let head = crate::tools::master(&self.me.work(), self.with.is_some()) + &self.me.personality() + &asks + &crate::facts::prompt(&self.me.id);
+    let head = crate::tools::master(&self.me.work(), self.with.is_some())
+      + &self.me.personality()
+      + &asks
+      + &crate::facts::prompt(&self.me.id);
     ai::Ask {
       effort: self.me.effort,
       system: crate::tools::system(&head),
@@ -362,7 +371,10 @@ impl Chat {
         call.stop();
       }
     }
-    let said = self.mem.purge(agent, id).unwrap_or_else(|err| format!("The purge failed: {err}"));
+    let said = self
+      .mem
+      .purge(agent, id)
+      .unwrap_or_else(|err| format!("The purge failed: {err}"));
     if agent.is_none() {
       self.seen.clear();
       self.show();
@@ -418,7 +430,9 @@ impl Chat {
         Err(err) => {
           chat.mem.stuck = true;
           eprintln!("acorn: wipe: {err}");
-          chat.all(Event::Note(format!("A purged message's old bytes are still in chat.db ({err}); Acorn wipes them when it starts again.")));
+          chat.all(Event::Note(format!(
+            "A purged message's old bytes are still in chat.db ({err}); Acorn wipes them when it starts again."
+          )));
         }
       }
     });

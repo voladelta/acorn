@@ -69,15 +69,27 @@ fn job(chat: &Chat, part: Part, text: String) {
 /// limit cuts it.
 async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: String, age: u64) -> Result<(), String> {
   let (ask, served) = {
-    let Some(engine) = this.upgrade() else { return Err("Acorn quit".into()) };
+    let Some(engine) = this.upgrade() else {
+      return Err("Acorn quit".into());
+    };
     let mut chat = engine.lock();
     let side = chat.mem.side(part);
     let upto = part.ctx().min(chat.mem.first(0, side));
     let mut blocks = chat.mem.blocks(upto, &chat.mem.seen.parts.clone());
-    blocks.push(Block::new(format!("{}{text}\n</input>", memory::Memory::task(part)), false));
+    blocks.push(Block::new(
+      format!("{}{text}\n</input>", memory::Memory::task(part)),
+      false,
+    ));
     let served = chat.mem.served(part);
     let yields = (served == Served::Import).then(|| chat.mem.dir.display().to_string());
-    let ask = ai::Ask { effort: config::get().compactor, blocks, meter: Some(chat.meter(served)), patient: true, yields, ..chat.share() };
+    let ask = ai::Ask {
+      effort: config::get().compactor,
+      blocks,
+      meter: Some(chat.meter(served)),
+      patient: true,
+      yields,
+      ..chat.share()
+    };
     (ask, served)
   };
   let mut lines: Vec<String> = Vec::new();
@@ -100,7 +112,10 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
     let why = if end.ok { "an empty line" } else { end.text.as_str() };
     eprintln!("compactor: node {}/{}: {why}; clipped", part.l, part.i);
   }
-  let line = lines.into_iter().min_by_key(String::len).unwrap_or_else(|| memory::cut(&memory::flat(&text)).to_string());
+  let line = lines
+    .into_iter()
+    .min_by_key(String::len)
+    .unwrap_or_else(|| memory::cut(&memory::flat(&text)).to_string());
   let engine = this.upgrade().ok_or("Acorn quit")?;
   let mut chat = engine.lock();
   if chat.mem.age != age {
@@ -110,7 +125,12 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
 }
 
 /// A summary's try: its call's end, the call kept (to cut it) till then.
-async fn compact(this: &std::sync::Weak<crate::chat::Engine>, part: Part, served: Served, ask: ai::Ask) -> Result<ai::End, String> {
+async fn compact(
+  this: &std::sync::Weak<crate::chat::Engine>,
+  part: Part,
+  served: Served,
+  ask: ai::Ask,
+) -> Result<ai::End, String> {
   let call = {
     let engine = this.upgrade().ok_or("Acorn quit")?;
     let mut chat = engine.lock();

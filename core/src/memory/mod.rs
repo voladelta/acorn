@@ -188,8 +188,16 @@ impl Root {
   /// As models read it, tagged by its author: an imported chat's AI (its
   /// say and calls) is "ai", not Acorn.
   pub fn show(&self) -> String {
-    let who = if self.imported && matches!(self.kind, Kind::Acorn | Kind::Tool) { "ai" } else { self.kind.as_str() };
-    let pics: String = self.images.iter().map(|name| format!("\n[image docs/images/{name}]")).collect();
+    let who = if self.imported && matches!(self.kind, Kind::Acorn | Kind::Tool) {
+      "ai"
+    } else {
+      self.kind.as_str()
+    };
+    let pics: String = self
+      .images
+      .iter()
+      .map(|name| format!("\n[image docs/images/{name}]"))
+      .collect();
     format!("{who}: {}{pics}", self.text)
   }
 
@@ -213,7 +221,15 @@ pub struct Msg {
 
 impl Msg {
   pub fn new(kind: Kind, text: impl Into<String>) -> Msg {
-    Msg { kind, text: text.into(), date: None, images: Vec::new(), imported: false, line: None, more: false }
+    Msg {
+      kind,
+      text: text.into(),
+      date: None,
+      images: Vec::new(),
+      imported: false,
+      line: None,
+      more: false,
+    }
   }
 }
 
@@ -315,8 +331,14 @@ impl Memory {
       work: Vec::new(),
       nodes: HashMap::new(),
       agents: HashMap::new(),
-      view: View { high: config::get().view, ..View::default() },
-      seen: View { high: SEEN, ..View::default() },
+      view: View {
+        high: config::get().view,
+        ..View::default()
+      },
+      seen: View {
+        high: SEEN,
+        ..View::default()
+      },
       ready: [Vec::new(), Vec::new()],
       busy: HashMap::new(),
       sides: HashMap::new(),
@@ -334,14 +356,24 @@ impl Memory {
       mem.goal.clone_from(&s.goal);
       mem.work.clone_from(&s.work);
     }
-    mem.count = mem.db.query_row("select coalesce(max(i) + 1, 0) from msgs where log = ''", [], |r| r.get(0))?;
+    mem.count = mem
+      .db
+      .query_row("select coalesce(max(i) + 1, 0) from msgs where log = ''", [], |r| {
+        r.get(0)
+      })?;
     while mem.count > 0 && mem.message(mem.count - 1).is_some_and(|m| m.more) {
       mem.count -= 1;
     }
-    mem.db.execute("delete from msgs where log = '' and i >= ?", [mem.count])?;
+    mem
+      .db
+      .execute("delete from msgs where log = '' and i >= ?", [mem.count])?;
     mem.view = mem.opened(mem.view.high, saved.as_ref().map(|s| &s.view));
     mem.seen = mem.opened(SEEN, saved.as_ref().map(|s| &s.seen));
-    for part in roots(mem.count).into_iter().flat_map(|p| mem.todo(p)).collect::<Vec<_>>() {
+    for part in roots(mem.count)
+      .into_iter()
+      .flat_map(|p| mem.todo(p))
+      .collect::<Vec<_>>()
+    {
       mem.ready(part, true);
     }
     mem.fit(false);
@@ -352,16 +384,35 @@ impl Memory {
   /// A view as kept (none: the highest nodes built).
   fn opened(&mut self, high: usize, kept: Option<&Kept>) -> View {
     let keys: Option<HashSet<u64>> = kept.map(|k| k.parts.iter().map(|&(l, i)| Part::new(l, i).slot()).collect());
-    let parts: Vec<Part> = roots(self.count).into_iter().flat_map(|p| self.down(p, keys.as_ref())).collect();
+    let parts: Vec<Part> = roots(self.count)
+      .into_iter()
+      .flat_map(|p| self.down(p, keys.as_ref()))
+      .collect();
     let size = parts.iter().map(|&p| self.size(p)).sum();
-    View { parts, size, batch: kept.is_some_and(|k| k.batch), high }
+    View {
+      parts,
+      size,
+      batch: kept.is_some_and(|k| k.batch),
+      high,
+    }
   }
 
   /// The state row, written over.
   pub fn save(&self) -> Result<()> {
-    let kept = |v: &View| Kept { parts: v.parts.iter().map(|p| (p.l, p.i)).collect(), batch: v.batch };
-    let saved = Saved { view: kept(&self.view), seen: kept(&self.seen), goal: self.goal.clone(), work: self.work.clone() };
-    self.db.execute("insert or replace into state values (1, ?)", [serde_json::to_string(&saved)?])?;
+    let kept = |v: &View| Kept {
+      parts: v.parts.iter().map(|p| (p.l, p.i)).collect(),
+      batch: v.batch,
+    };
+    let saved = Saved {
+      view: kept(&self.view),
+      seen: kept(&self.seen),
+      goal: self.goal.clone(),
+      work: self.work.clone(),
+    };
+    self.db.execute(
+      "insert or replace into state values (1, ?)",
+      [serde_json::to_string(&saved)?],
+    )?;
     Ok(())
   }
 
@@ -370,7 +421,10 @@ impl Memory {
 
   /// Message i of a log (CHAT, or an agent's); None: none.
   fn read(&self, log: &str, i: u64) -> Option<Root> {
-    let mut q = self.db.prepare_cached("select * from msgs where log = ? and i = ?").ok()?;
+    let mut q = self
+      .db
+      .prepare_cached("select * from msgs where log = ? and i = ?")
+      .ok()?;
     q.query_row(params![log, i], from_row).optional().unwrap_or_else(|err| {
       eprintln!("memory: message {i}: {err}");
       None
@@ -384,7 +438,18 @@ impl Memory {
       let mut q = tx.prepare_cached("insert into msgs values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")?;
       for r in roots {
         let images = serde_json::to_string(&r.images)?;
-        q.execute(params![log, r.i, r.kind.as_str(), r.text, r.date, images, r.imported, r.line, r.more, r.size])?;
+        q.execute(params![
+          log,
+          r.i,
+          r.kind.as_str(),
+          r.text,
+          r.date,
+          images,
+          r.imported,
+          r.line,
+          r.more,
+          r.size
+        ])?;
       }
     }
     tx.commit()?;
@@ -403,7 +468,12 @@ impl Memory {
   /// that isn't. The caller pumps the compactor.
   pub fn push(&mut self, msgs: Vec<Msg>) -> Result<Vec<Root>> {
     let base = self.count + self.open;
-    let roots: Vec<Root> = msgs.into_iter().flat_map(pages).enumerate().map(|(k, m)| root(base + k as u64, m)).collect();
+    let roots: Vec<Root> = msgs
+      .into_iter()
+      .flat_map(pages)
+      .enumerate()
+      .map(|(k, m)| root(base + k as u64, m))
+      .collect();
     let done = roots.iter().rposition(|r| !r.more).map_or(0, |k| k + 1);
     let ids = if done == 0 { 0 } else { self.open + done as u64 };
     self.log(CHAT, &roots)?;
@@ -462,10 +532,12 @@ impl Memory {
       return Some(text.clone());
     }
     let mut q = self.db.prepare_cached("select text from nodes where slot = ?").ok()?;
-    q.query_row([part.slot()], |r| r.get(0)).optional().unwrap_or_else(|err| {
-      eprintln!("memory: node {}/{}: {err}", part.l, part.i);
-      None
-    })
+    q.query_row([part.slot()], |r| r.get(0))
+      .optional()
+      .unwrap_or_else(|err| {
+        eprintln!("memory: node {}/{}: {err}", part.l, part.i);
+        None
+      })
   }
 
   /// The view under `part`, down from it, keeping the built nodes met:
@@ -477,7 +549,9 @@ impl Memory {
       self.nodes.insert(part.slot(), text);
     }
     match part.halves() {
-      Some(halves) if !(built && keys.is_none_or(|k| k.contains(&part.slot()))) => halves.into_iter().flat_map(|h| self.down(h, keys)).collect(),
+      Some(halves) if !(built && keys.is_none_or(|k| k.contains(&part.slot()))) => {
+        halves.into_iter().flat_map(|h| self.down(h, keys)).collect()
+      }
       _ => vec![part],
     }
   }
@@ -494,7 +568,11 @@ impl Memory {
   /// The message of the (k+1)th node not built of a side (0: the chat's,
   /// 1: an import's) at level 0, else the count.
   pub fn first(&self, k: usize, side: usize) -> u64 {
-    self.ready[side].first().and_then(|q| q.get(k)).copied().unwrap_or(self.count)
+    self.ready[side]
+      .first()
+      .and_then(|q| q.get(k))
+      .copied()
+      .unwrap_or(self.count)
   }
 
   /// A node ready (on), or no more (built).
@@ -529,7 +607,11 @@ impl Memory {
 
   /// What node (l,i)'s summary serves: an import, or the chat.
   pub fn served(&mut self, part: Part) -> Served {
-    if self.side(part) == 1 { Served::Import } else { Served::Compactor }
+    if self.side(part) == 1 {
+      Served::Import
+    } else {
+      Served::Compactor
+    }
   }
 
   /// Of each side not held, the nodes ready up to its JOBS-th leaf not
@@ -546,7 +628,12 @@ impl Memory {
       let end = self.first(JOBS - 1, side);
       let mut next: Vec<Part> = Vec::new();
       for (l, queue) in self.ready[side].iter().enumerate() {
-        next.extend(queue.iter().map(|&i| Part::new(l as u32, i)).take_while(|p| p.ctx() <= end));
+        next.extend(
+          queue
+            .iter()
+            .map(|&i| Part::new(l as u32, i))
+            .take_while(|p| p.ctx() <= end),
+        );
       }
       next.sort_by(|a, b| a.ctx().cmp(&b.ctx()).then(b.l.cmp(&a.l)));
       for part in next {
@@ -636,18 +723,29 @@ impl Memory {
 
   /// An agent's log, read whole; None: no such agent.
   pub fn agent(&self, name: &str) -> Option<Vec<Root>> {
-    let known: bool = self.db.query_row("select exists (select 1 from agents where name = ?)", [name], |r| r.get(0)).ok()?;
+    let known: bool = self
+      .db
+      .query_row("select exists (select 1 from agents where name = ?)", [name], |r| {
+        r.get(0)
+      })
+      .ok()?;
     if !known {
       return None;
     }
-    let mut q = self.db.prepare_cached("select * from msgs where log = ? order by i").ok()?;
+    let mut q = self
+      .db
+      .prepare_cached("select * from msgs where log = ? order by i")
+      .ok()?;
     let rows = q.query_map([name], from_row).ok()?;
     Some(rows.filter_map(Result::ok).collect())
   }
 
   /// The agents' names, in order.
   pub fn agent_names(&self) -> Vec<String> {
-    let names = self.db.prepare("select name from agents order by name").and_then(|mut q| q.query_map([], |r| r.get(0))?.collect());
+    let names = self
+      .db
+      .prepare("select name from agents order by name")
+      .and_then(|mut q| q.query_map([], |r| r.get(0))?.collect());
     names.unwrap_or_default()
   }
 
@@ -665,7 +763,9 @@ impl Memory {
   pub fn agent_push(&mut self, name: &str, kind: Kind, text: &str) -> Result<u64> {
     let n = match self.agents.get(name) {
       Some(&n) => n,
-      None => self.db.query_row("select count(*) from msgs where log = ?", [name], |r| r.get(0))?,
+      None => self
+        .db
+        .query_row("select count(*) from msgs where log = ?", [name], |r| r.get(0))?,
     };
     self.log(name, &[root(n, Msg::new(kind, text))])?;
     self.agents.insert(name.to_string(), n + 1);
@@ -674,7 +774,11 @@ impl Memory {
 
   pub fn agent_show(&self, name: &str) -> String {
     match self.agent(name) {
-      Some(log) => log.iter().map(|r| format!("{}|{}", r.i, r.show())).collect::<Vec<_>>().join("\n\n"),
+      Some(log) => log
+        .iter()
+        .map(|r| format!("{}|{}", r.i, r.show()))
+        .collect::<Vec<_>>()
+        .join("\n\n"),
       None => format!("No agent {name}."),
     }
   }
@@ -685,16 +789,30 @@ impl Memory {
 
 /// The state row; None: none, or unreadable.
 fn saved(db: &Connection) -> Option<Saved> {
-  let json: String = db.query_row("select json from state where id = 1", [], |r| r.get(0)).optional().ok()??;
+  let json: String = db
+    .query_row("select json from state where id = 1", [], |r| r.get(0))
+    .optional()
+    .ok()??;
   serde_json::from_str(&json).ok()
 }
 
 /// A message from its row in `msgs`.
 fn from_row(r: &Row) -> rusqlite::Result<Root> {
-  let bad = |k, e: serde_json::Error| rusqlite::Error::FromSqlConversionFailure(k, rusqlite::types::Type::Text, e.into());
+  let bad =
+    |k, e: serde_json::Error| rusqlite::Error::FromSqlConversionFailure(k, rusqlite::types::Type::Text, e.into());
   let kind = serde_json::from_value(serde_json::Value::String(r.get(2)?)).map_err(|e| bad(2, e))?;
   let images = serde_json::from_str(&r.get::<_, String>(5)?).map_err(|e| bad(5, e))?;
-  Ok(Root { i: r.get(1)?, kind, text: r.get(3)?, date: r.get(4)?, images, imported: r.get(6)?, line: r.get(7)?, more: r.get(8)?, size: r.get(9)? })
+  Ok(Root {
+    i: r.get(1)?,
+    kind,
+    text: r.get(3)?,
+    date: r.get(4)?,
+    images,
+    imported: r.get(6)?,
+    line: r.get(7)?,
+    more: r.get(8)?,
+    size: r.get(9)?,
+  })
 }
 
 /// Now, as logged: "2026-10-26T12:03:05.123Z".
@@ -704,7 +822,9 @@ pub fn iso_now() -> String {
 
 /// An ISO date here, as "2026-10-26 14:03:05" ("" if not one).
 pub fn local_time(iso: &str) -> String {
-  DateTime::parse_from_rfc3339(iso).map(|d| d.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or_default()
+  DateTime::parse_from_rfc3339(iso)
+    .map(|d| d.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string())
+    .unwrap_or_default()
 }
 
 fn root(i: u64, msg: Msg) -> Root {
@@ -731,7 +851,11 @@ fn pages(msg: Msg) -> Vec<Msg> {
   (0..n)
     .map(|k| {
       let end = msg.images.len().saturating_sub((n - 1 - k) * PICS);
-      let text = (k + texts.len()).checked_sub(n).and_then(|t| texts.get(t)).cloned().unwrap_or_default();
+      let text = (k + texts.len())
+        .checked_sub(n)
+        .and_then(|t| texts.get(t))
+        .cloned()
+        .unwrap_or_default();
       Msg {
         kind: msg.kind,
         text,

@@ -67,11 +67,18 @@ pub struct Out {
 
 impl Out {
   pub fn ok(text: impl Into<String>) -> Out {
-    Out { text: text.into(), ..Out::default() }
+    Out {
+      text: text.into(),
+      ..Out::default()
+    }
   }
 
   pub fn fail(text: impl Into<String>) -> Out {
-    Out { text: text.into(), fail: true, ..Out::default() }
+    Out {
+      text: text.into(),
+      fail: true,
+      ..Out::default()
+    }
   }
 }
 
@@ -99,7 +106,11 @@ pub enum Event {
   /// A live piece of a message; `fresh`: it starts one (a tool call).
   Delta { kind: Kind, text: String, fresh: bool },
   /// A message done; `of`: the tool call it is or answers.
-  Entry { kind: Kind, text: String, of: Option<String> },
+  Entry {
+    kind: Kind,
+    text: String,
+    of: Option<String>,
+  },
 }
 
 /// Who ended a call that failed: the model (`Fail`: it answered, so the
@@ -124,7 +135,10 @@ pub struct End {
 impl End {
   /// A call's end, before it ends: failed, saying `text`.
   pub fn failed(text: impl Into<String>) -> End {
-    End { text: text.into(), ..End::default() }
+    End {
+      text: text.into(),
+      ..End::default()
+    }
   }
 }
 
@@ -162,7 +176,10 @@ pub struct Call {
 impl Call {
   /// Its end (a call that panicked failed).
   pub async fn end(self) -> End {
-    self.done.await.unwrap_or_else(|err| End::failed(format!("the call failed: {err}")))
+    self
+      .done
+      .await
+      .unwrap_or_else(|err| End::failed(format!("the call failed: {err}")))
   }
 }
 
@@ -170,7 +187,10 @@ impl Call {
 pub fn ask(ask: Ask, on: On) -> Call {
   let (tx, mut rx) = mpsc::unbounded_channel();
   let cancel = CancellationToken::new();
-  let handle = Handle { tx, cancel: cancel.clone() };
+  let handle = Handle {
+    tx,
+    cancel: cancel.clone(),
+  };
   let done = tokio::spawn(async move {
     loop {
       let mut end = agent::run(&ask, &on, &mut rx, &cancel).await;

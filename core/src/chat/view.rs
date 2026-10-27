@@ -24,7 +24,14 @@ impl Chat {
     } else {
       Wait::None
     };
-    State { busy: self.busy, wait, agents: self.working(), goal: self.mem.goal.clone(), importing: self.importing(), today: self.today() }
+    State {
+      busy: self.busy,
+      wait,
+      agents: self.working(),
+      goal: self.mem.goal.clone(),
+      importing: self.importing(),
+      today: self.today(),
+    }
   }
 
   pub(super) fn tell_state(&mut self) {
@@ -34,7 +41,14 @@ impl Chat {
 
   /// What the agent saw before message `from`.
   pub(super) fn eye_from(&self, from: u64) -> Eye {
-    let parts = self.mem.view.parts.iter().filter(|p| p.span().1 < from).map(|p| (p.span().0, p.n())).collect();
+    let parts = self
+      .mem
+      .view
+      .parts
+      .iter()
+      .filter(|p| p.span().1 < from)
+      .map(|p| (p.span().0, p.n()))
+      .collect();
     Eye { parts, from }
   }
 
@@ -47,9 +61,24 @@ impl Chat {
     let (a, hi) = self.batch.as_ref().map_or((0, 0), |b| (b.a, b.b));
     let roots = memory::roots(count);
     let lo = roots.iter().find(|p| p.span().1 >= a).map_or(a, |p| p.span().0);
-    let near: Vec<Seg> = self.eye.parts.iter().copied().filter(|&(id, n)| id < hi && id + n > lo).collect();
-    let cover = (near.iter().map(|s| s.0).fold(lo, u64::min), near.iter().map(|s| s.0 + s.1).fold(hi, u64::max));
-    let mut parts: Vec<Seg> = self.eye.parts.iter().copied().filter(|&(id, n)| id + n <= cover.0 || id >= cover.1).collect();
+    let near: Vec<Seg> = self
+      .eye
+      .parts
+      .iter()
+      .copied()
+      .filter(|&(id, n)| id < hi && id + n > lo)
+      .collect();
+    let cover = (
+      near.iter().map(|s| s.0).fold(lo, u64::min),
+      near.iter().map(|s| s.0 + s.1).fold(hi, u64::max),
+    );
+    let mut parts: Vec<Seg> = self
+      .eye
+      .parts
+      .iter()
+      .copied()
+      .filter(|&(id, n)| id + n <= cover.0 || id >= cover.1)
+      .collect();
     parts.extend(roots.iter().flat_map(|&p| blocks(p, cover)));
     parts.extend((from..cover.0).map(|k| (k, 1)));
     parts.extend((from.max(cover.1)..count).map(|k| (k, 1)));
@@ -68,7 +97,16 @@ impl Chat {
       if n == 1
         && let Some(m) = self.mem.message(id)
       {
-        whole.push((id, Entry { kind: m.kind, text: m.text, date: m.date, images: m.images, spend: self.turn_use(id) }));
+        whole.push((
+          id,
+          Entry {
+            kind: m.kind,
+            text: m.text,
+            date: m.date,
+            images: m.images,
+            spend: self.turn_use(id),
+          },
+        ));
       }
       nodes.extend(self.node((id, n)));
     }
@@ -94,7 +132,10 @@ impl Chat {
     if self.seen.contains(&seg)
       && let Some(node) = self.node(seg)
     {
-      self.all(Event::Know { whole: vec![], nodes: vec![node] });
+      self.all(Event::Know {
+        whole: vec![],
+        nodes: vec![node],
+      });
     }
   }
 
@@ -109,7 +150,10 @@ impl Chat {
 
   /// The tree's roots: the chat in the fewest blocks.
   pub(super) fn root(&mut self) {
-    let parts: Vec<Seg> = memory::roots(self.mem.count).into_iter().map(|p| (p.span().0, p.n())).collect();
+    let parts: Vec<Seg> = memory::roots(self.mem.count)
+      .into_iter()
+      .map(|p| (p.span().0, p.n()))
+      .collect();
     self.teach(&parts);
     self.all(Event::Root { parts });
   }
@@ -124,7 +168,12 @@ fn blocks(part: Part, (a, b): Seg) -> Vec<Seg> {
   if first >= a && last < b {
     return vec![(first, part.n())];
   }
-  part.halves().into_iter().flatten().flat_map(|h| blocks(h, (a, b))).collect()
+  part
+    .halves()
+    .into_iter()
+    .flatten()
+    .flat_map(|h| blocks(h, (a, b)))
+    .collect()
 }
 
 /// How many messages a lock is held for, at most, as the memory is written
@@ -141,10 +190,14 @@ impl Engine {
   /// messages, the summaries, the agents' logs, then every image, each
   /// in base64.
   pub(super) async fn export(self: &Arc<Self>) -> Result<PathBuf, String> {
-    let file = crate::config::home().join("Downloads").join(format!("acorn-memory-{}.json", stamp()));
+    let file = crate::config::home()
+      .join("Downloads")
+      .join(format!("acorn-memory-{}.json", stamp()));
     let me = self.clone();
     let wrote = tokio::task::spawn_blocking(move || me.dump(&file).map(|_| file)).await;
-    wrote.map_err(|err| err.to_string())?.map_err(|err| format!("The memory was not saved: {err}."))
+    wrote
+      .map_err(|err| err.to_string())?
+      .map_err(|err| format!("The memory was not saved: {err}."))
   }
 
   fn dump(&self, file: &std::path::Path) -> anyhow::Result<()> {
@@ -172,7 +225,11 @@ impl Engine {
         for i in from..(from + PIECE).min(count / n) {
           let part = Part::new(l, i);
           if let Some(text) = chat.mem.node(part) {
-            write!(out, "{sep}{}", serde_json::json!({"id": part.span().0, "n": n, "text": text}))?;
+            write!(
+              out,
+              "{sep}{}",
+              serde_json::json!({"id": part.span().0, "n": n, "text": text})
+            )?;
             sep = ",\n";
           }
         }
@@ -180,22 +237,39 @@ impl Engine {
     }
     write!(out, "],\n\"agents\": {{")?;
     let ls = |sub: &str| -> Vec<String> {
-      let mut names: Vec<String> = std::fs::read_dir(dir.join(sub)).into_iter().flatten().flatten().filter_map(|e| e.file_name().into_string().ok()).collect();
+      let mut names: Vec<String> = std::fs::read_dir(dir.join(sub))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
       names.sort();
       names
     };
     sep = "\n";
     let agents = self.lock().mem.agent_names();
     for name in &agents {
-      let Some(log) = self.lock().mem.agent(name) else { continue };
-      let entries: Vec<_> = log.iter().map(|r| serde_json::json!({"id": r.i, "kind": r.kind, "text": r.text, "date": r.date})).collect();
-      write!(out, "{sep}{}: {}", serde_json::to_string(name)?, serde_json::to_string(&entries)?)?;
+      let Some(log) = self.lock().mem.agent(name) else {
+        continue;
+      };
+      let entries: Vec<_> = log
+        .iter()
+        .map(|r| serde_json::json!({"id": r.i, "kind": r.kind, "text": r.text, "date": r.date}))
+        .collect();
+      write!(
+        out,
+        "{sep}{}: {}",
+        serde_json::to_string(name)?,
+        serde_json::to_string(&entries)?
+      )?;
       sep = ",\n";
     }
     write!(out, "}},\n\"images\": {{")?;
     sep = "\n";
     for name in ls("docs/images") {
-      let Some(path) = self.lock().mem.image_file(&name) else { continue };
+      let Some(path) = self.lock().mem.image_file(&name) else {
+        continue;
+      };
       let data = base64::engine::general_purpose::STANDARD.encode(std::fs::read(path)?);
       write!(out, "{sep}{}: \"{data}\"", serde_json::to_string(&name)?)?;
       sep = ",\n";
@@ -211,7 +285,9 @@ impl Engine {
     let file = std::env::temp_dir().join(format!("acorn-tree-{}.html", stamp()));
     let me = self.clone();
     let made = tokio::task::spawn_blocking(move || me.page(&file).map(|_| file)).await;
-    let file = made.map_err(|err| err.to_string())?.map_err(|err| format!("No tree page: {err}."))?;
+    let file = made
+      .map_err(|err| err.to_string())?
+      .map_err(|err| format!("No tree page: {err}."))?;
     let _ = tokio::process::Command::new("open").arg(&file).status().await;
     Ok(file)
   }
@@ -227,11 +303,22 @@ impl Engine {
     let when = |chat: &mut Chat, a: u64, b: u64| {
       let date = |chat: &mut Chat, id| chat.mem.message(id).map(|m| local_time(&m.date)).unwrap_or_default();
       let first = date(chat, a);
-      if a == b { first } else { format!("{first} – {}", date(chat, b)) }
+      if a == b {
+        first
+      } else {
+        format!("{first} – {}", date(chat, b))
+      }
     };
     let node = |chat: &mut Chat, part: Part, text: &str| {
       let (a, b) = part.span();
-      item(&[format!("LVL{} #{a}-{b}", part.l), when(chat, a, b), format!("{} B", text.len())], text)
+      item(
+        &[
+          format!("LVL{} #{a}-{b}", part.l),
+          when(chat, a, b),
+          format!("{} B", text.len()),
+        ],
+        text,
+      )
     };
     let menu: String = ["VIEW".to_string(), "ROOT".to_string()]
       .into_iter()
@@ -260,7 +347,12 @@ h4 {{ margin: .8em 0 .2em; color: #888; font-weight: normal; }} pre {{ margin: 0
       let mut chat = self.lock();
       for i in from..(from + PIECE).min(count) {
         let Some(r) = chat.mem.message(i) else { continue };
-        let head = [format!("ROOT #{i}"), when(&mut chat, i, i), r.kind.as_str().to_string(), format!("{} B", r.size)];
+        let head = [
+          format!("ROOT #{i}"),
+          when(&mut chat, i, i),
+          r.kind.as_str().to_string(),
+          format!("{} B", r.size),
+        ];
         write!(out, "{}", item(&head, &r.text))?;
       }
     }

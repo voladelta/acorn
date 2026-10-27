@@ -62,7 +62,13 @@ impl Batch {
   /// its cost left over JOBS, then each level not built's last call (the
   /// tree's top builds a call a level).
   fn time(&self) -> f64 {
-    let tops: u64 = self.micros.iter().zip(&self.open).filter(|(_, o)| **o > 0).filter_map(|(level, _)| level.last()).sum();
+    let tops: u64 = self
+      .micros
+      .iter()
+      .zip(&self.open)
+      .filter(|(_, o)| **o > 0)
+      .filter_map(|(level, _)| level.last())
+      .sum();
     self.left / JOBS as f64 + tops as f64
   }
 }
@@ -70,12 +76,26 @@ impl Batch {
 impl Engine {
   /// The `import` tool: find, start (as the turn ends), pause, resume.
   pub(super) async fn import_tool(self: &Arc<Self>, input: &serde_json::Value) -> Out {
-    let strs = |k: &str| -> Vec<String> { input[k].as_array().into_iter().flatten().filter_map(|v| v.as_str()).map(str::to_string).collect() };
+    let strs = |k: &str| -> Vec<String> {
+      input[k]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .map(str::to_string)
+        .collect()
+    };
     match input["do"].as_str().unwrap_or_default() {
       "find" => {
         let home = crate::config::home();
-        let files: Vec<PathBuf> = strs("files").iter().map(|f| f.strip_prefix("~/").map_or_else(|| PathBuf::from(f), |r| home.join(r))).collect();
-        match tokio::task::spawn_blocking(move || import::find(&files)).await.unwrap_or_else(|e| Err(e.to_string())) {
+        let files: Vec<PathBuf> = strs("files")
+          .iter()
+          .map(|f| f.strip_prefix("~/").map_or_else(|| PathBuf::from(f), |r| home.join(r)))
+          .collect();
+        match tokio::task::spawn_blocking(move || import::find(&files))
+          .await
+          .unwrap_or_else(|e| Err(e.to_string()))
+        {
           Ok(sessions) => {
             let mut chat = self.lock();
             chat.found = sessions;
@@ -85,8 +105,11 @@ impl Engine {
         }
       }
       "start" => {
-        let want =
-          Want { off: strs("skip"), since: input["since"].as_str().unwrap_or_default().trim().into(), tools: input["tools"].as_bool().unwrap_or(false) };
+        let want = Want {
+          off: strs("skip"),
+          since: input["since"].as_str().unwrap_or_default().trim().into(),
+          tools: input["tools"].as_bool().unwrap_or(false),
+        };
         let mut chat = self.lock();
         if chat.found.is_empty() {
           return Out::fail("Nothing found yet: find first.");
@@ -100,7 +123,11 @@ impl Engine {
           return Out::fail("Nothing to import: no new messages as asked.");
         }
         chat.then = Some(want);
-        Out::ok(format!("It begins as your turn ends: {}, about {}.", import::count(plan.msgs, "new "), import::guess_usd(plan.usd)))
+        Out::ok(format!(
+          "It begins as your turn ends: {}, about {}.",
+          import::count(plan.msgs, "new "),
+          import::guess_usd(plan.usd)
+        ))
       }
       "pause" => Out::ok(self.lock().go(false)),
       "resume" => Out::ok(self.lock().go(true)),
@@ -149,11 +176,21 @@ impl Engine {
         });
         let mut said = 0;
         let mut last: Option<import::Msg> = None;
-        let tag = |m: import::Msg, more: bool| Msg { date: Some(m.date), imported: true, more, ..Msg::new(m.kind, m.text) };
+        let tag = |m: import::Msg, more: bool| Msg {
+          date: Some(m.date),
+          imported: true,
+          more,
+          ..Msg::new(m.kind, m.text)
+        };
         while let Some(chunk) = rx.recv().await {
           said += chunk.iter().filter(|m| m.kind != Kind::Note).count() as u64;
           let mut msgs: Vec<Msg> = last.take().into_iter().chain(chunk).map(|m| tag(m, true)).collect();
-          let held = msgs.pop().map(|m| import::Msg { kind: m.kind, text: m.text, date: m.date.unwrap_or_default(), more: false });
+          let held = msgs.pop().map(|m| import::Msg {
+            kind: m.kind,
+            text: m.text,
+            date: m.date.unwrap_or_default(),
+            more: false,
+          });
           last = held;
           if !msgs.is_empty()
             && let Err(err) = me.lock().mem.push(msgs)
@@ -187,7 +224,11 @@ impl Chat {
     if found.rows.is_empty() {
       return import::OLD.into();
     }
-    let exports = import::EXPORTS.iter().map(|(app, how)| format!("{app}: {how}")).collect::<Vec<_>>().join("; ");
+    let exports = import::EXPORTS
+      .iter()
+      .map(|(app, how)| format!("{app}: {how}"))
+      .collect::<Vec<_>>()
+      .join("; ");
     let mut lines = vec![
       format!(
         "Found {} sessions: {}, from {} on; importing all costs about {}.",
@@ -199,7 +240,12 @@ impl Chat {
       format!("(Website chats come as an export the user drops on the window: {exports}.)"),
       "id | app | day | messages | where".into(),
     ];
-    lines.extend(found.rows.iter().take(LISTED).map(|r| format!("{} | {} | {} | {} | {}", r.id, r.app, r.cells[0], r.cells[1], r.cells[2])));
+    lines.extend(found.rows.iter().take(LISTED).map(|r| {
+      format!(
+        "{} | {} | {} | {} | {}",
+        r.id, r.app, r.cells[0], r.cells[1], r.cells[2]
+      )
+    }));
     if found.rows.len() > LISTED {
       lines.push(format!("and {} more.", found.rows.len() - LISTED));
     }
@@ -231,7 +277,16 @@ impl Chat {
     let micros = import::guess(a, &sizes);
     let open = micros.iter().map(|l| l.len() as u64).collect();
     let left = micros.iter().flatten().sum::<u64>() as f64;
-    let mut batch = Batch { a, b, said, spent, micros, open, left, all: 0.0 };
+    let mut batch = Batch {
+      a,
+      b,
+      said,
+      spent,
+      micros,
+      open,
+      left,
+      all: 0.0,
+    };
     batch.all = batch.time();
     for l in 0..batch.micros.len() {
       for j in 0..batch.micros[l].len() {
@@ -246,10 +301,19 @@ impl Chat {
   /// Kept as it is till it ends: written whole, then moved in place.
   fn keep(&self) {
     let Some(b) = &self.batch else { return };
-    let kept = Kept { a: b.a, b: b.b, said: b.said, spent: b.spent, why: self.mem.hold[1].clone() };
+    let kept = Kept {
+      a: b.a,
+      b: b.b,
+      said: b.said,
+      spent: b.spent,
+      why: self.mem.hold[1].clone(),
+    };
     let file = self.mem.dir.join(BATCH);
     let new = self.mem.dir.join(format!("{BATCH}.new"));
-    let wrote = serde_json::to_vec(&kept).map_err(std::io::Error::other).and_then(|json| std::fs::write(&new, json)).and_then(|_| std::fs::rename(&new, &file));
+    let wrote = serde_json::to_vec(&kept)
+      .map_err(std::io::Error::other)
+      .and_then(|json| std::fs::write(&new, json))
+      .and_then(|_| std::fs::rename(&new, &file));
     if let Err(err) = wrote {
       eprintln!("acorn: {BATCH}: {err}");
     }
@@ -294,7 +358,10 @@ impl Chat {
     let _ = std::fs::remove_file(self.mem.dir.join(BATCH));
     self.eye = self.eye_from(self.eye.from.max(batch.b));
     self.show();
-    self.all(Event::Note(format!("Imported {}.", import::count(batch.said as usize, ""))));
+    self.all(Event::Note(format!(
+      "Imported {}.",
+      import::count(batch.said as usize, "")
+    )));
     self.change();
   }
 
@@ -317,6 +384,10 @@ impl Chat {
     self.tell_state();
     self.pump();
     self.change();
-    if on { "The import goes on.".into() } else { "The import is paused.".into() }
+    if on {
+      "The import goes on.".into()
+    } else {
+      "The import is paused.".into()
+    }
   }
 }

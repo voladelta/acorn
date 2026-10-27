@@ -163,7 +163,9 @@ an agent only for a task.
 /// Where the tools run: this Mac, the work dir.
 fn mac(work: &Path) -> String {
   let work = work.display();
-  format!("Your shell, read, write and edit tools run on the user's Mac, in your work\ndir, {work}/<you> (Acorn's: {work}/main), where relative paths start.")
+  format!(
+    "Your shell, read, write and edit tools run on the user's Mac, in your work\ndir, {work}/<you> (Acorn's: {work}/main), where relative paths start."
+  )
 }
 
 /// A hired agent's prompt: its part, then the view's and the Mac's docs.
@@ -213,7 +215,11 @@ an agent's whole chat.
 
 /// A prompt with the user's rules after it (config `rules`).
 pub fn system(head: &str) -> String {
-  let rules = config::get().rules.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default();
+  let rules = config::get()
+    .rules
+    .as_ref()
+    .and_then(|f| std::fs::read_to_string(f).ok())
+    .unwrap_or_default();
   format!("{head}\n\n{rules}")
 }
 
@@ -233,7 +239,12 @@ fn own() -> Vec<Spec> {
       json!({"id": {"type": ["integer", "string"]}, "n": {"type": "integer"}, "at": {"type": "integer"}}),
       &["id"],
     ),
-    spec("date", "The date and time of message id.", json!({"id": {"type": "integer"}}), &["id"]),
+    spec(
+      "date",
+      "The date and time of message id.",
+      json!({"id": {"type": "integer"}}),
+      &["id"],
+    ),
   ]
 }
 
@@ -282,7 +293,12 @@ fn peers() -> Vec<Spec> {
       json!({"name": {"type": "string"}}),
       &["name"],
     ),
-    spec("list_assistants", "The user's other assistants: each one's name and about; then the archived.", json!({}), &[]),
+    spec(
+      "list_assistants",
+      "The user's other assistants: each one's name and about; then the archived.",
+      json!({}),
+      &[],
+    ),
     spec(
       "search_assistants",
       "The user's other assistants whose name, about or instructions match a query (\"clothes\", \"second opinion\"), best first.",
@@ -324,7 +340,12 @@ fn home() -> Vec<Spec> {
       json!({}),
       &[],
     ),
-    spec("tree", "Draw this chat's memory tree as a web page, open it in the user's browser, and return its path.", json!({}), &[]),
+    spec(
+      "tree",
+      "Draw this chat's memory tree as a web page, open it in the user's browser, and return its path.",
+      json!({}),
+      &[],
+    ),
   ]
 }
 
@@ -355,7 +376,10 @@ fn keep() -> Vec<Spec> {
 /// the web's.
 fn kit(work: &Path, who: &str) -> Vec<Spec> {
   let work = work.display().to_string();
-  let mac = machine::tools().into_iter().map(|t| Spec { info: format!("{} It runs on this Mac, in {work}/{who}.", t.info), ..t });
+  let mac = machine::tools().into_iter().map(|t| Spec {
+    info: format!("{} It runs on this Mac, in {work}/{who}.", t.info),
+    ..t
+  });
   mac.chain(web::tools()).collect()
 }
 
@@ -386,9 +410,15 @@ mod tests {
   fn a_thread_hears_nothing_of_the_users_chat() {
     let (chat, thread) = (master(Path::new("/w"), false), master(Path::new("/w"), true));
     for only in ["@Name", "remember it as a fact", "set it as your goal"] {
-      assert!(chat.contains(only) && !thread.contains(only), "{only}: the user's chat alone");
+      assert!(
+        chat.contains(only) && !thread.contains(only),
+        "{only}: the user's chat alone"
+      );
     }
     assert!(thread.contains("When you need hands, hire") && chat.contains("You can tell it more"));
-    assert!(chat.contains("create them") && !thread.contains("create them"), "a named person who stays is created");
+    assert!(
+      chat.contains("create them") && !thread.contains("create them"),
+      "a named person who stays is created"
+    );
   }
 }

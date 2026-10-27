@@ -24,8 +24,18 @@ struct Rate {
   output: f64,
 }
 
-const PEAK: Rate = Rate { input: 0.27, write: 0.27, read: 0.006, output: 1.10 };
-const OFF_PEAK: Rate = Rate { input: 0.14, write: 0.14, read: 0.003, output: 0.28 };
+const PEAK: Rate = Rate {
+  input: 0.27,
+  write: 0.27,
+  read: 0.006,
+  output: 1.10,
+};
+const OFF_PEAK: Rate = Rate {
+  input: 0.14,
+  write: 0.14,
+  read: 0.003,
+  output: 0.28,
+};
 
 /// DeepSeek's off-peak: 16:30 to 08:30 UTC.
 pub fn off_peak(at: DateTime<Utc>) -> bool {
@@ -35,6 +45,9 @@ pub fn off_peak(at: DateTime<Utc>) -> bool {
 
 pub fn cost(use_: Usage, at: DateTime<Utc>) -> u64 {
   let r = if off_peak(at) { OFF_PEAK } else { PEAK };
-  let micros = use_.input as f64 * r.input + use_.write as f64 * r.write + use_.read as f64 * r.read + use_.output as f64 * r.output;
+  let micros = use_.input as f64 * r.input
+    + use_.write as f64 * r.write
+    + use_.read as f64 * r.read
+    + use_.output as f64 * r.output;
   micros.ceil() as u64
 }

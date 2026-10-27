@@ -48,7 +48,10 @@ impl Engine {
     self
       .writing(async move || {
         let mut chat = me.lock();
-        let msg = Msg { images: names, ..Msg::new(Kind::User, text) };
+        let msg = Msg {
+          images: names,
+          ..Msg::new(Kind::User, text)
+        };
         let span = chat.push_msg(msg);
         chat.take(span);
       })
@@ -125,7 +128,11 @@ impl Engine {
       let mut chat = self.lock();
       let msgs = std::mem::take(&mut chat.wait);
       chat.sent.clone_from(&msgs);
-      let says: Vec<crate::Say> = msgs.iter().filter(|m| m.end > from).map(|m| chat.mem.say(m.id.max(from), m.end)).collect();
+      let says: Vec<crate::Say> = msgs
+        .iter()
+        .filter(|m| m.end > from)
+        .map(|m| chat.mem.say(m.id.max(from), m.end))
+        .collect();
       let text = says.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("\n\n");
       let imgs = says.into_iter().flat_map(|s| s.imgs).collect();
       chat.eye = chat.eye_from(from);
@@ -134,7 +141,13 @@ impl Engine {
       blocks.push(chat.at_work());
       blocks.extend(threads);
       blocks.push(Block::new(format!("{HEAD}{text}"), true));
-      let ask = ai::Ask { blocks, imgs, tools: Some(chat.kit(None)), meter: Some(chat.meter(Served::Chat)), ..chat.share() };
+      let ask = ai::Ask {
+        blocks,
+        imgs,
+        tools: Some(chat.kit(None)),
+        meter: Some(chat.meter(Served::Chat)),
+        ..chat.share()
+      };
       chat.asked = true;
       chat.open = 0;
       let call = ai::ask(ask, chat.on_events(None));
@@ -160,13 +173,19 @@ impl Engine {
         chat.failed(&end.text);
       }
       if !halt.is_cancelled() {
-        chat.answer(&if end.ok { end.text.clone() } else { format!("(no answer: {})", end.text) });
+        chat.answer(&if end.ok {
+          end.text.clone()
+        } else {
+          format!("(no answer: {})", end.text)
+        });
       }
       if !end.note.is_empty() {
         chat.all(Event::Note(end.note.clone()));
       }
       match chat.mem.goal.clone() {
-        Some(goal) if end.ok && !halt.is_cancelled() && chat.wait.is_empty() && !chat.cut_in => Some((chat.check_goal(&goal), goal)),
+        Some(goal) if end.ok && !halt.is_cancelled() && chat.wait.is_empty() && !chat.cut_in => {
+          Some((chat.check_goal(&goal), goal))
+        }
         _ => None,
       }
     };
@@ -198,7 +217,10 @@ impl Engine {
       let on = !halt.is_cancelled() && chat.mem.goal.as_deref() == Some(goal.as_str()) && chat.wait.is_empty();
       chat.check = None;
       if on && !end.ok {
-        chat.note(format!("No goal check: {}. The goal stays till it is dropped.", end.text.trim_end_matches('.')));
+        chat.note(format!(
+          "No goal check: {}. The goal stays till it is dropped.",
+          end.text.trim_end_matches('.')
+        ));
       } else if on && says_yes(&end.text) {
         chat.mem.goal = None;
         chat.save();
@@ -223,7 +245,8 @@ impl Engine {
 /// /^\W*yes\b/i
 fn says_yes(text: &str) -> bool {
   let rest = text.trim_start_matches(|c: char| !(c.is_alphanumeric() || c == '_'));
-  rest.get(..3).is_some_and(|w| w.eq_ignore_ascii_case("yes")) && !rest[3..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
+  rest.get(..3).is_some_and(|w| w.eq_ignore_ascii_case("yes"))
+    && !rest[3..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
 }
 
 impl Chat {
@@ -236,7 +259,10 @@ impl Chat {
       self.sent.push(msg);
       let cut = self.mem.message(msg.id).is_some_and(|m| m.kind == Kind::User);
       self.cut_in |= cut;
-      call.send(crate::Say { cut, ..self.mem.say(msg.id, msg.end) });
+      call.send(crate::Say {
+        cut,
+        ..self.mem.say(msg.id, msg.end)
+      });
       return;
     }
     self.wait.push(msg);
@@ -260,11 +286,21 @@ impl Chat {
     let at = self.mem.whole(0);
     let tail: String = (at..self.mem.count)
       .filter_map(|i| self.mem.message(i))
-      .map(|m| format!("{}\n", memory::line(Part::leaf(m.i), &format!("{}: {}", m.kind.as_str(), m.text))))
+      .map(|m| {
+        format!(
+          "{}\n",
+          memory::line(Part::leaf(m.i), &format!("{}: {}", m.kind.as_str(), m.text))
+        )
+      })
       .collect();
     let mut blocks = self.mem.view_blocks(at);
     blocks.push(Block::new(format!("{tail}{GOAL_ASK}{goal}"), true));
-    let ask = ai::Ask { system: GOAL.into(), blocks, meter: Some(self.meter(Served::Chat)), ..self.share() };
+    let ask = ai::Ask {
+      system: GOAL.into(),
+      blocks,
+      meter: Some(self.meter(Served::Chat)),
+      ..self.share()
+    };
     ai::ask(ask, Arc::new(|_| {}))
   }
 
@@ -283,7 +319,10 @@ impl Chat {
 
   /// A failed turn's why, as a note.
   pub(super) fn failed(&mut self, why: &str) {
-    self.note(format!("No reply: {}. Send a message to try again.", why.trim_end_matches('.')));
+    self.note(format!(
+      "No reply: {}. Send a message to try again.",
+      why.trim_end_matches('.')
+    ));
   }
 
   /// A note in the chat, why work ended as it did.
@@ -302,8 +341,18 @@ impl Chat {
           eprintln!("agent {name}: {err}");
           0
         });
-        let entry = crate::wire::Entry { kind, text: text.into(), date: memory::iso_now(), images: vec![], spend: None };
-        self.all(Event::Entry { agent: Some(name.into()), id: Some(id), entry });
+        let entry = crate::wire::Entry {
+          kind,
+          text: text.into(),
+          date: memory::iso_now(),
+          images: vec![],
+          spend: None,
+        };
+        self.all(Event::Entry {
+          agent: Some(name.into()),
+          id: Some(id),
+          entry,
+        });
         Span { id, end: id + 1 }
       }
       None => self.push_msg(Msg::new(kind, text)),
@@ -315,15 +364,31 @@ impl Chat {
       Ok(roots) => roots,
       Err(err) => {
         eprintln!("acorn: a message was not logged: {err}");
-        return Span { id: self.mem.count, end: self.mem.count };
+        return Span {
+          id: self.mem.count,
+          end: self.mem.count,
+        };
       }
     };
     for r in &roots {
-      let entry = crate::wire::Entry { kind: r.kind, text: r.text.clone(), date: r.date.clone(), images: r.images.clone(), spend: None };
-      self.all(Event::Entry { agent: None, id: Some(r.i), entry });
+      let entry = crate::wire::Entry {
+        kind: r.kind,
+        text: r.text.clone(),
+        date: r.date.clone(),
+        images: r.images.clone(),
+        spend: None,
+      };
+      self.all(Event::Entry {
+        agent: None,
+        id: Some(r.i),
+        entry,
+      });
     }
     self.pump();
-    Span { id: roots[0].i, end: self.mem.count }
+    Span {
+      id: roots[0].i,
+      end: self.mem.count,
+    }
   }
 
   /// A call's events, told as they come to the chat or an agent.
@@ -345,17 +410,38 @@ impl Chat {
     match ev {
       AiEvent::Delta { kind, text, fresh } => {
         live_push(self.live_of(agent), kind, &text, fresh);
-        self.all(Event::Delta { agent: agent.map(str::to_string), kind, text, fresh });
+        self.all(Event::Delta {
+          agent: agent.map(str::to_string),
+          kind,
+          text,
+          fresh,
+        });
         return;
       }
-      AiEvent::Entry { kind: Kind::Tool, text, of: Some(of) } => {
+      AiEvent::Entry {
+        kind: Kind::Tool,
+        text,
+        of: Some(of),
+      } => {
         let calls = self.calls_of(agent);
         calls.retain(|(id, _)| *id != of);
         calls.push((of, text));
       }
-      AiEvent::Entry { kind: Kind::Mind, text, .. } => {
-        let entry = crate::wire::Entry { kind: Kind::Mind, text, date: memory::iso_now(), images: vec![], spend: None };
-        self.all(Event::Entry { agent: agent.map(str::to_string), id: None, entry });
+      AiEvent::Entry {
+        kind: Kind::Mind, text, ..
+      } => {
+        let entry = crate::wire::Entry {
+          kind: Kind::Mind,
+          text,
+          date: memory::iso_now(),
+          images: vec![],
+          spend: None,
+        };
+        self.all(Event::Entry {
+          agent: agent.map(str::to_string),
+          id: None,
+          entry,
+        });
       }
       AiEvent::Entry { kind: Kind::User, .. } => {}
       AiEvent::Entry { kind, text, of } => {
@@ -391,7 +477,14 @@ impl Chat {
   /// What streams once an entry came: the tool calls awaiting their
   /// results, as they will be logged.
   fn waiting(&mut self, agent: Option<&str>) -> Vec<Live> {
-    self.calls_of(agent).iter().map(|(_, text)| Live { kind: Kind::Tool, text: text.clone() }).collect()
+    self
+      .calls_of(agent)
+      .iter()
+      .map(|(_, text)| Live {
+        kind: Kind::Tool,
+        text: text.clone(),
+      })
+      .collect()
   }
 
   /// A call's tool calls left without a result (it was stopped), logged
@@ -430,7 +523,10 @@ impl Chat {
   /// What streams for the chat (agent: None) or an agent, set and told.
   pub(super) fn set_live(&mut self, agent: Option<&str>, live: Vec<Live>) {
     self.live_of(agent).clone_from(&live);
-    self.all(Event::Live { agent: agent.map(str::to_string), live });
+    self.all(Event::Live {
+      agent: agent.map(str::to_string),
+      live,
+    });
   }
 
   /// An agent's report, once it ends: a turn of its own, unless stopped.
@@ -455,9 +551,16 @@ impl Chat {
     let engine = self.engine();
     tokio::spawn(async move {
       let _one = engine.after.lock().await;
-      let out = tokio::process::Command::new("/bin/sh").args(["-c", &after]).stdout(std::process::Stdio::null()).output().await;
+      let out = tokio::process::Command::new("/bin/sh")
+        .args(["-c", &after])
+        .stdout(std::process::Stdio::null())
+        .output()
+        .await;
       match out {
-        Ok(out) if !out.status.success() => engine.tell(Event::Note(format!("after: {}", String::from_utf8_lossy(&out.stderr).trim()))),
+        Ok(out) if !out.status.success() => engine.tell(Event::Note(format!(
+          "after: {}",
+          String::from_utf8_lossy(&out.stderr).trim()
+        ))),
         Err(err) => eprintln!("after: {err}"),
         _ => {}
       }

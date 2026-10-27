@@ -28,10 +28,20 @@ fn open() -> Headless {
 fn a_message_gets_a_reply() {
   let _dir = chat();
   let mut app = open();
-  app.wait_for_within("Hello! This is Acorn.", Duration::from_secs(20)).unwrap();
-  app.type_text("label:Message Acorn", "Reply with exactly the word: walnut").unwrap();
+  app
+    .wait_for_within("Hello! This is Acorn.", Duration::from_secs(20))
+    .unwrap();
+  app
+    .type_text("label:Message Acorn", "Reply with exactly the word: walnut")
+    .unwrap();
   app.submit("label:Message Acorn").unwrap();
-  app.wait_for_within("Reply with exactly the word: walnut", Duration::from_secs(10)).unwrap();
+  app
+    .wait_for_within("Reply with exactly the word: walnut", Duration::from_secs(10))
+    .unwrap();
   app.wait_for_within("walnut", Duration::from_secs(120)).unwrap();
-  app.wait_until("today's cost", Duration::from_secs(30), |s| s.texts().iter().any(|t| t.ends_with(" today"))).unwrap();
+  app
+    .wait_until("today's cost", Duration::from_secs(30), |s| {
+      s.texts().iter().any(|t| t.ends_with(" today"))
+    })
+    .unwrap();
 }

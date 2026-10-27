@@ -42,13 +42,22 @@ const BUSY: &str = "the AI service is busy or unavailable right now";
 const CUT: &str = "[cut off: a message came in while it ran]";
 const UNRUN: &str = "not run: a message came in first";
 
-pub static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| reqwest::Client::builder().user_agent("Acorn/0.1").build().expect("an HTTP client"));
+pub static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
+  reqwest::Client::builder()
+    .user_agent("Acorn/0.1")
+    .build()
+    .expect("an HTTP client")
+});
 
 /// One try of a call: its steps till it ends; the messages it heard but
 /// never took, left.
 pub async fn run(ask: &Ask, on: &On, rx: &mut mpsc::UnboundedReceiver<Say>, cancel: &CancellationToken) -> End {
   let mut end = End::default();
-  let mut heard = Heard { rx, open: true, says: Vec::new() };
+  let mut heard = Heard {
+    rx,
+    open: true,
+    says: Vec::new(),
+  };
   if let Err(why) = turns(ask, on, &mut heard, cancel, &mut end).await
     && end.text.is_empty()
   {
@@ -62,20 +71,38 @@ pub async fn run(ask: &Ask, on: &On, rx: &mut mpsc::UnboundedReceiver<Say>, canc
   end
 }
 
-async fn turns(ask: &Ask, on: &On, heard: &mut Heard<'_>, cancel: &CancellationToken, end: &mut End) -> Result<(), String> {
+async fn turns(
+  ask: &Ask,
+  on: &On,
+  heard: &mut Heard<'_>,
+  cancel: &CancellationToken,
+  end: &mut End,
+) -> Result<(), String> {
   let key = &config::get().key;
   if key.is_empty() {
     return Err(format!("no API key: set {}", config::KEY_VAR));
   }
   let tools: Vec<Spec> = ask.tools.as_ref().map(|t| t.specs()).unwrap_or_default();
-  let parts = ask.blocks.iter().filter(|b| !b.text.is_empty()).map(|b| b.text.clone()).collect();
-  let mut items = vec![Item::User { parts, imgs: ask.imgs.clone() }];
+  let parts = ask
+    .blocks
+    .iter()
+    .filter(|b| !b.text.is_empty())
+    .map(|b| b.text.clone())
+    .collect();
+  let mut items = vec![Item::User {
+    parts,
+    imgs: ask.imgs.clone(),
+  }];
   while !cancel.is_cancelled() {
     let cut = cancel.child_token();
     let body = super::deepseek::body(ask, &items, &tools);
     let step = heard.till_cut(step(ask, on, key, body, &cut), &cut).await;
     for e in &step.entries {
-      on(Event::Entry { kind: e.kind, text: e.text.clone(), of: e.of.clone() });
+      on(Event::Entry {
+        kind: e.kind,
+        text: e.text.clone(),
+        of: e.of.clone(),
+      });
     }
     if cancel.is_cancelled() {
       return Ok(());
@@ -84,7 +111,12 @@ async fn turns(ask: &Ask, on: &On, heard: &mut Heard<'_>, cancel: &CancellationT
     // cut before it gave a whole output (one that raced the cut runs
     // no tools: each answers it wasn't run)
     if cut.is_cancelled() && step.halt == Halt::Lost {
-      let said: Vec<&str> = step.entries.iter().filter(|e| e.kind == Kind::Acorn).map(|e| e.text.as_str()).collect();
+      let said: Vec<&str> = step
+        .entries
+        .iter()
+        .filter(|e| e.kind == Kind::Acorn)
+        .map(|e| e.text.as_str())
+        .collect();
       if !said.is_empty() {
         items.push(Item::Said(said.join("\n\n")));
       }
@@ -95,7 +127,11 @@ async fn turns(ask: &Ask, on: &On, heard: &mut Heard<'_>, cancel: &CancellationT
       _ => None,
     } {
       if end.text.is_empty() {
-        end.text = if stop == Stop::Down { BUSY.into() } else { step.why.clone() };
+        end.text = if stop == Stop::Down {
+          BUSY.into()
+        } else {
+          step.why.clone()
+        };
       }
       end.stop = Some(stop);
       return Ok(());
@@ -106,30 +142,59 @@ async fn turns(ask: &Ask, on: &On, heard: &mut Heard<'_>, cancel: &CancellationT
           Out::fail(UNRUN)
         } else {
           let out = heard.till_cut(tool(ask, &tools, u.name, u.input, &cut), &cut).await;
-          if cut.is_cancelled() { Out { text: format!("{}\n{CUT}", out.text), ..out } } else { out }
+          if cut.is_cancelled() {
+            Out {
+              text: format!("{}\n{CUT}", out.text),
+              ..out
+            }
+          } else {
+            out
+          }
         };
         if cancel.is_cancelled() {
           return Ok(());
         }
-        let text = if out.fail { format!("error: {}", out.text) } else { out.text.clone() };
-        on(Event::Entry { kind: Kind::Echo, text, of: Some(u.id.clone()) });
+        let text = if out.fail {
+          format!("error: {}", out.text)
+        } else {
+          out.text.clone()
+        };
+        on(Event::Entry {
+          kind: Kind::Echo,
+          text,
+          of: Some(u.id.clone()),
+        });
         backs.push((u.id, out));
       }
     }
     let says = heard.all();
     if backs.is_empty() && says.is_empty() {
       end.ok = true;
-      end.text = step.entries.iter().filter(|e| e.kind == Kind::Acorn).map(|e| e.text.as_str()).collect::<Vec<_>>().join("\n\n");
+      end.text = step
+        .entries
+        .iter()
+        .filter(|e| e.kind == Kind::Acorn)
+        .map(|e| e.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
       return Ok(());
     }
     for say in &says {
-      on(Event::Entry { kind: Kind::User, text: say.text.clone(), of: None });
+      on(Event::Entry {
+        kind: Kind::User,
+        text: say.text.clone(),
+        of: None,
+      });
     }
     if !backs.is_empty() {
       items.push(Item::Back(backs));
     }
     if !says.is_empty() {
-      let parts = says.iter().filter(|s| !s.text.is_empty()).map(|s| s.text.clone()).collect();
+      let parts = says
+        .iter()
+        .filter(|s| !s.text.is_empty())
+        .map(|s| s.text.clone())
+        .collect();
       let imgs = says.into_iter().flat_map(|s| s.imgs).collect();
       items.push(Item::User { parts, imgs });
     }
@@ -180,7 +245,10 @@ impl Heard<'_> {
 /// holds its room (`pace`): its model's, or its import's, which one request
 /// holds at a time while the rest wait on it.
 async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationToken) -> Step {
-  let own = ask.yields.as_ref().map_or_else(|| MODEL.to_string(), |import| format!("{MODEL} {import}"));
+  let own = ask
+    .yields
+    .as_ref()
+    .map_or_else(|| MODEL.to_string(), |import| format!("{MODEL} {import}"));
   let mut asking = false;
   let mut k = 1;
   let step = loop {
@@ -198,12 +266,21 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
         sent = request(ask, on, key, &body, cancel, &seen) => sent,
         _ = cancel.cancelled() => None,
     };
-    let Some(Sent { after, step }) = sent else { break fail("stopped", &seen.lock(), Halt::Lost) };
+    let Some(Sent { after, step }) = sent else {
+      break fail("stopped", &seen.lock(), Halt::Lost);
+    };
     if step.halt == Halt::Down {
       eprintln!("{MODEL}: {}", clip::head(&step.why, 300));
     }
     if step.halt != Halt::Busy || k >= TRIES {
-      break if step.halt == Halt::Busy { Step { halt: Halt::Down, ..step } } else { step };
+      break if step.halt == Halt::Busy {
+        Step {
+          halt: Halt::Down,
+          ..step
+        }
+      } else {
+        step
+      };
     }
     k += 1;
     if !asking && own != MODEL && pace::held(&own) {
@@ -214,7 +291,11 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
       asking = true;
     }
     let wait = after.filter(|&s| s > 0.0).unwrap_or_else(|| 2f64.powi(k as i32 - 1));
-    on(Event::Entry { kind: Kind::Mind, text: format!("The AI service is busy: asking again in {wait} s."), of: None });
+    on(Event::Entry {
+      kind: Kind::Mind,
+      text: format!("The AI service is busy: asking again in {wait} s."),
+      of: None,
+    });
     let jitter = rand::random::<f64>() * 0.5;
     nap(Duration::from_secs_f64(wait + jitter), cancel).await;
   };
@@ -232,7 +313,14 @@ struct Sent {
 }
 
 /// One request, in single flight (`cache`) and at its model's pace.
-async fn request(ask: &Ask, on: &On, key: &str, body: &Value, cancel: &CancellationToken, seen: &Mutex<Vec<Live>>) -> Option<Sent> {
+async fn request(
+  ask: &Ask,
+  on: &On,
+  key: &str,
+  body: &Value,
+  cancel: &CancellationToken,
+  seen: &Mutex<Vec<Live>>,
+) -> Option<Sent> {
   let mut flight = cache::wait(ask).await;
   if cancel.is_cancelled() {
     return None;
@@ -244,28 +332,64 @@ async fn request(ask: &Ask, on: &On, key: &str, body: &Value, cancel: &Cancellat
 }
 
 /// A request sent: its HTTP status (0: none came), and what it gave.
-async fn send(ask: &Ask, on: &On, key: &str, body: &Value, flight: &mut cache::Flight, seen: &Mutex<Vec<Live>>) -> (u16, Sent) {
+async fn send(
+  ask: &Ask,
+  on: &On,
+  key: &str,
+  body: &Value,
+  flight: &mut cache::Flight,
+  seen: &Mutex<Vec<Live>>,
+) -> (u16, Sent) {
   let json = body.to_string();
   let mut got = Got::default();
   let mut read = Read::default();
   let mut status = 0;
-  let res = tokio::time::timeout(IDLE, HTTP.post(URL).bearer_auth(key).header("content-type", "application/json").body(json.clone()).send()).await;
+  let res = tokio::time::timeout(
+    IDLE,
+    HTTP
+      .post(URL)
+      .bearer_auth(key)
+      .header("content-type", "application/json")
+      .body(json.clone())
+      .send(),
+  )
+  .await;
   let (after, step, ok) = match res {
-    Err(_) => (None, fail(&format!("no word from the API in {} s", IDLE.as_secs()), &[], Halt::Busy), false),
+    Err(_) => (
+      None,
+      fail(
+        &format!("no word from the API in {} s", IDLE.as_secs()),
+        &[],
+        Halt::Busy,
+      ),
+      false,
+    ),
     Ok(Err(err)) => (None, fail(&err.to_string(), &[], Halt::Busy), false),
     Ok(Ok(res)) => {
       status = res.status().as_u16();
-      let header = |name: &str| res.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+      let header = |name: &str| {
+        res
+          .headers()
+          .get(name)
+          .and_then(|v| v.to_str().ok())
+          .map(str::to_string)
+      };
       let after = header("retry-after").and_then(|v| retry_after(&v));
       if res.status().is_success() {
         (after, stream(res, on, flight, seen, &mut got, &mut read).await, true)
       } else {
-        let id = header("x-request-id").or_else(|| header("x-deepseek-request-id")).map_or(String::new(), |id| format!(" [{id}]"));
+        let id = header("x-request-id")
+          .or_else(|| header("x-deepseek-request-id"))
+          .map_or(String::new(), |id| format!(" [{id}]"));
         let should = header("x-should-retry");
         let busy = [408, 409, 429].contains(&status) || status >= 500;
         let passing = should.as_deref() == Some("true") || (should.as_deref() != Some("false") && busy);
         let why = format!("HTTP {status}{id}: {}", reason(&res.text().await.unwrap_or_default()));
-        (after, fail(&why, &[], if passing { Halt::Busy } else { Halt::Down }), false)
+        (
+          after,
+          fail(&why, &[], if passing { Halt::Busy } else { Halt::Down }),
+          false,
+        )
       }
     }
   };
@@ -273,7 +397,12 @@ async fn send(ask: &Ask, on: &On, key: &str, body: &Value, flight: &mut cache::F
   if ok && let Some(meter) = &ask.meter {
     let usage = used(got.usage, &read, &json);
     let now = chrono::Utc::now();
-    meter(Used { effort: ask.effort, usage, micros: price::cost(usage, now), at: now.timestamp_millis() });
+    meter(Used {
+      effort: ask.effort,
+      usage,
+      micros: price::cost(usage, now),
+      at: now.timestamp_millis(),
+    });
   }
   (status, Sent { after, step })
 }
@@ -287,12 +416,25 @@ struct Read {
 }
 
 /// The stream's events, each told as it comes, as the step it gives.
-async fn stream(res: reqwest::Response, on: &On, flight: &mut cache::Flight, seen: &Mutex<Vec<Live>>, got: &mut Got, read: &mut Read) -> Step {
+async fn stream(
+  res: reqwest::Response,
+  on: &On,
+  flight: &mut cache::Flight,
+  seen: &Mutex<Vec<Live>>,
+  got: &mut Got,
+  read: &mut Read,
+) -> Step {
   let mut bytes = res.bytes_stream();
   let mut rest: Vec<u8> = Vec::new();
   loop {
     let chunk = match tokio::time::timeout(IDLE, bytes.next()).await {
-      Err(_) => return fail(&format!("no word from the API in {} s", IDLE.as_secs()), &seen.lock(), Halt::Busy),
+      Err(_) => {
+        return fail(
+          &format!("no word from the API in {} s", IDLE.as_secs()),
+          &seen.lock(),
+          Halt::Busy,
+        );
+      }
       Ok(None) => return fail("the stream ended early", &seen.lock(), Halt::Busy),
       Ok(Some(Err(err))) => return fail(&err.to_string(), &seen.lock(), Halt::Busy),
       Ok(Some(Ok(chunk))) => chunk,
@@ -301,7 +443,9 @@ async fn stream(res: reqwest::Response, on: &On, flight: &mut cache::Flight, see
     while let Some(nl) = rest.iter().position(|&b| b == b'\n') {
       let line: Vec<u8> = rest.drain(..=nl).collect();
       let line = String::from_utf8_lossy(&line);
-      let Some(data) = line.trim().strip_prefix("data:").map(str::trim) else { continue };
+      let Some(data) = line.trim().strip_prefix("data:").map(str::trim) else {
+        continue;
+      };
       if data == "[DONE]" || data.is_empty() {
         continue;
       }
@@ -315,7 +459,11 @@ async fn stream(res: reqwest::Response, on: &On, flight: &mut cache::Flight, see
       let mut tell = |kind: Kind, text: &str, fresh: bool| {
         read.bytes += text.len() as u64;
         live_push(&mut seen.lock(), kind, text, fresh);
-        on(Event::Delta { kind, text: text.to_string(), fresh });
+        on(Event::Delta {
+          kind,
+          text: text.to_string(),
+          fresh,
+        });
       };
       if got.read(&ev, &mut tell) {
         read.done = true;
@@ -337,7 +485,11 @@ fn used(usage: price::Usage, read: &Read, json: &str) -> price::Usage {
     return usage;
   }
   let told = usage.input + usage.write + usage.read > 0;
-  price::Usage { write: if told { usage.write } else { json.len() as u64 }, output: usage.output.max(read.bytes), ..usage }
+  price::Usage {
+    write: if told { usage.write } else { json.len() as u64 },
+    output: usage.output.max(read.bytes),
+    ..usage
+  }
 }
 
 /// A failed request's why: the API's message, else the start of its body.
@@ -368,9 +520,19 @@ fn fail(why: &str, seen: &[Live], halt: Halt) -> Step {
   let entries = seen
     .iter()
     .filter(|l| !l.text.trim().is_empty() && !(halt == Halt::Lost && l.kind == Kind::Tool))
-    .map(|l| super::deepseek::Entry { kind: l.kind, text: format!("{}{mark}", l.text.trim()), of: None })
+    .map(|l| super::deepseek::Entry {
+      kind: l.kind,
+      text: format!("{}{mark}", l.text.trim()),
+      of: None,
+    })
     .collect();
-  Step { out: vec![], uses: vec![], entries, halt, why: why.to_string() }
+  Step {
+    out: vec![],
+    uses: vec![],
+    entries,
+    halt,
+    why: why.to_string(),
+  }
 }
 
 /// A tool call, run.
@@ -382,7 +544,14 @@ async fn tool(ask: &Ask, tools: &[Spec], name: String, input: Value, cancel: &Ca
     return Out::fail("The input is not a JSON object.");
   }
   let out = toolbox.call(name, input, cancel.child_token()).await;
-  if out.text.is_empty() { Out { text: "(no output)".into(), ..out } } else { out }
+  if out.text.is_empty() {
+    Out {
+      text: "(no output)".into(),
+      ..out
+    }
+  } else {
+    out
+  }
 }
 
 #[cfg(test)]
@@ -390,7 +559,11 @@ mod tests {
   use super::*;
 
   fn say(text: &str, cut: bool) -> Say {
-    Say { text: text.into(), imgs: vec![], cut }
+    Say {
+      text: text.into(),
+      imgs: vec![],
+      cut,
+    }
   }
 
   /// A message that cuts in cuts the step at once; one that doesn't
@@ -398,7 +571,11 @@ mod tests {
   #[tokio::test]
   async fn a_message_cuts_in_and_others_wait() {
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let mut heard = Heard { rx: &mut rx, open: true, says: Vec::new() };
+    let mut heard = Heard {
+      rx: &mut rx,
+      open: true,
+      says: Vec::new(),
+    };
     let cut = CancellationToken::new();
     tx.send(say("[Scout] report", false)).unwrap();
     tx.send(say("stop, wrong folder", true)).unwrap();
@@ -446,7 +623,16 @@ mod tests {
   /// tool call it cut mid-stream dropped.
   #[test]
   fn a_cut_step_keeps_what_it_said() {
-    let seen = vec![Live { kind: Kind::Acorn, text: "Moving the files to ".into() }, Live { kind: Kind::Tool, text: "shell {\"comm".into() }];
+    let seen = vec![
+      Live {
+        kind: Kind::Acorn,
+        text: "Moving the files to ".into(),
+      },
+      Live {
+        kind: Kind::Tool,
+        text: "shell {\"comm".into(),
+      },
+    ];
     let step = fail("stopped", &seen, Halt::Lost);
     assert_eq!(step.entries.len(), 1);
     assert_eq!(step.entries[0].text, "Moving the files to\n[cut off]");
