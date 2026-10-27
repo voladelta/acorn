@@ -123,7 +123,7 @@ impl Engine {
         let call = {
             let mut chat = self.lock();
             let msgs = std::mem::take(&mut chat.wait);
-            chat.sent = msgs.clone();
+            chat.sent.clone_from(&msgs);
             let says: Vec<crate::Say> = msgs.iter().filter(|m| m.end > from).map(|m| chat.mem.say(m.id.max(from), m.end)).collect();
             let text = says.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("\n\n");
             let imgs = says.into_iter().flat_map(|s| s.imgs).collect();
@@ -247,14 +247,14 @@ impl Chat {
 
     /// Where a call's messages go whole from (a message meanwhile may move
     /// it).
-    pub(super) fn from(&mut self) -> u64 {
+    pub(super) fn from(&self) -> u64 {
         let first = self.wait.first().map_or(self.mem.count, |m| m.id);
         self.mem.whole(first)
     }
 
     /// The goal (the `goal` tool), asked of the chat's model, without
     /// tools, on the chat as it is now.
-    fn check_goal(&mut self, goal: &str) -> ai::Call {
+    fn check_goal(&self, goal: &str) -> ai::Call {
         let at = self.mem.whole(0);
         let tail: String = (at..self.mem.count)
             .filter_map(|i| self.mem.message(i))
@@ -427,7 +427,7 @@ impl Chat {
 
     /// What streams for the chat (agent: None) or an agent, set and told.
     pub(super) fn set_live(&mut self, agent: Option<&str>, live: Vec<Live>) {
-        *self.live_of(agent) = live.clone();
+        self.live_of(agent).clone_from(&live);
         self.all(Event::Live { agent: agent.map(str::to_string), live });
     }
 
@@ -445,7 +445,7 @@ impl Chat {
     }
 
     /// The config's `after`, a shell command, after each turn.
-    fn after(&mut self) {
+    fn after(&self) {
         let after = config::get().after.clone();
         if after.is_empty() {
             return;

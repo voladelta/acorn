@@ -31,3 +31,8 @@ impl Effort {
         EFFORTS.into_iter().find(|e| e.as_str() == s)
     }
 }
+
+/// Every effort's name, as calls give them.
+pub fn names() -> Vec<&'static str> {
+    EFFORTS.map(Effort::as_str).to_vec()
+}

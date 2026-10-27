@@ -48,7 +48,7 @@ pub fn pump(chat: &mut Chat) {
 
 /// A node built by its calls; cut (its side held, or Acorn quitting), it
 /// builds as it goes on.
-fn job(chat: &mut Chat, part: Part, text: String) {
+fn job(chat: &Chat, part: Part, text: String) {
     let (this, age) = (chat.this(), chat.mem.age);
     tokio::spawn(async move {
         let built = build(&this, part, text, age).await;
@@ -100,10 +100,7 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
         let why = if end.ok { "an empty line" } else { end.text.as_str() };
         eprintln!("compactor: node {}/{}: {why}; clipped", part.l, part.i);
     }
-    let line = match lines.into_iter().min_by_key(String::len) {
-        Some(line) => line,
-        None => memory::cut(&memory::flat(&text)).to_string(),
-    };
+    let line = lines.into_iter().min_by_key(String::len).unwrap_or_else(|| memory::cut(&memory::flat(&text)).to_string());
     let engine = this.upgrade().ok_or("Acorn quit")?;
     let mut chat = engine.lock();
     if chat.mem.age != age {

@@ -199,7 +199,7 @@ impl Chat {
     }
 
     /// The sessions the chat imported, read from its log.
-    fn imported(&mut self) -> Done {
+    fn imported(&self) -> Done {
         let mut done = Done::new();
         let mut key = String::new();
         for i in 0..self.mem.count {
@@ -218,7 +218,7 @@ impl Chat {
 
     /// An import run: its estimate, of its messages' sizes as logged, timed
     /// with none built, then its summaries built counted.
-    fn batch_of(&mut self, a: u64, b: u64, said: u64, spent: f64) -> Batch {
+    fn batch_of(&self, a: u64, b: u64, said: u64, spent: f64) -> Batch {
         let sizes: Vec<usize> = (a..b).map(|i| self.mem.message(i).map_or(0, |m| m.size)).collect();
         let micros = import::guess(a, &sizes);
         let open = micros.iter().map(|l| l.len() as u64).collect();

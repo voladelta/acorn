@@ -277,7 +277,7 @@ fn hear(ui: Ui) {
 fn keys(ui: Ui) {
     on_key("escape", move |_| ui.back());
     on_key("ctrl+tab", move |_| {
-        let tabs = ui.model.with_untracked(|m| m.tabs());
+        let tabs = ui.model.with_untracked(Model::tabs);
         let at = ui.model.with_untracked(|m| tabs.iter().position(|t| *t == m.page).map_or(0, |k| k + 1));
         ui.act(Act::Goto(tabs[at % tabs.len()].clone()));
     });
@@ -575,7 +575,7 @@ fn names_menu(ui: Ui, menu: Menu, take: impl Fn(String) + Copy + 'static) -> imp
 
 /// The chat, each agent at work, and the page shown.
 fn tabs(ui: Ui) -> impl IntoElement {
-    let tabs = computed(move || ui.model.with(|m| m.tabs()));
+    let tabs = computed(move || ui.model.with(Model::tabs));
     when(move || tabs.with(|t| t.len() > 1), move || {
         view().flex_row().gap_4().child(dynamic(move || {
             let here = ui.model.with(|m| m.page.clone());
@@ -585,12 +585,11 @@ fn tabs(ui: Ui) -> impl IntoElement {
                 .map(|name| {
                     let on = name == here;
                     let label = format!("{} {}", if on { "●" } else { "◯" }, name.as_deref().unwrap_or(&me));
-                    let to = name.clone();
                     text(label)
                         .text_size(px(13.0))
                         .text_color(if on { ink() } else { mid() })
                         .font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
-                        .on_press(move || ui.act(Act::Goto(to.clone())))
+                        .on_press(move || ui.act(Act::Goto(name.clone())))
                 })
                 .collect::<Vec<_>>()
         }))

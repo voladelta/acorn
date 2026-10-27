@@ -57,6 +57,11 @@ pub fn byte_at(s: &str, n: usize) -> usize {
     s.char_indices().nth(n).map_or(s.len(), |(b, _)| b)
 }
 
+/// A text's first `n` characters.
+pub fn head(s: &str, n: usize) -> &str {
+    &s[..byte_at(s, n)]
+}
+
 /// Where the page of a text from character `at` ends (a character offset):
 /// CAP characters on, after its last newline if it has one.
 pub fn page_end(s: &str, at: usize) -> usize {
@@ -66,10 +71,7 @@ pub fn page_end(s: &str, at: usize) -> usize {
     if cap == rest.len() {
         return s.chars().count();
     }
-    match rest[..cap].rfind('\n') {
-        Some(nl) => at + rest[..=nl].chars().count(),
-        None => at + CAP,
-    }
+    rest[..cap].rfind('\n').map_or(at + CAP, |nl| at + rest[..=nl].chars().count())
 }
 
 /// A text in pages.

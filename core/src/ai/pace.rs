@@ -52,7 +52,7 @@ pub fn hold(model: &str, own: &str, why: &str) {
     let room = rooms.entry(model.to_string()).or_default();
     room.asking += 1;
     if room.asking == 1 {
-        eprintln!("{model}: {}: its requests ask again", clip(why));
+        eprintln!("{model}: {}: its requests ask again", crate::clip::head(why, 300));
     }
     rooms.entry(own.to_string()).or_default().busy += 1;
 }
@@ -88,10 +88,6 @@ pub async fn yielded(keys: &[&str], cancel: &CancellationToken) {
             _ = cancel.cancelled() => return,
         }
     }
-}
-
-fn clip(why: &str) -> &str {
-    &why[..crate::clip::byte_at(why, 300)]
 }
 
 // Pace
@@ -178,7 +174,7 @@ pub fn landed(model: &str, round: u64, limited: bool) {
     if limited && round == sem.round {
         let first = sem.concurrency.is_infinite();
         let base = if first { (sem.starts.len() as f64).max(1.0) } else { sem.concurrency };
-        sem.concurrency = (sem.concurrency.min(base.max(1.0)) * CUT).max(MIN_CONCURRENCY);
+        sem.concurrency = (base * CUT).max(MIN_CONCURRENCY);
         sem.round += 1;
         if first {
             eprintln!("{model}: rate limited: paced at {:.1} requests in flight", sem.concurrency);

@@ -12,7 +12,7 @@
 
 use crate::call::Call;
 use crate::look::*;
-use crate::model::{Act, Row};
+use crate::model::{Act, Model, Row};
 use crate::text::{self, Out};
 use crate::Ui;
 use acorn_core::Kind;
@@ -22,8 +22,8 @@ use nsh_core::prelude::*;
 
 /// The page shown, as a list that keeps to its end as it grows.
 pub fn chat(ui: Ui) -> impl IntoElement {
-    let items = computed(move || ui.model.with(|m| m.body()));
-    let tail = computed(move || ui.model.with(|m| m.tail()));
+    let items = computed(move || ui.model.with(Model::body));
+    let tail = computed(move || ui.model.with(Model::tail));
     virtual_list(move || items.with(Vec::len), move |at| {
         let item = computed(move || items.with(|v| v.get(at.index()).cloned()));
         column().child(dynamic(move || item.get().unwrap_or_default().into_iter().map(|r| row(ui, r)).collect::<Vec<_>>()))

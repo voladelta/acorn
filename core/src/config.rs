@@ -9,7 +9,7 @@
 
 use crate::effort::Effort;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// The bytes past which a chat's view merges to half (`memory` HIGH): 2 MB
@@ -98,14 +98,11 @@ impl Config {
 
 /// A path, "~/" as home.
 pub fn expand(path: &str) -> PathBuf {
-    match path.strip_prefix("~/") {
-        Some(rest) => home().join(rest),
-        None => PathBuf::from(path),
-    }
+    path.strip_prefix("~/").map_or_else(|| PathBuf::from(path), |rest| home().join(rest))
 }
 
 pub fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| Path::new("/").to_path_buf())
+    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
 
 /// `model:effort` or `effort`, the only model being deepseek-flash.

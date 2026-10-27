@@ -23,11 +23,11 @@
 use super::deepseek::{Got, Halt, IDLE, Item, MODEL, Step, URL};
 use super::{Ask, End, Event, On, Out, Spec, Stop, Used, cache, nap, pace};
 use crate::wire::{Live, live_push};
-use crate::{Kind, Say, config, price};
+use crate::{Kind, Say, clip, config, price};
 use futures_util::StreamExt;
 use parking_lot::Mutex;
 use serde_json::Value;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -103,12 +103,11 @@ async fn turns(ask: &Ask, on: &On, heard: &mut Heard<'_>, cancel: &CancellationT
         } else {
             items.push(Item::Turn(step.out));
             for u in step.uses {
-                let out = match cut.is_cancelled() {
-                    true => Out::fail(UNRUN),
-                    false => {
-                        let out = heard.till_cut(tool(ask, &tools, u.name, u.input, &cut), &cut).await;
-                        if cut.is_cancelled() { Out { text: format!("{}\n{CUT}", out.text), ..out } } else { out }
-                    }
+                let out = if cut.is_cancelled() {
+                    Out::fail(UNRUN)
+                } else {
+                    let out = heard.till_cut(tool(ask, &tools, u.name, u.input, &cut), &cut).await;
+                    if cut.is_cancelled() { Out { text: format!("{}\n{CUT}", out.text), ..out } } else { out }
                 };
                 if cancel.is_cancelled() {
                     return Ok(());
@@ -182,10 +181,7 @@ impl Heard<'_> {
 /// holds its room (`pace`): its model's, or its import's, which one request
 /// holds at a time while the rest wait on it.
 async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationToken) -> Step {
-    let own = match &ask.yields {
-        Some(import) => format!("{MODEL} {import}"),
-        None => MODEL.to_string(),
-    };
+    let own = ask.yields.as_ref().map_or_else(|| MODEL.to_string(), |import| format!("{MODEL} {import}"));
     let mut asking = false;
     let mut k = 1;
     let step = loop {
@@ -198,14 +194,14 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
             (Some(_), false) => vec![MODEL, &own],
         };
         pace::yielded(&waits, cancel).await;
-        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen = Mutex::new(Vec::new());
         let sent = tokio::select! {
-            sent = request(ask, on, key, &body, cancel, seen.clone()) => sent,
+            sent = request(ask, on, key, &body, cancel, &seen) => sent,
             _ = cancel.cancelled() => None,
         };
         let Some(Sent { after, step }) = sent else { break fail("stopped", &seen.lock(), Halt::Lost) };
         if step.halt == Halt::Down {
-            eprintln!("{MODEL}: {}", &step.why[..crate::clip::byte_at(&step.why, 300)]);
+            eprintln!("{MODEL}: {}", clip::head(&step.why, 300));
         }
         if step.halt != Halt::Busy || k >= TRIES {
             break if step.halt == Halt::Busy { Step { halt: Halt::Down, ..step } } else { step };
@@ -218,7 +214,7 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
             pace::hold(MODEL, &own, &step.why);
             asking = true;
         }
-        let wait = after.filter(|&s| s > 0.0).unwrap_or(2f64.powi(k as i32 - 1));
+        let wait = after.filter(|&s| s > 0.0).unwrap_or_else(|| 2f64.powi(k as i32 - 1));
         on(Event::Entry { kind: Kind::Mind, text: format!("The AI service is busy: asking again in {wait} s."), of: None });
         let jitter = rand::random::<f64>() * 0.5;
         nap(Duration::from_secs_f64(wait + jitter), cancel).await;
@@ -237,28 +233,29 @@ struct Sent {
 }
 
 /// One request, in single flight (`cache`) and at its model's pace.
-async fn request(ask: &Ask, on: &On, key: &str, body: &Value, cancel: &CancellationToken, seen: Arc<Mutex<Vec<Live>>>) -> Option<Sent> {
+async fn request(ask: &Ask, on: &On, key: &str, body: &Value, cancel: &CancellationToken, seen: &Mutex<Vec<Live>>) -> Option<Sent> {
     let mut flight = cache::wait(ask).await;
     if cancel.is_cancelled() {
         return None;
     }
     let round = pace::fly(MODEL, ask.yields.is_some(), cancel).await?;
-    let mut status = 0;
-    let sent = send(ask, on, key, body, &mut flight, &seen, &mut status).await;
+    let (status, sent) = send(ask, on, key, body, &mut flight, seen).await;
     pace::landed(MODEL, round, status == 429 || status == 529);
     Some(sent)
 }
 
-async fn send(ask: &Ask, on: &On, key: &str, body: &Value, flight: &mut cache::Flight, seen: &Mutex<Vec<Live>>, status: &mut u16) -> Sent {
+/// A request sent: its HTTP status (0: none came), and what it gave.
+async fn send(ask: &Ask, on: &On, key: &str, body: &Value, flight: &mut cache::Flight, seen: &Mutex<Vec<Live>>) -> (u16, Sent) {
     let json = body.to_string();
     let mut got = Got::default();
     let mut read = Read::default();
+    let mut status = 0;
     let res = tokio::time::timeout(IDLE, HTTP.post(URL).bearer_auth(key).header("content-type", "application/json").body(json.clone()).send()).await;
     let (after, step, ok) = match res {
         Err(_) => (None, fail(&format!("no word from the API in {} s", IDLE.as_secs()), &[], Halt::Busy), false),
         Ok(Err(err)) => (None, fail(&err.to_string(), &[], Halt::Busy), false),
         Ok(Ok(res)) => {
-            *status = res.status().as_u16();
+            status = res.status().as_u16();
             let header = |name: &str| res.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
             let after = header("retry-after").and_then(|v| retry_after(&v));
             if res.status().is_success() {
@@ -266,7 +263,7 @@ async fn send(ask: &Ask, on: &On, key: &str, body: &Value, flight: &mut cache::F
             } else {
                 let id = header("x-request-id").or_else(|| header("x-deepseek-request-id")).map_or(String::new(), |id| format!(" [{id}]"));
                 let should = header("x-should-retry");
-                let busy = [408, 409, 429].contains(status) || *status >= 500;
+                let busy = [408, 409, 429].contains(&status) || status >= 500;
                 let passing = should.as_deref() == Some("true") || (should.as_deref() != Some("false") && busy);
                 let why = format!("HTTP {status}{id}: {}", reason(&res.text().await.unwrap_or_default()));
                 (after, fail(&why, &[], if passing { Halt::Busy } else { Halt::Down }), false)
@@ -279,7 +276,7 @@ async fn send(ask: &Ask, on: &On, key: &str, body: &Value, flight: &mut cache::F
         let now = chrono::Utc::now();
         meter(Used { effort: ask.effort, usage, micros: price::cost(usage, now), at: now.timestamp_millis() });
     }
-    Sent { after, step }
+    (status, Sent { after, step })
 }
 
 /// What a request's stream read: the bytes of its output, and whether it
@@ -349,7 +346,7 @@ fn reason(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
-        .unwrap_or_else(|| body[..crate::clip::byte_at(body, 2000)].to_string())
+        .unwrap_or_else(|| clip::head(body, 2000).to_string())
 }
 
 /// A retry-after: seconds, or an HTTP date.
@@ -367,7 +364,7 @@ fn fail(why: &str, seen: &[Live], halt: Halt) -> Step {
     let shown = if halt == Halt::Busy { BUSY } else { why };
     let mark = match halt {
         Halt::Lost => "\n[cut off]".to_string(),
-        _ => format!("\n[cut off: {}]", &shown[..crate::clip::byte_at(shown, 300)]),
+        _ => format!("\n[cut off: {}]", clip::head(shown, 300)),
     };
     let entries = seen
         .iter()

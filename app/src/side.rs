@@ -87,7 +87,7 @@ fn row(ui: Ui, a: Assistant) -> impl IntoElement {
         .child(view().absolute().left(px(0.0)).top(px(9.0)).w(px(3.0)).h(px(18.0)).rounded(px(1.5)).bg(ink()).opacity(move || if on2() { 1.0_f32 } else { 0.0 }))
         .child(view().size(px(22.0)).rounded(px(6.0)).bg(move || if on3() { paper() } else { block() }).items_center().justify_center().child(mark))
         .child(
-            text(a.name.clone())
+            text(a.name)
                 .flex_1()
                 .number_of_lines(1)
                 .text_size(px(14.0))

@@ -49,6 +49,23 @@ pub struct Agent {
     replies: Vec<String>,
 }
 
+impl Agent {
+    fn new(name: &str, role: Role, view: Vec<Block>) -> Agent {
+        Agent { name: name.into(), role, call: None, live: vec![], calls: vec![], stop: false, view, replies: vec![] }
+    }
+}
+
+/// A number, or one said as a string ("8"), as models sometimes give it.
+fn number(v: &Value) -> Option<u64> {
+    v.as_u64().or_else(|| v.as_str()?.trim().parse().ok())
+}
+
+/// An effort asked for that there is none of.
+fn no_effort(given: &Value) -> Out {
+    let given = given.as_str().map_or_else(|| given.to_string(), str::to_string);
+    Out::fail(format!("No effort {given}; one of {}.", crate::effort::names().join(", ")))
+}
+
 /// An agent's report as logged: `[Name]` on its own line, its replies,
 /// and a line naming its whole chat (the model reads who sent it).
 pub fn report_text(name: &str, text: &str) -> String {
@@ -85,8 +102,7 @@ impl Toolbox for Kit {
 
 impl Engine {
     async fn tool(self: Arc<Self>, cwd: PathBuf, hands: bool, name: &str, input: Value, cancel: CancellationToken, halt: CancellationToken) -> Out {
-        // a number, or one said as a string ("8"), as models sometimes do
-        let num = |k: &str, def: u64| input[k].as_u64().or_else(|| input[k].as_str().and_then(|s| s.trim().parse().ok())).unwrap_or(def);
+        let num = |k: &str, def: u64| number(&input[k]).unwrap_or(def);
         let str = |k: &str| input[k].as_str().unwrap_or_default().trim().to_string();
         match name {
             "zoom" => {
@@ -98,7 +114,7 @@ impl Engine {
                 match &input["id"] {
                     Value::String(id) if id.starts_with(|c: char| c.is_ascii_alphabetic()) => Out::ok(clip::page(&chat.mem.agent_show(id), at)),
                     id => {
-                        let id = id.as_u64().or_else(|| id.as_str().and_then(|s| s.parse().ok())).unwrap_or(u64::MAX);
+                        let id = number(id).unwrap_or(u64::MAX);
                         let imgs = if n == 1 && at == 0 { chat.mem.images(id) } else { vec![] };
                         Out { imgs, ..Out::ok(chat.mem.zoom(id, n, at)) }
                     }
@@ -110,10 +126,7 @@ impl Engine {
                     Value::Null => None,
                     e => match e.as_str().and_then(Effort::parse) {
                         Some(effort) => Some(effort),
-                        None => {
-                            let all: Vec<&str> = crate::effort::EFFORTS.iter().map(|e| e.as_str()).collect();
-                            return Out::fail(format!("No effort {}; one of {}.", e.as_str().unwrap_or(&e.to_string()), all.join(", ")));
-                        }
+                        None => return no_effort(e),
                     },
                 };
                 let tasks: Vec<String> = input["tasks"].as_array().into_iter().flatten().map(|t| t.as_str().map_or_else(|| t.to_string(), str::to_string)).collect();
@@ -157,7 +170,7 @@ impl Engine {
             }
             "forget" => {
                 let me = self.lock().me.id.clone();
-                let Some(id) = Some(num("id", u64::MAX)).filter(|&id| id != u64::MAX) else { return Out::fail("Give id: the fact's number.") };
+                let Some(id) = number(&input["id"]) else { return Out::fail("Give id: the fact's number.") };
                 crate::facts::forget(&me, id).map_or_else(|err| Out::fail(format!("Not forgotten: {err}")), Out::ok)
             }
             "purge" => {
@@ -167,24 +180,13 @@ impl Engine {
                         Some(n) => Out::ok(chat.purge(Some(name), n)),
                         None => Out::fail("Give n: the index of the message in the agent's chat."),
                     },
-                    id => {
-                        let id = id.as_u64().or_else(|| id.as_str().and_then(|s| s.parse().ok())).unwrap_or(u64::MAX);
-                        Out::ok(chat.purge(None, id))
-                    }
+                    id => Out::ok(chat.purge(None, number(id).unwrap_or(u64::MAX))),
                 }
             }
             "create_assistant" => {
-                let Some(effort) = Effort::parse(&str("effort")) else {
-                    let all: Vec<&str> = crate::effort::EFFORTS.iter().map(|e| e.as_str()).collect();
-                    return Out::fail(format!("No effort {}; one of {}.", input["effort"], all.join(", ")));
-                };
+                let Some(effort) = Effort::parse(&str("effort")) else { return no_effort(&input["effort"]) };
                 match crate::assistant::add(&str("name"), &str("about"), &str("instructions"), &str("welcome"), effort) {
-                    Ok(made) => {
-                        let said = format!("Created {}, {}; they are in the sidebar.", made.name, made.about);
-                        let _ = super::hub::chat(&made);
-                        self.lock().all(Event::Assistant(made));
-                        Out::ok(said)
-                    }
+                    Ok(made) => self.listed(format!("Created {}, {}; they are in the sidebar.", made.name, made.about), made),
                     Err(why) => Out::fail(why),
                 }
             }
@@ -200,12 +202,7 @@ impl Engine {
                 }
             }
             "restore_assistant" => match crate::assistant::restore(&str("name")) {
-                Ok(back) => {
-                    let said = format!("Restored {}, {}; they are in the sidebar, their chat as it was.", back.name, back.about);
-                    let _ = super::hub::chat(&back);
-                    self.lock().all(Event::Assistant(back));
-                    Out::ok(said)
-                }
+                Ok(back) => self.listed(format!("Restored {}, {}; they are in the sidebar, their chat as it was.", back.name, back.about), back),
                 Err(why) => Out::fail(why),
             },
             "computer" if hands => computer::act(&input, cancel).await,
@@ -213,6 +210,14 @@ impl Engine {
             "web_search" | "web_fetch" => crate::web::run(name, &input, cancel).await,
             _ => machine::run(name, &input, cwd, cancel).await,
         }
+    }
+
+    /// An assistant made or restored: its chat opened, and the app told
+    /// to list it.
+    fn listed(&self, said: String, it: crate::assistant::Assistant) -> Out {
+        let _ = super::hub::chat(&it);
+        self.lock().all(Event::Assistant(it));
+        Out::ok(said)
     }
 
     async fn hire(self: &Arc<Self>, tasks: Vec<String>, effort: Option<Effort>, halt: &CancellationToken) -> String {
@@ -282,7 +287,7 @@ impl Engine {
     /// back as a message.
     fn ask(self: &Arc<Self>, name: &str, message: &str) -> Out {
         let me = self.lock().me.clone();
-        let Some(them) = crate::assistant::all().into_iter().find(|a| a.name.eq_ignore_ascii_case(name)) else {
+        let Some(them) = crate::assistant::find(name) else {
             return Out::fail(format!("No assistant {name}; list_assistants names them."));
         };
         if them.id == me.id {
@@ -328,7 +333,7 @@ impl Engine {
     /// Your thread with the assistant named, whole (any case); None: no
     /// such assistant, or no thread with them.
     fn thread_lines(&self, name: &str) -> Option<String> {
-        let asks = crate::assistant::all().into_iter().find(|a| a.name.eq_ignore_ascii_case(name))?;
+        let asks = crate::assistant::find(name)?;
         let thread = super::hub::get(&format!("{}/{}", self.id, asks.id))?;
         let lines = thread.lock().mem.view_lines(usize::MAX);
         Some(format!("{}\n{}", thread_head(&asks.name), lines.join("\n")))
@@ -338,13 +343,11 @@ impl Engine {
     /// none.
     async fn view(&self, halt: &CancellationToken) -> Result<Vec<Block>, String> {
         let count = self.lock().mem.count;
-        match self.settle(count, halt).await {
-            Some(why) => Err(why),
-            None => {
-                let chat = self.lock();
-                Ok(chat.mem.view_blocks(chat.mem.count))
-            }
+        if let Some(why) = self.settle(count, halt).await {
+            return Err(why);
         }
+        let chat = self.lock();
+        Ok(chat.mem.view_blocks(chat.mem.count))
     }
 
     /// An agent's calls while a message waits in its log (told too late for
@@ -366,7 +369,7 @@ impl Engine {
             let Some(agent) = chat.agents.get_mut(&name) else { return };
             agent.call = None;
             agent.replies.push(if end.ok { end.text } else { format!("failed: {}", end.text) });
-            if !(end.ok && !end.left.is_empty()) {
+            if !end.ok || end.left.is_empty() {
                 let (text, stopped) = (report_text(&name, &agent.replies.join("\n\n")), agent.stop);
                 chat.report(&name, text, stopped);
                 chat.change();
@@ -396,8 +399,7 @@ impl Chat {
             Err(err) => return format!("(no agent: {err})"),
         };
         let _ = std::fs::create_dir_all(self.me.work().join(&name));
-        let agent = Agent { name: name.clone(), role, call: None, live: vec![], calls: vec![], stop: false, view, replies: vec![] };
-        self.agents.insert(name.clone(), agent);
+        self.agents.insert(name.clone(), Agent::new(&name, role, view));
         let note = match role {
             Role::Sub(None) => SUB_NOTE.to_string(),
             Role::Sub(Some(effort)) => format!("{SUB_NOTE}{SUB_AT}{}", effort.as_str()),
@@ -423,8 +425,7 @@ impl Chat {
             } else {
                 return None;
             };
-            let agent = Agent { name: name.into(), role, call: None, live: vec![], calls: vec![], stop: false, view: vec![], replies: vec![] };
-            self.agents.insert(name.into(), agent);
+            self.agents.insert(name.into(), Agent::new(name, role, Vec::new()));
         }
         self.agents.get_mut(name)
     }
@@ -490,20 +491,23 @@ impl Chat {
             .collect();
         them.sort_by_key(|(hits, _)| std::cmp::Reverse(*hits));
         let shown = |a: &crate::assistant::Assistant| if a.about.is_empty() { a.name.clone() } else { format!("{}: {}", a.name, a.about) };
-        let mut said = match them.is_empty() {
-            true if words.is_empty() => "No other assistants yet.".to_string(),
-            true => return "None matches.".into(),
-            false => them.iter().map(|(_, a)| shown(a)).collect::<Vec<_>>().join("\n"),
+        let mut said = if !them.is_empty() {
+            them.iter().map(|(_, a)| shown(a)).collect::<Vec<_>>().join("\n")
+        } else if words.is_empty() {
+            "No other assistants yet.".to_string()
+        } else {
+            return "None matches.".into();
         };
         let archived: Vec<String> = crate::assistant::archived().iter().map(shown).collect();
         if words.is_empty() && !archived.is_empty() {
-            said.push_str(&format!("\n\nArchived (restore_assistant brings one back):\n{}", archived.join("\n")));
+            said += "\n\nArchived (restore_assistant brings one back):\n";
+            said += &archived.join("\n");
         }
         said
     }
 
     /// An agent's page: its log, and what streams.
-    pub(super) fn agent_page(&mut self, name: &str) {
+    pub(super) fn agent_page(&self, name: &str) {
         let log = self.mem.agent(name).map(|log| {
             log.into_iter().map(|r| crate::wire::Entry { kind: r.kind, text: r.text, date: r.date, images: r.images, spend: None }).collect()
         });

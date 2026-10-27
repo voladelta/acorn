@@ -9,6 +9,7 @@
 //! tokens, money and time are said.
 
 use acorn_core::{Spend, names};
+use std::fmt::Write as _;
 
 /// A line of a diff: kept (' '), dropped ('-') or added ('+'), its number
 /// in the old file if dropped, else in the new one.
@@ -34,7 +35,7 @@ pub fn output(s: &str) -> Vec<Out> {
     let s = s.replace('\r', "");
     let lines: Vec<&str> = s.split('\n').collect();
     if let Some((k, n)) = lines.last().and_then(|l| read_mark(l)) {
-        return vec![Out::File { k, n, x: lines[..lines.len() - 1].iter().map(|l| l.to_string()).collect() }];
+        return vec![Out::File { k, n, x: lines[..lines.len() - 1].iter().map(ToString::to_string).collect() }];
     }
     let mut out = Vec::new();
     let (mut i, mut at) = (0, 0);
@@ -65,7 +66,7 @@ fn read_mark(l: &str) -> Option<(String, u64)> {
 fn result(lines: &[&str]) -> Option<Out> {
     let from = lines.iter().position(|l| !l.trim().is_empty())?;
     let upto = lines.iter().rposition(|l| !l.trim().is_empty())?;
-    Some(Out::File { k: "result".into(), n: 1, x: lines[from..=upto].iter().map(|l| l.to_string()).collect() })
+    Some(Out::File { k: "result".into(), n: 1, x: lines[from..=upto].iter().map(ToString::to_string).collect() })
 }
 
 /// None: no diff starts at line i (its "---" and "+++" lines, then hunks,
@@ -171,7 +172,7 @@ pub fn link_names(s: &str) -> String {
         match tail.find(']') {
             Some(close) if names::is_name(&tail[..close]) && !tail[close + 1..].starts_with('(') => {
                 let name = &tail[..close];
-                out.push_str(&format!("[{name}](agent:{name})"));
+                let _ = write!(out, "[{name}](agent:{name})");
                 rest = &tail[close + 1..];
             }
             _ => {
@@ -294,10 +295,7 @@ pub fn percent_decoded(s: &str) -> String {
 /// A reply a message cut in on: its text without the mark, and whether
 /// it was cut.
 pub fn cut_off(s: &str) -> (&str, bool) {
-    match s.strip_suffix("[cut off]") {
-        Some(said) => (said.trim_end(), true),
-        None => (s, false),
-    }
+    s.strip_suffix("[cut off]").map_or((s, false), |said| (said.trim_end(), true))
 }
 
 /// The `@` word the caret ends (at `caret`, in UTF-16 units, as inputs

@@ -82,10 +82,7 @@ pub fn spec() -> Spec {
 }
 
 pub async fn act(input: &Value, cancel: CancellationToken) -> Out {
-    match step(input, &cancel).await {
-        Ok(out) => out,
-        Err(err) => Out::fail(err.to_string()),
-    }
+    step(input, &cancel).await.unwrap_or_else(|err| Out::fail(err.to_string()))
 }
 
 async fn step(input: &Value, cancel: &CancellationToken) -> anyhow::Result<Out> {
@@ -112,14 +109,16 @@ async fn step(input: &Value, cancel: &CancellationToken) -> anyhow::Result<Out> 
     Ok(Out { text: format!("{}\n{}", done.text, shot.text), ..shot })
 }
 
+const BAD_REGION: &str = "region must be [x0, y0, x1, y1], with x1 > x0 and y1 > y0";
+
 /// The region [x0, y0, x1, y1] of the screenshot, at the screen's own
 /// resolution, as large as the screenshot.
 async fn zoom(input: &Value) -> anyhow::Result<Out> {
     let done = hands("zoom", input).await?;
-    let r: Vec<f64> = input["region"].as_array().into_iter().flatten().filter_map(|n| n.as_f64()).map(|n| n * done.scale).collect();
-    let [x0, y0, x1, y1] = r[..] else { return Ok(Out::fail("region must be [x0, y0, x1, y1], with x1 > x0 and y1 > y0")) };
+    let r: Vec<f64> = input["region"].as_array().into_iter().flatten().filter_map(Value::as_f64).map(|n| n * done.scale).collect();
+    let &[x0, y0, x1, y1] = &r[..] else { return Ok(Out::fail(BAD_REGION)) };
     if !(x1 > x0 && y1 > y0) {
-        return Ok(Out::fail("region must be [x0, y0, x1, y1], with x1 > x0 and y1 > y0"));
+        return Ok(Out::fail(BAD_REGION));
     }
     let fit = (done.w / (x1 - x0)).min(done.h / (y1 - y0));
     let area = format!("{},{},{},{}", x0.round(), y0.round(), (x1 - x0).round(), (y1 - y0).round());
@@ -154,7 +153,7 @@ async fn shot(opts: &[&str], w: f64, h: f64) -> anyhow::Result<Out> {
     .await;
     let _ = std::fs::remove_file(&file);
     let data = base64::engine::general_purpose::STANDARD.encode(taken?);
-    Ok(Out { text: format!("[image {w}x{h}]"), fail: false, imgs: vec![Img { mime: "image/jpeg".into(), data }] })
+    Ok(Out { text: format!("[image {w}x{h}]"), imgs: vec![Img { mime: "image/jpeg".into(), data }], ..Out::default() })
 }
 
 async fn exec(cmd: &str, args: &[&str]) -> anyhow::Result<String> {

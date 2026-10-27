@@ -192,7 +192,7 @@ impl Session {
                     let Ok(j) = serde_json::from_slice::<Value>(&line) else { continue };
                     let msgs = self.line(&j, &date);
                     if let Some(m) = msgs.last() {
-                        date = m.date.clone();
+                        date.clone_from(&m.date);
                     }
                     msgs.iter().for_each(&mut each);
                 }
@@ -616,11 +616,10 @@ fn parts_text(content: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Array(parts) => parts
             .iter()
-            .map(|c| match c {
-                Value::String(s) => s.clone(),
-                _ if c["text"].is_string() => c["text"].as_str().unwrap().to_string(),
-                _ => {
-                    let t = c["type"].as_str().or(c["content_type"].as_str()).unwrap_or("undefined");
+            .map(|c| match c.as_str().or_else(|| c["text"].as_str()) {
+                Some(text) => text.to_string(),
+                None => {
+                    let t = c["type"].as_str().or_else(|| c["content_type"].as_str()).unwrap_or("undefined");
                     if t.contains("image") { "[image]".into() } else { String::new() }
                 }
             })

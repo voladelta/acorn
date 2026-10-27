@@ -325,8 +325,8 @@ impl Memory {
             stuck: false,
         };
         if let Some(s) = &saved {
-            mem.goal = s.goal.clone();
-            mem.work = s.work.clone();
+            mem.goal.clone_from(&s.goal);
+            mem.work.clone_from(&s.work);
         }
         mem.count = mem.db.query_row("select coalesce(max(i) + 1, 0) from msgs where log = ''", [], |r| r.get(0))?;
         while mem.count > 0 && mem.message(mem.count - 1).is_some_and(|m| m.more) {
@@ -856,10 +856,7 @@ impl Memory {
     }
 
     pub fn date(&self, id: u64) -> String {
-        match self.message(id) {
-            Some(root) => root.when(),
-            None => format!("No message {id}."),
-        }
+        self.message(id).map_or_else(|| format!("No message {id}."), |root| root.when())
     }
 
     /// Where a page of the chat starts: the last message starting a turn
@@ -867,9 +864,9 @@ impl Memory {
     /// the end.
     pub fn turn(&self) -> u64 {
         let from = self.view.parts.iter().rposition(|p| p.l > 0).map_or(0, |k| k + 1);
-        let whole: Vec<Part> = self.view.parts[from..].to_vec();
+        let whole = &self.view.parts[from..];
         let user = whole.iter().rev().find(|p| self.message(p.i).is_some_and(|m| matches!(m.kind, Kind::User | Kind::Work)));
-        user.or(whole.first()).map_or(self.count, |p| p.i)
+        user.or_else(|| whole.first()).map_or(self.count, |p| p.i)
     }
 
     /// Level l's nodes built, in order.

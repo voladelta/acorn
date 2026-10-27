@@ -17,11 +17,12 @@ use std::sync::Arc;
 
 impl Chat {
     pub(super) fn state(&mut self) -> State {
-        let wait = match self.call.is_some() {
-            true if self.asked => Wait::Model,
-            true => Wait::None,
-            false if self.busy && !self.wait.is_empty() && self.mem.first(0, 0) < self.from() => Wait::Summaries,
-            false => Wait::None,
+        let wait = if self.call.is_some() {
+            if self.asked { Wait::Model } else { Wait::None }
+        } else if self.busy && !self.wait.is_empty() && self.mem.first(0, 0) < self.from() {
+            Wait::Summaries
+        } else {
+            Wait::None
         };
         State { busy: self.busy, wait, agents: self.working(), goal: self.mem.goal.clone(), importing: self.importing(), today: self.today() }
     }
@@ -77,7 +78,7 @@ impl Chat {
     }
 
     /// A summary, if built.
-    fn node(&mut self, (id, n): Seg) -> Option<(Seg, Node)> {
+    fn node(&self, (id, n): Seg) -> Option<(Seg, Node)> {
         let text = self.mem.node(Part::of(id, n)?)?;
         let to = self.mem.message(id + n - 1)?.date;
         Some(((id, n), Node { text, to }))

@@ -130,14 +130,16 @@ pub async fn shell(cwd: &Path, command: &str, cancel: CancellationToken) -> Out 
     let time = format!("{:.1} s", start.elapsed().as_secs_f64());
     let exit = match status {
         _ if cancel.is_cancelled() => "stopped".to_string(),
-        Ok(s) if s.signal().is_some() => format!("killed by {}", signal_name(s.signal().unwrap())),
-        Ok(s) => format!("exit {}", s.code().unwrap_or(-1)),
+        Ok(s) => match s.signal() {
+            Some(sig) => format!("killed by {}", signal_name(sig)),
+            None => format!("exit {}", s.code().unwrap_or(-1)),
+        },
         Err(err) => err.to_string(),
     };
     let text = out.text();
     let text = text.strip_suffix('\n').unwrap_or(&text);
     let head = if text.is_empty() { String::new() } else { format!("{text}\n") };
-    Out { text: format!("{head}({exit} in {time})"), fail: exit != "exit 0", imgs: vec![] }
+    Out { text: format!("{head}({exit} in {time})"), fail: exit != "exit 0", ..Out::default() }
 }
 
 fn signal_name(sig: i32) -> String {
@@ -250,13 +252,16 @@ pub fn edit(cwd: &Path, edits: &Value) -> anyhow::Result<Out> {
         let text = known.map_or_else(|| was.clone().unwrap_or_default(), |k| files[k].1.text.clone());
         let old = e["old"].as_str().unwrap_or_default();
         let count = if old.is_empty() { 0 } else { text.matches(old).count() };
-        let why = match () {
-            _ if was.is_none() => "no such file".to_string(),
-            _ if count == 0 => "old was not found".to_string(),
-            _ if count > 1 && e["all"] != true => format!("old matches {count} times; give more context, or all"),
-            _ => String::new(),
+        let why = if was.is_none() {
+            Some("no such file".to_string())
+        } else if count == 0 {
+            Some("old was not found".to_string())
+        } else if count > 1 && e["all"] != true {
+            Some(format!("old matches {count} times; give more context, or all"))
+        } else {
+            None
         };
-        if !why.is_empty() {
+        if let Some(why) = why {
             return Ok(Out::fail(format!("Edit {} ({path}): {why}. No file was changed.", k + 1)));
         }
         let text = text.replace(old, e["new"].as_str().unwrap_or_default());

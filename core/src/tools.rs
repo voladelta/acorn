@@ -15,8 +15,7 @@
 
 use crate::ai::Spec;
 use crate::machine::{self, spec};
-use crate::effort::EFFORTS;
-use crate::{config, memory, web};
+use crate::{config, effort, memory, web};
 use serde_json::json;
 use std::path::Path;
 
@@ -258,7 +257,7 @@ fn own() -> Vec<Spec> {
 }
 
 fn boss() -> Vec<Spec> {
-    let efforts: Vec<&str> = EFFORTS.iter().map(|e| e.as_str()).collect();
+    let efforts = effort::names();
     vec![
         spec("hire", "Hire one agent per task, a freelancer working in the background, all in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. An agent sees the view and the user's instructions, but knows what you want only from its task, so say all it needs. It works in a dir of its own, not yours: name each file by its absolute path. Never for a person the user wants to keep: that is create_assistant.", json!({"tasks": {"type": "array", "items": {"type": "string"}}, "effort": {"type": "string", "enum": efforts, "description": "How hard they think; by default, as hard as you."}}), &["tasks"]),
         spec("tell", "Send a message to an agent (one you hired or a computer task), by name. One at work stops what it is doing to read it, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".", json!({"name": {"type": "string"}, "message": {"type": "string"}}), &["name", "message"]),
@@ -267,7 +266,7 @@ fn boss() -> Vec<Spec> {
 }
 
 fn peers() -> Vec<Spec> {
-    let efforts: Vec<&str> = EFFORTS.iter().map(|e| e.as_str()).collect();
+    let efforts = effort::names();
     vec![
         spec("create_assistant", "Create a new assistant, when the user asks for one in whatever words (\"hire a stylist called Marrie\" is one: a named person who stays): a person of their own, beside you in Acorn's sidebar, with a chat of its own that never ends and its own memory. It is you, Acorn, with its own name, about, reasoning effort, instructions (its system prompt, after yours) and welcome message (its chat's first message). It does not start working; the user opens it from the sidebar.", json!({"name": {"type": "string"}, "about": {"type": "string", "description": "Who it is, in a few words, as the app shows it beside its name: \"Personal stylist\", \"Friendly neighbour who loves cracking jokes\". Never its effort."}, "effort": {"type": "string", "enum": efforts, "description": "How hard it thinks, as fits its part: low is fast and cheap, max is smartest and slowest; high if the user didn't say."}, "instructions": {"type": "string", "description": "Its system prompt, from what the user said (what it helps with, how it works and talks), or the one they gave word for word."}, "welcome": {"type": "string", "description": "Its welcome message: the first message of its chat, in its own voice, as it greets the user: \"Hello! This is <name>.\", who it is and what to bring it, a few short lines of markdown; or the one the user gave word for word."}}), &["name", "about", "effort", "instructions", "welcome"]),
         spec("archive_assistant", "Archive one of the user's assistants, by name, when the user asks to delete, remove, fire or archive one in whatever words (\"fire Marrie\", \"get rid of the stylist\"): it leaves the sidebar and no one can ask it, its work stops, and its chat, threads and files are kept as they are till restore_assistant brings it back. Nothing is ever deleted. Acorn and Max stay, and you can't archive yourself.", json!({"name": {"type": "string"}}), &["name"]),

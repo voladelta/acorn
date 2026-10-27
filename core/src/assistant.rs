@@ -22,7 +22,7 @@ const FILE: &str = "assistants.json";
 
 /// Held while assistants.json is read and written: each assistant's
 /// engine may make one.
-static FILING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static FILING: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 /// Max's chat.
 pub const MAX: &str = "max";
@@ -71,6 +71,16 @@ impl Assistant {
         self.id == config::get().chat
     }
 
+    /// Whether it is the one named (any case).
+    pub fn named(&self, name: &str) -> bool {
+        self.name.eq_ignore_ascii_case(name)
+    }
+
+    /// Its about, if it has one.
+    fn brief(&self) -> Option<&str> {
+        Some(self.about.trim()).filter(|a| !a.is_empty())
+    }
+
     /// Where its tools work: Acorn's, the config's; another's, a dir of
     /// its own in it (no agent's name: those are capitalized words).
     pub fn work(&self) -> PathBuf {
@@ -102,15 +112,18 @@ impl Assistant {
         if self.is_acorn() {
             return String::new();
         }
-        let about = if self.about.trim().is_empty() { String::new() } else { format!(": {}", self.about.trim()) };
-        let more = if self.instructions.trim().is_empty() { String::new() } else { format!("\n\n{}", self.instructions.trim()) };
+        let about = self.brief().map_or_else(String::new, |a| format!(": {a}"));
+        let more = match self.instructions.trim() {
+            "" => String::new(),
+            more => format!("\n\n{more}"),
+        };
         format!("\n\n# This assistant\n\nIn this chat the user calls you {}{about}.{more}", self.name)
     }
 
     /// What a thread's prompt says of it as the one asking there: another
     /// of the user's assistants, not the user.
     pub fn asking(&self) -> String {
-        let about = if self.about.trim().is_empty() { String::new() } else { format!(" ({})", self.about.trim()) };
+        let about = self.brief().map_or_else(String::new, |a| format!(" ({a})"));
         let name = &self.name;
         format!(
             "\n\n# This thread\n\nThis chat is not with the user: it is your thread with {name}{about}, another of the user's assistants, who asks you things for the user's sake. Its user messages are {name}'s, and each reply of yours goes back to {name}, not to the user. Answer as yourself, from your part and what you know, plainly and to the point. The facts below are the user's."
@@ -121,6 +134,11 @@ impl Assistant {
 /// Every assistant: Acorn, Max, then those made, but the archived.
 pub fn all() -> Vec<Assistant> {
     everyone().into_iter().filter(|a| !a.archived).collect()
+}
+
+/// The assistant named (any case), but the archived.
+pub fn find(name: &str) -> Option<Assistant> {
+    all().into_iter().find(|a| a.named(name))
 }
 
 /// The assistants archived, oldest first.
@@ -168,9 +186,9 @@ pub fn restore(name: &str) -> Result<Assistant, String> {
 
 /// The one named (any case) set archived or not, if `may`.
 fn mark(name: &str, archived: bool, may: impl Fn(&Assistant) -> Result<(), String>) -> Result<Assistant, String> {
-    let _filing = FILING.lock().unwrap_or_else(|e| e.into_inner());
+    let _filing = FILING.lock();
     let name = name.trim();
-    let Some(it) = everyone().into_iter().find(|a| a.name.eq_ignore_ascii_case(name)) else {
+    let Some(it) = everyone().into_iter().find(|a| a.named(name)) else {
         return Err(format!("No assistant {name}; list_assistants names them, the archived too."));
     };
     may(&it)?;
@@ -193,7 +211,7 @@ fn write(mine: &[Assistant]) -> Result<(), String> {
 /// unique among the assistants and the chats on disk (a chat it didn't
 /// start is never taken over).
 pub fn add(name: &str, about: &str, instructions: &str, welcome: &str, effort: Effort) -> Result<Assistant, String> {
-    let _filing = FILING.lock().unwrap_or_else(|e| e.into_inner());
+    let _filing = FILING.lock();
     let name = name.trim();
     if name.is_empty() {
         return Err("An assistant needs a name.".into());
@@ -203,7 +221,7 @@ pub fn add(name: &str, about: &str, instructions: &str, welcome: &str, effort: E
         return Err("An assistant needs an about: who it is, in a few words.".into());
     }
     let all = everyone();
-    if let Some(same) = all.iter().find(|a| a.name.eq_ignore_ascii_case(name)) {
+    if let Some(same) = all.iter().find(|a| a.named(name)) {
         let archived = if same.archived { " (archived: restore_assistant brings them back)" } else { "" };
         return Err(format!("There is already an assistant named {name}{archived}."));
     }
