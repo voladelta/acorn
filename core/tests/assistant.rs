@@ -17,18 +17,24 @@ fn made_assistants_are_saved_and_listed() {
     let names = |all: Vec<Assistant>| all.into_iter().map(|a| a.name).collect::<Vec<_>>();
     assert_eq!(names(assistant::all()), ["Acorn", "Max"]);
 
-    let abc = assistant::add(" Abc ", " Personal stylist ", "Help me with xyz.", Effort::Low).unwrap();
+    let abc = assistant::add(" Abc ", " Personal stylist ", "Help me with xyz.", " Hello! This is Abc.\n\nShow me your closet. ", Effort::Low).unwrap();
     assert_eq!(abc.id, "abc-2", "a chat on disk it didn't start is never taken");
     assert_eq!((abc.about.as_str(), abc.effort), ("Personal stylist", Effort::Low));
     assert!(abc.work().ends_with("work/assistants/abc-2"));
     assert!(abc.personality().contains("calls you Abc: Personal stylist.\n\nHelp me with xyz."));
+    assert_eq!(abc.hello().0, "Hello! This is Abc.\n\nShow me your closet.", "its welcome, as made");
+    assert_eq!(abc.hello().1, "unii: hello: Abc, Personal stylist: Hello! This is Abc. Show me your closet.");
     assert!(abc.asking().contains("your thread with Abc (Personal stylist)"));
-    assert!(assistant::add("abc", "Stylist", "", Effort::High).is_err(), "names are unique");
-    assert!(assistant::add("  ", "Stylist", "", Effort::High).is_err());
-    assert!(assistant::add("Doug", " ", "", Effort::High).is_err(), "everyone says who they are");
+    assert!(assistant::add("abc", "Stylist", "", "", Effort::High).is_err(), "names are unique");
+    assert!(assistant::add("  ", "Stylist", "", "", Effort::High).is_err());
+    assert!(assistant::add("Doug", " ", "", "", Effort::High).is_err(), "everyone says who they are");
 
-    let max = assistant::add("Max Two", "Second opinion", "", Effort::Max).unwrap();
+    let max = assistant::add("Max Two", "Second opinion", "", "", Effort::Max).unwrap();
     assert_eq!(max.id, "maxtwo");
+    assert!(max.hello().0.starts_with("Hello! This is Max Two.\n\n"), "none given: a plain hello");
+    let hellos = [Assistant::acorn().hello(), Assistant::max().hello()];
+    assert!(hellos[0].0.starts_with("Hello! This is Acorn.") && hellos[1].0.starts_with("Hello! This is Max."));
+    assert_ne!(hellos[0].0.replace("Acorn", "Max"), hellos[1].0, "Max greets in its own words");
     assert_eq!(names(assistant::all()), ["Acorn", "Max", "Abc", "Max Two"]);
     assert_eq!(assistant::all()[2], abc, "as saved, read back");
     assert!(Assistant::acorn().personality().is_empty() && Assistant::acorn().work().ends_with("home/work"));

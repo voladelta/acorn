@@ -60,7 +60,7 @@ I'll dig it up:
 
 How? No new model. No magic. Just a plain chatbot with a memory that grows.";
 
-const HELLO_LINE: &str = "unii: hello: Acorn, one endless chat kept in a memory tree, recent days in more detail; build anything for years; recalls the past (ad2cat.py); a chatbot with a memory system.";
+pub const HELLO_LINE: &str = "unii: hello: Acorn, one endless chat kept in a memory tree, recent days in more detail; build anything for years; recalls the past (ad2cat.py); a chatbot with a memory system.";
 
 /// A message logged: its pages [id, end).
 #[derive(Clone, Copy, Debug)]
@@ -206,9 +206,7 @@ impl Engine {
         {
             let mut chat = engine.lock();
             if chat.mem.count == 0 && chat.with.is_none() {
-                let name = chat.me.name.clone();
-                let hello = HELLO.replacen("This is Acorn.", &format!("This is {name}."), 1);
-                let line = HELLO_LINE.replacen("hello: Acorn,", &format!("hello: {name},"), 1);
+                let (hello, line) = chat.me.hello();
                 let hello = Msg { line: Some(line), ..Msg::new(Kind::Acorn, &hello) };
                 chat.mem.push(vec![hello])?;
             }

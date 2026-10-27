@@ -177,7 +177,7 @@ impl Engine {
                     let all: Vec<&str> = crate::effort::EFFORTS.iter().map(|e| e.as_str()).collect();
                     return Out::fail(format!("No effort {}; one of {}.", input["effort"], all.join(", ")));
                 };
-                match crate::assistant::add(&str("name"), &str("about"), &str("instructions"), effort) {
+                match crate::assistant::add(&str("name"), &str("about"), &str("instructions"), &str("welcome"), effort) {
                     Ok(made) => {
                         let said = format!("Created {}, {}; they are in the sidebar.", made.name, made.about);
                         let _ = super::hub::chat(&made);

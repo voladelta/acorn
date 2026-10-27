@@ -4,7 +4,8 @@
 //! config's chat, at its `pick`); Max, the thoughtful expert (at max
 //! effort); then those an assistant created as asked (`create_assistant`),
 //! each a name, an about (who it is, one line the app shows), its
-//! instructions (its system prompt) and an effort, kept in
+//! instructions (its system prompt), its welcome (its chat's first
+//! message) and an effort, kept in
 //! $ACORN_DIR/assistants.json, oldest first. How hard one thinks is part
 //! of who it is, never shown. Each has its own chat (`chats`/<id>) and its
 //! own work dir; Acorn's are the config's.
@@ -26,6 +27,19 @@ pub const MAX: &str = "max";
 /// How Max works: the expert one goes to when it matters.
 const MAX_WAY: &str = "You are the one the user, and the other assistants, come to when it matters. Think it through before you answer: weigh the alternatives, check your reasoning, say how sure you are and what would change your mind. Answer plainly, the conclusion first.";
 
+/// What Max's chat opens with.
+const MAX_HELLO: &str = "Hello! This is Max.
+
+I'm the one you come to when it matters: the hard call, the second opinion, the plan you can't afford to get wrong.
+
+I take my time. I'll weigh the alternatives, check my own reasoning, and tell you how sure I am and what would change my mind. **The conclusion comes first.**
+
+The other assistants come to me too, when they're stuck.
+
+Bring me something hard.";
+
+const MAX_HELLO_LINE: &str = "unii: hello: Max, the thoughtful expert for when it matters; weighs the alternatives, checks its reasoning, says how sure it is; the conclusion first; the other assistants ask it too.";
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Assistant {
     pub id: String,
@@ -34,16 +48,18 @@ pub struct Assistant {
     pub about: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub instructions: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub welcome: String,
     pub effort: Effort,
 }
 
 impl Assistant {
     pub fn acorn() -> Assistant {
-        Assistant { id: config::get().chat.clone(), name: "Acorn".into(), about: "General assistant".into(), instructions: String::new(), effort: config::get().pick }
+        Assistant { id: config::get().chat.clone(), name: "Acorn".into(), about: "General assistant".into(), instructions: String::new(), welcome: crate::chat::HELLO.into(), effort: config::get().pick }
     }
 
     pub fn max() -> Assistant {
-        Assistant { id: MAX.into(), name: "Max".into(), about: "Thoughtful expert".into(), instructions: MAX_WAY.into(), effort: Effort::Max }
+        Assistant { id: MAX.into(), name: "Max".into(), about: "Thoughtful expert".into(), instructions: MAX_WAY.into(), welcome: MAX_HELLO.into(), effort: Effort::Max }
     }
 
     pub fn is_acorn(&self) -> bool {
@@ -55,6 +71,24 @@ impl Assistant {
     pub fn work(&self) -> PathBuf {
         let work = &config::get().work;
         if self.is_acorn() { work.clone() } else { work.join("assistants").join(&self.id) }
+    }
+
+    /// What its chat opens with, and the line its memory keeps of it:
+    /// its welcome (one made without one, a plain hello).
+    pub fn hello(&self) -> (String, String) {
+        if self.is_acorn() {
+            return (self.welcome.clone(), crate::chat::HELLO_LINE.into());
+        }
+        if self.id == MAX {
+            return (self.welcome.clone(), MAX_HELLO_LINE.into());
+        }
+        let name = &self.name;
+        let text = match self.welcome.trim() {
+            "" => format!("Hello! This is {name}.\n\nOne chat between us, forever, and a memory that grows. Tell me what you need."),
+            welcome => welcome.to_string(),
+        };
+        let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(240).collect();
+        (text, format!("unii: hello: {name}, {}: {flat}", self.about.trim()))
     }
 
     /// What its system prompt says of it, after Acorn's: nothing for
@@ -101,7 +135,7 @@ fn saved() -> Vec<Assistant> {
 /// A new assistant, saved: its id the name's letters and digits, made
 /// unique among the assistants and the chats on disk (a chat it didn't
 /// start is never taken over).
-pub fn add(name: &str, about: &str, instructions: &str, effort: Effort) -> Result<Assistant, String> {
+pub fn add(name: &str, about: &str, instructions: &str, welcome: &str, effort: Effort) -> Result<Assistant, String> {
     let _filing = FILING.lock().unwrap_or_else(|e| e.into_inner());
     let name = name.trim();
     if name.is_empty() {
@@ -119,7 +153,7 @@ pub fn add(name: &str, about: &str, instructions: &str, effort: Effort) -> Resul
     let base = if slug.is_empty() { "assistant".to_string() } else { slug };
     let taken = |id: &str| all.iter().any(|a| a.id == id) || config::get().chats.join(id).exists();
     let id = std::iter::once(base.clone()).chain((2..).map(|n| format!("{base}-{n}"))).find(|id| !taken(id)).unwrap_or(base);
-    let made = Assistant { id, name: name.into(), about: about.into(), instructions: instructions.trim().into(), effort };
+    let made = Assistant { id, name: name.into(), about: about.into(), instructions: instructions.trim().into(), welcome: welcome.trim().into(), effort };
     let mut mine = saved();
     mine.push(made.clone());
     let dir = &config::get().dir;
