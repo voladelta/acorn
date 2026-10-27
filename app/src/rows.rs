@@ -169,7 +169,7 @@ fn markdown(ui: Ui, body: &str) -> nsh_base::TextViewElement {
         .on_link_press(move |e: &TextViewLinkPressEvent| match e.url.strip_prefix("agent:") {
             Some(name) => ui.open_name(name),
             None => {
-                let _ = open_url(e.url.to_string());
+                drop(open_url(e.url.to_string()));
             }
         })
 }
@@ -269,7 +269,7 @@ fn pictures(ui: Ui, names: &[String]) -> View {
                 let url = format!("file://{}", dir.join(name).display());
                 let open = url.clone();
                 image(url).h(px(120.0)).w(px(160.0)).resize_mode(ResizeMode::Cover).rounded(px(8.0)).border_1().border_color(hair()).on_press(move || {
-                    let _ = open_url(open.clone());
+                    drop(open_url(open.clone()));
                 })
             })
             .collect::<Vec<_>>(),

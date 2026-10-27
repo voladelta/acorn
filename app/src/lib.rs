@@ -514,7 +514,7 @@ fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
                 .items_center()
                 .justify_center()
                 .bg(move || if ready() { ink() } else { hair() })
-                .on_press(move || submit())
+                .on_press(submit)
                 .child(text("↑").text_size(px(17.0)).text_color(paper())),
         )
         .child(when(move || naming.with(Option::is_some) && at.get().is_some(), move || names_menu(ui, Menu { at, naming, pick, hushed }, take)))
