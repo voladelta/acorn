@@ -50,11 +50,9 @@ Every message stays. Old days fold into short notes, recent ones stay sharp, and
 
 Three ways to start:
 
-**Bring your past.** Say \"import my chats\" and I'll pull in your old Claude and ChatGPT history.
-
-**Hand me a job.** Code, research, files on your Mac. Big jobs I split between helpers who work side by side.
-
-**Tell me what's true.** \"I'm vegetarian.\" \"Prod runs on Ubuntu.\" I keep facts like these for good.
+- **Bring your past.** Say \"import my chats\" and I'll pull in your old Claude and ChatGPT history.
+- **Hand me a job.** Code, research, files on your Mac. Big jobs I split between helpers who work side by side.
+- **Tell me what's true.** \"I'm vegetarian.\" \"Prod runs on Ubuntu.\" I keep facts like these for good.
 
 For a hard call, Max is in the sidebar.
 

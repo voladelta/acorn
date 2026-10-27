@@ -53,6 +53,7 @@ pub struct Ui {
     pub toast: Signal<Option<String>>,
     pub draft: Signal<String>,
     pub field: ElementRef,
+    pub list: ElementRef,
     pub now: Signal<i64>,
 }
 
@@ -95,14 +96,16 @@ impl Ui {
         }
     }
 
-    /// A chat shown, from scratch: its engine tells it all anew. The one
-    /// shown again: back to its end.
+    /// A chat shown, from scratch: its engine tells it all anew, from the
+    /// list's top (the last chat's offset would miss a shorter one's rows).
+    /// The one shown again: back to its end.
     pub fn show(self, id: String) {
         if self.shown.get_untracked() == id {
             self.act(Act::Goto(None));
             return;
         }
         self.model.set(self.fresh(&id));
+        self.list.scroll_to_offset(px(0.0), false);
         self.shown.set(id);
         self.send(Command::Attach);
     }
@@ -198,6 +201,7 @@ pub fn App() -> impl IntoElement {
         toast: signal(None),
         draft: signal(String::new()),
         field: element_ref(),
+        list: element_ref(),
         now: signal(acorn_core::now_ms()),
     };
     provide_context(ui);

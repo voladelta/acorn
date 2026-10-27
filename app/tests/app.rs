@@ -27,7 +27,9 @@ fn open() -> Headless {
 
 /// One test, as the engines are the process's: Acorn's chat opens with
 /// its hello; each assistant in the sidebar, picked, shows its own chat,
-/// named as who it is (never its effort), and again when picked again.
+/// named as who it is (never its effort), and again when picked again,
+/// from the top: Acorn's hello, a list and taller, left the list scrolled
+/// past Max's shorter one, which then never drew.
 #[test]
 fn each_assistant_opens_its_own_chat() {
     let dir = chat();
