@@ -1,6 +1,7 @@
 //! The Mac's tools (bash, read, write, edit, as deepseek-harness has them),
-//! live: Acorn does each job by words alone, and the files on disk and the
-//! calls in the chat's db show it did them with these tools, as they work.
+//! live, as luau's code calls them (sh, read, write, edit): Acorn does each
+//! job by words alone, and the files on disk and the luau calls in the
+//! chat's db show it did them with these, as they work.
 
 use nsh_engine::{EngineConfig, Root};
 use nsh_testing::Headless;
@@ -27,6 +28,18 @@ fn tool_calls(db: &Path) -> Vec<String> {
   .lines()
   .map(String::from)
   .collect()
+}
+
+/// A call of a tool luau hides: the Mac's and the web's own.
+fn hidden(call: &str) -> bool {
+  ["bash", "read", "write", "edit", "web_search", "web_fetch"]
+    .iter()
+    .any(|name| call.starts_with(&format!("{name} {{")))
+}
+
+/// Acorn's luau calls' code, in order, one per line.
+fn luau(db: &Path) -> Vec<String> {
+  tool_calls(db).into_iter().filter(|c| c.starts_with("luau {")).collect()
 }
 
 /// Acorn's tool results, in order, one per line.
@@ -95,7 +108,7 @@ fn the_harness_tools_work_live() {
   };
   let p = proj.display();
 
-  // A. bash: an exit code is reported, not failed, and each call says what it does
+  // A. sh: an exit code is reported, not raised
   ask(
     &mut app,
     &format!(
@@ -103,13 +116,17 @@ fn the_harness_tools_work_live() {
     ),
     "EXIT=1",
   );
-  let calls = tool_calls(&db);
-  let bash = calls.iter().find(|c| c.starts_with("bash {")).expect("a bash call");
-  assert!(bash.contains("\"description\""), "{bash}");
   assert!(
-    echoes(&db).iter().any(|e| e.contains("[exit code: 1]")),
+    luau(&db)
+      .iter()
+      .any(|c| c.contains("sh(") && c.contains("test -f missing.txt")),
     "{:?}",
-    echoes(&db)
+    tool_calls(&db)
+  );
+  assert!(
+    !tool_calls(&db).iter().any(|c| hidden(c)),
+    "a hidden tool was called: {:?}",
+    tool_calls(&db)
   );
 
   // B. edit: a file is read before it is edited, and only the edit lands
@@ -122,17 +139,24 @@ fn the_harness_tools_work_live() {
     std::fs::read_to_string(&config).unwrap(),
     "name = \"demo\"\nport = 9090\ndebug = false\n"
   );
-  let calls = tool_calls(&db);
+  let calls = luau(&db);
+  println!("B: calls {calls:#?}");
   let first_change = calls
     .iter()
-    .position(|c| (c.starts_with("edit {") || c.starts_with("write {")) && c.contains("config.toml"))
+    .position(|c| (c.contains("edit(") || c.contains("write(")) && c.contains("config.toml"))
     .expect("an edit of config.toml");
-  println!("B: calls {calls:#?}");
+  let changing = &calls[first_change];
+  let read_first = calls[..first_change]
+    .iter()
+    .any(|c| c.contains("read(") && c.contains("config.toml"))
+    || changing.find("read(").is_some_and(|r| {
+      changing
+        .find("edit(")
+        .or(changing.find("write("))
+        .is_some_and(|e| r < e)
+    });
   assert!(
-    calls[..first_change]
-      .iter()
-      .any(|c| c.starts_with("read {") && c.contains("config.toml"))
-      || echoes(&db).iter().any(|e| e.contains("file has not been read")),
+    read_first || echoes(&db).iter().any(|e| e.contains("file has not been read")),
     "edited without reading, and nothing stopped it"
   );
 
@@ -153,17 +177,11 @@ fn the_harness_tools_work_live() {
   // D. a CRLF file keeps its line endings through an edit
   ask(
     &mut app,
-    &format!(
-      "In {p}/notes.txt replace the word beta with gamma, using your edit tool (not bash), then reply DONE-CRLF."
-    ),
+    &format!("In {p}/notes.txt replace the word beta with gamma, using luau's edit (not sh), then reply DONE-CRLF."),
     "DONE-CRLF",
   );
   assert_eq!(std::fs::read_to_string(&notes).unwrap(), "alpha\r\ngamma\r\n");
-  assert!(
-    tool_calls(&db)
-      .iter()
-      .any(|c| c.starts_with("edit {") && c.contains("notes.txt"))
-  );
+  assert!(luau(&db).iter().any(|c| c.contains("edit(") && c.contains("notes.txt")));
 
   // E. write, then run what was written
   ask(
@@ -174,11 +192,7 @@ fn the_harness_tools_work_live() {
     "HELLO-42",
   );
   assert!(std::fs::read_to_string(proj.join("hello.sh")).unwrap().contains("6*7"));
-  assert!(
-    tool_calls(&db)
-      .iter()
-      .any(|c| c.starts_with("write {") && c.contains("hello.sh"))
-  );
+  assert!(luau(&db).iter().any(|c| c.contains("write(") && c.contains("hello.sh")));
 
   // F. long output keeps its tail and says where the rest went
   ask(
@@ -187,21 +201,25 @@ fn the_harness_tools_work_live() {
     "LAST=300000",
   );
   assert!(
-    echoes(&db)
+    luau(&db)
       .iter()
-      .any(|e| e.contains("[output truncated; full output: "))
+      .any(|c| c.contains("sh(") && c.contains("seq 1 300000"))
   );
 
   // G. a timeout the call asks for kills the command and says so
   ask(
     &mut app,
-    "Run `sleep 30; echo woke` with a timeout of 2000 ms. Tell me what happened, and if it timed out end your reply with TIMEOUT-SEEN.",
+    "Run `sleep 30; echo woke` with a timeout of 2 seconds. Tell me what happened, and if it timed out end your reply with TIMEOUT-SEEN.",
     "TIMEOUT-SEEN",
   );
   assert!(
-    tool_calls(&db)
+    luau(&db)
       .iter()
-      .any(|c| c.starts_with("bash {") && c.contains("timeoutMs"))
+      .any(|c| c.contains("sleep 30") && c.contains("timeout"))
   );
-  assert!(echoes(&db).iter().any(|e| e.contains("[timed out after 2000ms]")));
+  assert!(
+    !tool_calls(&db).iter().any(|c| hidden(c)),
+    "a hidden tool was called: {:?}",
+    tool_calls(&db)
+  );
 }

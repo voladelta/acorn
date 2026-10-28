@@ -18,6 +18,7 @@ pub mod disk;
 pub mod effort;
 pub mod facts;
 pub mod import;
+pub mod luau;
 pub mod machine;
 pub mod memory;
 pub mod names;

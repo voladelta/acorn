@@ -1,11 +1,12 @@
 //! Machine
 //! =======
-//! The tools that touch this Mac: bash, read, write, edit (`tools`), each in
-//! its caller's dir under the work dir. They are DeepSeek's harness's
+//! What touches this Mac: bash, read, write, edit (`tools`), each in its
+//! caller's dir under the work dir, and the parts of them `luau`'s code
+//! calls (`shell`, `text`, `write`, `edit`). They are DeepSeek's harness's
 //! (deepseek-harness: tool-bash, tool-fs, fs-local, fs-observation-policy),
-//! word for word, as DeepSeek's models were trained on them: their names,
-//! arguments, descriptions, results and errors; the harness's foreground
-//! bash (no background jobs) on a Mac with no file sandbox.
+//! word for word: their names, arguments, descriptions, results and
+//! errors; the harness's foreground bash (no background jobs) on a Mac with
+//! no file sandbox. The model reaches them only through luau.
 //!
 //! A caller may write over or edit a file only as it last read, wrote or
 //! edited it (`SEEN`): one it never read, or that changed since, is refused
@@ -36,7 +37,7 @@ const MAX_TIMEOUT_MS: f64 = 600_000.0;
 /// From SIGTERM to SIGKILL, as a command times out.
 const GRACE: Duration = Duration::from_secs(3);
 /// The bytes of each of a command's streams kept: their tail.
-const OUTPUT_BYTES: usize = 64_000;
+pub const OUTPUT_BYTES: usize = 64_000;
 /// The most of a stream its spill file keeps.
 const SPILL_BYTES: u64 = 64 * 1024 * 1024;
 /// What every command's environment overrides.
@@ -52,6 +53,8 @@ const ENV: [(&str, &str); 4] = [
 const READ_LIMIT: usize = 2000;
 const READ_LINE_CHARS: usize = 2000;
 const READ_BYTES: usize = 50 * 1024;
+/// The most of a file a program reads whole (`text`).
+const TEXT_BYTES: u64 = 100 * 1024 * 1024;
 /// The bytes at a file's start in which a NUL makes it binary.
 const BINARY_SAMPLE: usize = 8192;
 
@@ -137,15 +140,6 @@ Commands may run under a file sandbox; a blocked file operation is reported as `
   ]
 }
 
-/// What the system prompt says of the tools, as the harness's sections do.
-pub const GUIDE: &str = "Check the [exit code: N] marker on every bash result; investigate failures before moving on.
-
-Use the read tool — not shell commands like cat — to inspect text files. Use offset and limit to continue reading large files.
-
-Read an existing file before overwriting it with write (the default fs-observation-policy requires it) and prefer edit for targeted changes.
-
-Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.";
-
 /// A tool of `tools`, run in the dir of its caller (`cwd`, under its
 /// assistant's work dir), which is also whose reads count.
 pub async fn run(name: &str, input: &Value, cwd: PathBuf, cancel: CancellationToken) -> Out {
@@ -206,12 +200,8 @@ fn check(name: &str, input: &Value) -> Result<(), String> {
 // Bash
 // ====
 
-/// Runs a command with `bash -c` in its own process group, every process
-/// marked ACORN_RUN, its streams kept apart. On its timeout it gets SIGTERM,
-/// then SIGKILL after GRACE. It ends when the shell has exited and its
-/// streams have closed, or GRACE after the shell exited, whatever still
-/// holds them (a job left running). A stop kills the group and ends the
-/// wait at once.
+/// A bash call: its arguments checked, its command run (`shell`), and what
+/// came of it rendered as the model reads it.
 async fn bash(cwd: &Path, input: &Value, cancel: CancellationToken) -> Out {
   let text = |k: &str| input[k].as_str().unwrap_or_default();
   let (command, description) = (text("command"), text("description"));
@@ -231,12 +221,63 @@ async fn bash(cwd: &Path, input: &Value, cancel: CancellationToken) -> Out {
     Some(dir) => cwd.join(dir),
     None => cwd.to_path_buf(),
   };
+  match shell(command, &workdir, timeout, cancel).await {
+    Ok(ran) => Out::ok(render(&ran.out, &ran.err, ran.timed_out, timeout, &ran.status)),
+    Err(why) => Out::fail(why),
+  }
+}
+
+/// A command run to its end: its streams, whether it timed out, how it
+/// exited.
+pub struct Ran {
+  out: Stream,
+  err: Stream,
+  pub timed_out: bool,
+  pub status: std::process::ExitStatus,
+}
+
+impl Ran {
+  /// Its stdout and stderr as text: each its tail alone, no note.
+  pub fn tails(&self) -> (String, String) {
+    let tail = |s: &Stream| String::from_utf8_lossy(&s.tail).into_owned();
+    (tail(&self.out), tail(&self.err))
+  }
+
+  /// Where the whole of its stdout and stderr went, each if cut and kept.
+  pub fn spills(&self) -> (Option<String>, Option<String>) {
+    let spill = |s: &Stream| s.spill.as_ref().map(|(p, ..)| p.display().to_string());
+    (spill(&self.out), spill(&self.err))
+  }
+
+  /// Whether either stream was cut to its tail.
+  pub fn truncated(&self) -> bool {
+    self.out.truncated || self.err.truncated
+  }
+
+  /// Its exit code; killed by a signal, 128 plus the signal, as a shell
+  /// reports it.
+  pub fn code(&self) -> i32 {
+    self
+      .status
+      .code()
+      .unwrap_or_else(|| 128 + self.status.signal().unwrap_or(0))
+  }
+}
+
+/// Runs a command with `bash -c` in `workdir`, in its own process group,
+/// every process marked ACORN_RUN, its streams kept apart. On its timeout
+/// (ms, at most MAX_TIMEOUT_MS) it gets SIGTERM, then SIGKILL after GRACE.
+/// It ends when the shell has exited and its streams have closed, or GRACE
+/// after the shell exited, whatever still holds them (a job left running).
+/// A stop kills the group and ends the wait at once.
+pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: CancellationToken) -> Result<Ran, String> {
+  let timeout = timeout.min(MAX_TIMEOUT_MS);
   SHELLS.lock().retain(|&pid, exited| group(pid, exited));
   let mut cmd = tokio::process::Command::new("bash");
   cmd
     .arg("-c")
     .arg(command)
-    .current_dir(&workdir)
+    .current_dir(workdir)
     .envs(ENV)
     .env("ACORN_RUN", &*RUN)
     .env_remove(config::KEY_VAR)
@@ -244,11 +285,9 @@ async fn bash(cwd: &Path, input: &Value, cancel: CancellationToken) -> Out {
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped())
     .process_group(0);
-  let mut child = match cmd.spawn() {
-    Ok(child) => child,
-    Err(err) => return Out::fail(err.to_string()),
-  };
+  let mut child = cmd.spawn().map_err(|err| err.to_string())?;
   let pid = child.id().map_or(0, |p| p as i32);
+  let mut reap = Reap(pid);
   let exited = Arc::new(AtomicBool::new(false));
   SHELLS.lock().insert(pid, exited.clone());
   let (out, err) = (
@@ -275,7 +314,7 @@ async fn bash(cwd: &Path, input: &Value, cancel: CancellationToken) -> Out {
         exited.store(true, Ordering::Relaxed);
         match got {
           Ok(got) => status = Some(got),
-          Err(why) => return Out::fail(why.to_string()),
+          Err(why) => return Err(why.to_string()),
         }
         drain.as_mut().reset(tokio::time::Instant::now() + GRACE);
       }
@@ -290,16 +329,35 @@ async fn bash(cwd: &Path, input: &Value, cancel: CancellationToken) -> Out {
       }
       () = cancel.cancelled() => {
         signal(-pid, libc::SIGKILL);
+        reap.0 = 0;
         if status.is_none() {
           let _ = wait.await;
           exited.store(true, Ordering::Relaxed);
         }
-        return Out::fail("tool call aborted");
+        return Err("tool call aborted".into());
       }
     }
   }
   let status = status.expect("the loop ends once the shell exited");
-  Out::ok(render(&out.lock(), &err.lock(), timed_out, timeout, &status))
+  reap.0 = 0;
+  let take = |s: &Mutex<Stream>| std::mem::take(&mut *s.lock());
+  Ok(Ran {
+    out: take(&out),
+    err: take(&err),
+    timed_out,
+    status,
+  })
+}
+
+/// A command's process group, killed if its run is dropped before it ends
+/// (a program gave the call up), so nothing it started runs on; 0 once it
+/// ended.
+struct Reap(i32);
+
+impl Drop for Reap {
+  fn drop(&mut self) {
+    signal(-self.0, libc::SIGKILL);
+  }
 }
 
 /// One stream of a command: the tail of it kept, and the whole of it,
@@ -629,6 +687,46 @@ fn read(cwd: &Path, input: &Value) -> Result<String, String> {
   ))
 }
 
+/// A text file as a program reads it (luau's `read`): whole, or `limit`
+/// lines from line `offset`, unnumbered and uncut, up to TEXT_BYTES. It
+/// counts as read, so the caller may then write or edit the file.
+pub fn text(cwd: &Path, path: &str, offset: Option<usize>, limit: Option<usize>) -> Result<String, String> {
+  let t = target(cwd, path)?;
+  let fail = |why: &str| format!("cannot read \"{}\": {why}", t.shown);
+  let Some(meta) = probe(&t.key)? else {
+    see(cwd, &t.key, Seen::Absent);
+    return Err(fail("not found"));
+  };
+  if !meta.is_file() {
+    return Err(fail("not a regular file"));
+  }
+  if meta.len() > TEXT_BYTES {
+    return Err(fail(&format!(
+      "{} bytes, over {} MB: read it in parts with sh (head, sed -n)",
+      meta.len(),
+      TEXT_BYTES >> 20
+    )));
+  }
+  let bytes = fs::read(&t.key).map_err(|e| fail(&e.to_string()))?;
+  if bytes[..bytes.len().min(BINARY_SAMPLE)].contains(&0) {
+    return Err(fail("binary file"));
+  }
+  let raw = std::str::from_utf8(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
+    .map_err(|_| fail("invalid UTF-8 text"))?;
+  see(cwd, &t.key, Seen::Present(version(&meta)));
+  if offset.is_none() && limit.is_none() {
+    return Ok(raw.to_string());
+  }
+  let from = offset.unwrap_or(1).max(1) - 1;
+  Ok(
+    raw
+      .split_inclusive('\n')
+      .skip(from)
+      .take(limit.unwrap_or(usize::MAX))
+      .collect(),
+  )
+}
+
 /// The lines read: numbered, how many the file has, and whether READ_BYTES
 /// cut them short.
 struct Window {
@@ -750,7 +848,7 @@ fn stale(why: String) -> String {
 }
 
 /// A whole file written: over one only as last seen, else a new one.
-fn write(cwd: &Path, input: &Value) -> Result<String, String> {
+pub fn write(cwd: &Path, input: &Value) -> Result<String, String> {
   let path = input["file_path"].as_str().unwrap_or_default();
   if path.trim().is_empty() {
     return Err("file_path must be a non-empty string".into());
@@ -790,7 +888,7 @@ fn write(cwd: &Path, input: &Value) -> Result<String, String> {
 }
 
 /// One literal replacement in a file the caller read as it is now.
-fn edit(cwd: &Path, input: &Value) -> Result<String, String> {
+pub fn edit(cwd: &Path, input: &Value) -> Result<String, String> {
   let text = |k: &str| input[k].as_str().unwrap_or_default();
   let (path, old, new) = (text("file_path"), text("old_string"), text("new_string"));
   let all = input["replace_all"].as_bool().unwrap_or(false);

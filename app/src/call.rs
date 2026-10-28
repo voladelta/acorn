@@ -123,6 +123,13 @@ fn shown(name: &str, x: Map<String, Value>) -> (String, Vec<Code>) {
     "date" => (msg_show(x.get("id"), None), vec![]),
     "web_search" => (str("query"), vec![]),
     "web_fetch" => (str("url"), vec![]),
+    "luau" => (
+      str("description"),
+      vec![Code {
+        k: String::new(),
+        x: str("code"),
+      }],
+    ),
     "hire" | "spawn" => {
       let tasks: Vec<&Value> = x
         .get("tasks")
@@ -298,6 +305,11 @@ mod tests {
     assert_eq!(c.head, "\"bend\" {\"a\":1}");
     let c = parse(r#"web_search {"query":"acorn site:github.com","count":3}"#);
     assert_eq!(c.head, "acorn site:github.com");
+    let c = parse(r#"luau {"description":"Count rows","code":"print(#rows)"}"#);
+    assert_eq!(
+      (c.head.as_str(), c.blocks[0].x.as_str()),
+      ("Count rows", "print(#rows)")
+    );
     assert_eq!(parse("no call").name, "");
     assert_eq!(
       report_read("[RedAnt]\ndone\n\nFull chat: zoom(\"RedAnt\")"),

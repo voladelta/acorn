@@ -6,14 +6,15 @@
 //! with the user it also creates assistants and consults them (PEERS),
 //! keeps facts and purges messages (KEEP), and sets goals, reads usage,
 //! imports, exports and draws its memory (HOME); in a thread, where
-//! another assistant asks it something, it gets none of those. bash,
-//! read, write and edit (`machine`) run on this Mac, each caller in its
-//! own dir under the work dir; web_search and web_fetch (`web`) read the
-//! web. The agents themselves run in `chat::agents`.
+//! another assistant asks it something, it gets none of those. Its hands
+//! on this Mac and the web are luau alone (`luau`): code that reads,
+//! writes, edits and runs commands (`machine`), each caller in its own dir
+//! under the work dir, and searches and fetches the web (`web`). The
+//! agents themselves run in `chat::agents`.
 
 use crate::ai::Spec;
-use crate::machine::{self, spec};
-use crate::{config, effort, memory, skills, web};
+use crate::machine::spec;
+use crate::{config, effort, luau, memory, skills};
 use serde_json::json;
 use std::path::Path;
 
@@ -167,9 +168,8 @@ an agent only for a task.
 fn mac(work: &Path) -> String {
   let work = work.display();
   format!(
-    "Your bash, read, write and edit tools run on the user's Mac, in your work\ndir, {work}/<you> (Acorn's: {work}/main), where relative paths start.\n\n{guide}\n\n{web}",
-    guide = machine::GUIDE,
-    web = web::GUIDE,
+    "Your hands on the user's Mac and on the web are your luau tool, and only\nit: its code reads, writes and edits files, runs commands and searches\nand fetches the web, in your work dir, {work}/<you> (Acorn's:\n{work}/main), where relative paths start.\n\n{luau}",
+    luau = luau::GUIDE,
   )
 }
 
@@ -392,10 +392,10 @@ fn keep() -> Vec<Spec> {
   ]
 }
 
-/// The tools that run on this Mac (in the caller's own dir), then the
-/// web's.
+/// The hands: luau, whose code runs on this Mac (in the caller's own dir)
+/// and reads the web.
 fn kit() -> Vec<Spec> {
-  machine::tools().into_iter().chain(web::tools()).collect()
+  vec![luau::tool()]
 }
 
 /// What a caller may use: an assistant with the user all; one answering

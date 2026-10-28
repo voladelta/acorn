@@ -10,7 +10,7 @@ use crate::ai::{self, Handle, Out, Spec, Toolbox};
 use crate::effort::Effort;
 use crate::tools::{self, MAIN, SUB_AT, SUB_NOTE};
 use crate::wire::{Event, Live};
-use crate::{Block, Kind, Served, clip, config, machine};
+use crate::{Block, Kind, Served, clip, config};
 use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -273,8 +273,8 @@ impl Engine {
         ),
         Err(why) => Out::fail(why),
       },
-      "web_search" | "web_fetch" => crate::web::run(name, &input, cancel).await,
-      _ => machine::run(name, &input, cwd, cancel).await,
+      "luau" => crate::luau::run(&input, cwd, cancel).await,
+      _ => Out::fail(format!("No tool {name}.")),
     }
   }
 
