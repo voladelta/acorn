@@ -46,17 +46,17 @@ pub const HELLO: &str = "Hello! This is Acorn.
 
 One chat between us, and it never ends.
 
-Every message stays. Old days fold into short notes, recent ones stay sharp, and when the details matter I unfold them. Talk to me for a year and I'll still find what you said on day one.
+Every message stays. Old days fold into short notes, recent ones stay sharp, and when the details matter I dig them back up. Squirrels forget where they buried half their acorns. I don't.
 
 Three ways to start:
 
-- **Bring your past.** Say \"import my chats\" and I'll pull in your old Claude and ChatGPT history.
-- **Hand me a job.** Code, research, files on your Mac. Big jobs I split between helpers who work side by side.
-- **Tell me what's true.** \"I'm vegetarian.\" \"Prod runs on Ubuntu.\" I keep facts like these for good.
+- **Bring your past.** Say \"import my chats\" and I'll move your old Claude and ChatGPT history in.
+- **Hand me a job.** Plan the trip, untangle the spreadsheet, write the email you've been dodging. Big jobs I split between helpers who work side by side.
+- **Tell me what's true.** \"I'm vegetarian.\" \"Mom's birthday is May 3.\" I keep facts like these for good.
 
 For a hard call, Max is in the sidebar.
 
-So: day one. What are we building?";
+Every oak was once a nut that held its ground. So: day one. What's on your mind?";
 
 pub const HELLO_LINE: &str = "unii: hello: Acorn, one endless chat; every message kept, old days folded into notes, unfolded when needed; to start: import past Claude and ChatGPT chats, hand it a job (helpers in parallel), tell it facts to keep; Max in the sidebar for hard calls.";
 
