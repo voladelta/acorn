@@ -1,11 +1,11 @@
 //! Config
 //! ======
 //! Acorn's settings. Its dir ($ACORN_DIR, default ~/.acorn) holds
-//! config.json; the chats are in `chats`/<id>. Each key of config.json may
-//! be set as ACORN_<KEY> instead; a path may start with "~/". The API key
-//! is DEEPSEEK_API_KEY, else config.json's `deepseek_api_key` (an app
-//! opened from the Finder has no shell's variables); no program the agent
-//! runs inherits it (`machine`).
+//! config.json; the chats are in `chats`/<id> (default <dir>/chats). Each
+//! key of config.json may be set as ACORN_<KEY> instead; a path may start
+//! with "~/". The API key is DEEPSEEK_API_KEY, else config.json's
+//! `deepseek_api_key` (an app opened from the Finder has no shell's
+//! variables); no program the agent runs inherits it (`machine`).
 
 use crate::effort::Effort;
 use std::collections::HashMap;
@@ -85,7 +85,7 @@ impl Config {
       .filter(|k| !k.trim().is_empty())
       .unwrap_or_else(|| get("deepseek_api_key", ""));
     Ok(Config {
-      chats: expand(&get("chats", "~/.chats")),
+      chats: expand(&get("chats", &format!("{}/chats", dir.display()))),
       work: expand(&get("work", &format!("{}/work", dir.display()))),
       rules: (!rules.is_empty()).then(|| expand(&rules)),
       after: get("after", ""),

@@ -109,7 +109,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 |---|---|---|
 | `deepseek_api_key` | none | The API key; the `DEEPSEEK_API_KEY` variable wins. No program the agent runs inherits it |
 | `chat` | `default` | Acorn's own chat id (letters, digits, `_`, `-`) |
-| `chats` | `~/.chats` | Where the chats live, a dir each by id |
+| `chats` | `$ACORN_DIR/chats` | Where the chats live, a dir each by id |
 | `work` | `$ACORN_DIR/work` | Where the agents' tools work |
 | `pick` | `high` | Acorn's effort: `none`, `low`, `high`, `max`, or `deepseek-flash:<effort>` (Max's is max; a created one's is set when created) |
 | `compactor` | `low` | The effort of every summary call |
@@ -126,10 +126,10 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `~/.acorn/assistants.json` | The assistants created, oldest first |
 | `~/.acorn/facts.db` | Facts, shared by all assistants |
 | `~/.acorn/work/` | The agents' work dirs: `main` for Acorn, `assistants/<id>` for others |
-| `~/.chats/<id>/chat.db` | A chat: messages, agent logs, the summary tree, the view and usage (SQLite, WAL) |
-| `~/.chats/<id>/docs/images/` | The chat's images, by hash |
-| `~/.chats/<id>/chat.db.wipe` | Present while a purge's wipe is owed |
-| `~/.chats/<id>/with/<asker>/` | The thread where assistant `<asker>` asks `<id>`, kept as a chat is |
+| `~/.acorn/chats/<id>/chat.db` | A chat: messages, agent logs, the summary tree, the view and usage (SQLite, WAL) |
+| `~/.acorn/chats/<id>/docs/images/` | The chat's images, by hash |
+| `~/.acorn/chats/<id>/chat.db.wipe` | Present while a purge's wipe is owed |
+| `~/.acorn/chats/<id>/with/<asker>/` | The thread where assistant `<asker>` asks `<id>`, kept as a chat is |
 
 `export` writes the whole memory as JSON to `~/Downloads/acorn-memory-<date-time>.json`; `tree` writes the tree as an HTML page to the temp dir and opens it.
 
