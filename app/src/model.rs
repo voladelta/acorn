@@ -456,7 +456,7 @@ mod tests {
     m.hear(Event::Know {
       whole: vec![
         (0, entry(Kind::User, "hi")),
-        (1, entry(Kind::Tool, "shell {\"command\":\"ls\"}")),
+        (1, entry(Kind::Tool, "bash {\"command\":\"ls\"}")),
       ],
       nodes: vec![],
     });
@@ -469,7 +469,7 @@ mod tests {
       matches!(&body[0][0], Row::Box { .. }),
       "a user's message before the turn opens"
     );
-    assert!(matches!(&body[1][0], Row::Msg { call: Some(c), .. } if c.name == "shell"));
+    assert!(matches!(&body[1][0], Row::Msg { call: Some(c), .. } if c.name == "bash"));
   }
 
   /// Words are the one act: sent at work they go as any (the engine cuts

@@ -48,7 +48,7 @@ pub fn tool_glyph(name: &str) -> &'static str {
     "zoom" => "🔍",
     "date" => "📅",
     "list_skills" | "load_skill" => "🧰",
-    "shell" => "⌨️",
+    "bash" => "⌨️",
     "read" => "📖",
     "write" => "📄",
     "edit" => "📝",

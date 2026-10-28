@@ -194,7 +194,10 @@ fn message(ui: Ui, kind: Kind, who: String, body: String, call: Option<Call>, im
           call
             .blocks
             .iter()
-            .map(|b| framed(if b.k.is_empty() { None } else { Some(b.k.clone()) }, code(&b.x)))
+            .map(|b| match text::output(&b.x).as_slice() {
+              [diff @ Out::Diff { .. }] => file(diff.clone()),
+              _ => framed(if b.k.is_empty() { None } else { Some(b.k.clone()) }, code(&b.x)),
+            })
             .collect::<Vec<_>>(),
         )
         .into_element()

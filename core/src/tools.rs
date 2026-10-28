@@ -6,7 +6,7 @@
 //! with the user it also creates assistants and consults them (PEERS),
 //! keeps facts and purges messages (KEEP), and sets goals, reads usage,
 //! imports, exports and draws its memory (HOME); in a thread, where
-//! another assistant asks it something, it gets none of those. shell,
+//! another assistant asks it something, it gets none of those. bash,
 //! read, write and edit (`machine`) run on this Mac, each caller in its
 //! own dir under the work dir; web_search and web_fetch (`web`) read the
 //! web. The agents themselves run in `chat::agents`.
@@ -167,7 +167,8 @@ an agent only for a task.
 fn mac(work: &Path) -> String {
   let work = work.display();
   format!(
-    "Your shell, read, write and edit tools run on the user's Mac, in your work\ndir, {work}/<you> (Acorn's: {work}/main), where relative paths start."
+    "Your bash, read, write and edit tools run on the user's Mac, in your work\ndir, {work}/<you> (Acorn's: {work}/main), where relative paths start.\n\n{guide}",
+    guide = machine::GUIDE,
   )
 }
 
@@ -390,21 +391,16 @@ fn keep() -> Vec<Spec> {
   ]
 }
 
-/// The tools that run on this Mac, as one caller's: in its own dir; then
-/// the web's.
-fn kit(work: &Path, who: &str) -> Vec<Spec> {
-  let work = work.display().to_string();
-  let mac = machine::tools().into_iter().map(|t| Spec {
-    info: format!("{} It runs on this Mac, in {work}/{who}.", t.info),
-    ..t
-  });
-  mac.chain(web::tools()).collect()
+/// The tools that run on this Mac (in the caller's own dir), then the
+/// web's.
+fn kit() -> Vec<Spec> {
+  machine::tools().into_iter().chain(web::tools()).collect()
 }
 
 /// What a caller may use: an assistant with the user all; one answering
 /// in a thread (`thread`) its work tools alone; a hired agent its own and
-/// the Mac's. work: its assistant's work dir.
-pub fn list(work: &Path, who: &str, thread: bool) -> Vec<Spec> {
+/// the Mac's.
+pub fn list(who: &str, thread: bool) -> Vec<Spec> {
   let mut specs = own();
   if who == MAIN {
     specs.extend(boss());
@@ -413,10 +409,8 @@ pub fn list(work: &Path, who: &str, thread: bool) -> Vec<Spec> {
       specs.extend(keep());
       specs.extend(home());
     }
-    specs.extend(kit(work, who));
-  } else {
-    specs.extend(kit(work, who));
   }
+  specs.extend(kit());
   specs
 }
 

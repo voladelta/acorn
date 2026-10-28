@@ -91,7 +91,7 @@ pub struct Kit {
 
 impl Toolbox for Kit {
   fn specs(&self) -> Vec<Spec> {
-    tools::list(&self.work, &self.who, self.thread)
+    tools::list(&self.who, self.thread)
   }
 
   fn call(&self, name: String, input: Value, cancel: CancellationToken) -> BoxFuture<'static, Out> {

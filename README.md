@@ -17,7 +17,7 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Memory tree** | Every message kept in `chat.db`; a binary tree of summaries, at most 512 bytes each, built in the background by the compactor |
 | **Bounded view** | The view the model reads stays under 2 MB (about 500k tokens, within DeepSeek's 1M context); past that, the oldest lines merge first |
 | **Zoom** | `zoom(id, n)` opens a line into the two it was made from; `zoom(id, 1)` gives a message whole, with its images |
-| **Agent tools** | Shell, read, write and edit on your Mac, in a work dir of the agent's own; web search and fetch, through DeepSeek's Search and Fetch APIs; agents hired for one task, in parallel |
+| **Agent tools** | bash, read, write and edit on your Mac, as DeepSeek's harness has them, in a work dir of the agent's own; web search and fetch, through DeepSeek's Search and Fetch APIs; agents hired for one task, in parallel |
 | **Assistants** | Acorn (general assistant), Max (thoughtful expert) and those they create on request, each a person with a name and an about, its own chat, memory and work dir, in a sidebar |
 | **Cut in** | A message sent while an assistant talks or works stops it at once, as a person would stop and listen; it answers you, then goes on only if you say so |
 | **Consult** | Assistants ask each other (`list_assistants`, `search_assistants`, `ask_assistant`), each pair in a thread of its own that never ends |
@@ -92,7 +92,7 @@ Ask for what you want in plain words: "stop", "fire Scout", "hire three agents t
 | Tool | Who | What |
 |---|---|---|
 | `zoom`, `date` | everyone | Open a line of the view; a message's date |
-| `shell`, `read`, `write`, `edit` | assistants, hired agents | Run on this Mac in the caller's own dir under the work dir |
+| `bash`, `read`, `write`, `edit` | assistants, hired agents | Run on this Mac in the caller's own dir under the work dir, as deepseek-harness has them (bash times out after 120 s; write and edit need a read first) |
 | `hire`, `tell`, `fire` | assistants | Hire agents for one task each, in parallel, in the background; message one at work (it cuts in); fire one or all |
 | `create_assistant` | with you | Hire an assistant: name, about, effort, instructions |
 | `list_assistants`, `search_assistants`, `ask_assistant` | with you | Find another assistant and ask it, in your two's thread; its reply comes back as a message |

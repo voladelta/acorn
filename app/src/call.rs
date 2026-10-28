@@ -3,8 +3,8 @@
 //! A tool call as people read it. Logged as its tool's name, a space and
 //! its input's JSON (`zoom {"id":6243,"n":1}`), it shows as its emoji
 //! (`look::tool_glyph`), its name in bold and a head, as its tool reads: a
-//! command as itself; a file tool its path, read's lines after it; edit's
-//! files (the diff comes in its result); zoom and date the message
+//! command as itself; a file tool its path, read's lines after it, and
+//! write's content and edit's replacement as a diff; zoom and date the message
 //! (`#6243`, a line `#6243+8`, an agent by name); hire its tasks, tell
 //! its name and text in a block. Any other call shows its
 //! name and short values as arguments, over a block for each other value,
@@ -101,22 +101,20 @@ pub fn line(c: &Call) -> String {
 fn shown(name: &str, x: Map<String, Value>) -> (String, Vec<Code>) {
   let str = |k: &str| x.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
   match name {
-    "shell" => (str("command"), vec![]),
+    "bash" => (str("command"), vec![]),
     "read" => (
-      format!("{}{}", str("path"), lines_show(x.get("offset"), x.get("limit"))),
+      format!("{}{}", str("file_path"), lines_show(x.get("offset"), x.get("limit"))),
       vec![],
     ),
-    "write" => (str("path"), vec![]),
-    "edit" if x.get("edits").is_some_and(Value::is_array) => {
-      let mut files: Vec<String> = Vec::new();
-      for e in x["edits"].as_array().unwrap() {
-        if let Some(p) = e["path"].as_str()
-          && !files.iter().any(|f| f == p)
-        {
-          files.push(p.into());
-        }
-      }
-      (files.join(", "), vec![])
+    "write" => {
+      let p = str("file_path");
+      let block = diff_block(&p, "", &str("content"));
+      (p, block)
+    }
+    "edit" => {
+      let p = str("file_path");
+      let block = diff_block(&p, &str("old_string"), &str("new_string"));
+      (p, block)
     }
     "zoom" => {
       let at = x.get("at").map_or(String::new(), |a| format!(" from char {a}"));
@@ -142,6 +140,41 @@ fn shown(name: &str, x: Map<String, Value>) -> (String, Vec<Code>) {
     "tell" => (str("name"), x.get("message").map(text_block).unwrap_or_default()),
     _ => input_shown(x),
   }
+}
+
+/// A replacement as a unified diff of its texts alone, as a block (none
+/// if both are empty): where in the file it falls, the call doesn't say.
+fn diff_block(path: &str, old: &str, new: &str) -> Vec<Code> {
+  let lines = |t: &str| -> Vec<String> {
+    if t.is_empty() {
+      vec![]
+    } else {
+      t.strip_suffix('\n')
+        .unwrap_or(t)
+        .split('\n')
+        .map(String::from)
+        .collect()
+    }
+  };
+  let (old, new) = (lines(old), lines(new));
+  if old.is_empty() && new.is_empty() {
+    return vec![];
+  }
+  let at = |n: usize| usize::from(n > 0);
+  let mut x = format!(
+    "--- {path}\n+++ {path}\n@@ -{},{} +{},{} @@",
+    at(old.len()),
+    old.len(),
+    at(new.len()),
+    new.len()
+  );
+  for l in &old {
+    x.push_str(&format!("\n-{l}"));
+  }
+  for l in &new {
+    x.push_str(&format!("\n+{l}"));
+  }
+  vec![Code { k: String::new(), x }]
 }
 
 /// Any tool's input: its short values as arguments, the rest in blocks.
@@ -252,10 +285,15 @@ mod tests {
   fn calls_read_as_their_tools() {
     let c = parse(r#"zoom {"id":6243,"n":8}"#);
     assert_eq!((c.name.as_str(), c.head.as_str()), ("zoom", "#6243+8"));
-    let c = parse(r#"shell {"command":"ls -la"}"#);
+    let c = parse(r#"bash {"description":"List files","command":"ls -la"}"#);
     assert_eq!(c.head, "ls -la");
-    let c = parse(r#"shell {"command":"cargo te"#);
-    assert_eq!((c.name.as_str(), c.head.as_str()), ("shell", "cargo te"));
+    let c = parse(r#"bash {"description":"Run tests","command":"cargo te"#);
+    assert_eq!((c.name.as_str(), c.head.as_str()), ("bash", "cargo te"));
+    let c = parse(r#"read {"file_path":"a.rs","offset":4,"limit":2}"#);
+    assert_eq!(c.head, "a.rs:4-5");
+    let c = parse(r#"edit {"file_path":"a.rs","old_string":"x\ny","new_string":"z"}"#);
+    assert_eq!(c.head, "a.rs");
+    assert_eq!(c.blocks[0].x, "--- a.rs\n+++ a.rs\n@@ -1,2 +1,1 @@\n-x\n-y\n+z");
     let c = parse(r#"lookup {"q":"bend","deep":{"a":1}}"#);
     assert_eq!(c.head, "\"bend\" {\"a\":1}");
     let c = parse(r#"web_search {"query":"acorn site:github.com","count":3}"#);

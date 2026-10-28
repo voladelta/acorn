@@ -154,14 +154,17 @@ async fn turns(
         if cancel.is_cancelled() {
           return Ok(());
         }
-        let text = if out.fail {
-          format!("error: {}", out.text)
+        let out = if out.fail {
+          Out {
+            text: format!("Error: {}", out.text),
+            ..out
+          }
         } else {
-          out.text.clone()
+          out
         };
         on(Event::Entry {
           kind: Kind::Echo,
-          text,
+          text: out.text.clone(),
           of: Some(u.id.clone()),
         });
         backs.push((u.id, out));
@@ -630,7 +633,7 @@ mod tests {
       },
       Live {
         kind: Kind::Tool,
-        text: "shell {\"comm".into(),
+        text: "bash {\"comm".into(),
       },
     ];
     let step = fail("stopped", &seen, Halt::Lost);

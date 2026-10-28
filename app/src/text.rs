@@ -33,14 +33,10 @@ pub enum Out {
 /// the text around them a File named "result" (none if blank).
 pub fn output(s: &str) -> Vec<Out> {
   let s = s.replace('\r', "");
-  let lines: Vec<&str> = s.split('\n').collect();
-  if let Some((k, n)) = lines.last().and_then(|l| read_mark(l)) {
-    return vec![Out::File {
-      k,
-      n,
-      x: lines[..lines.len() - 1].iter().map(ToString::to_string).collect(),
-    }];
+  if let Some(file) = read_envelope(&s) {
+    return vec![file];
   }
+  let lines: Vec<&str> = s.split('\n').collect();
   let mut out = Vec::new();
   let (mut i, mut at) = (0, 0);
   while i < lines.len() {
@@ -56,18 +52,27 @@ pub fn output(s: &str) -> Vec<Out> {
   out
 }
 
-/// "[lines 4-7 of 15...]": its text, its first line.
-fn read_mark(l: &str) -> Option<(String, u64)> {
-  let inner = l.strip_prefix('[')?.strip_suffix(']')?;
-  let rest = inner.strip_prefix("lines ")?;
-  let (from, rest) = rest.split_once('-')?;
-  let (_, rest) = rest.split_once(" of ")?;
-  let n = from.parse().ok()?;
-  rest
-    .split(|c: char| !c.is_ascii_digit())
-    .next()
-    .filter(|d| !d.is_empty())?;
-  (!inner.contains(']')).then(|| (inner.to_string(), n))
+/// A read's result: `<path>`, `<type>file</type>`, then in `<content>`
+/// its lines as "n: text", a blank line and a footer in parentheses, which
+/// names the file.
+fn read_envelope(s: &str) -> Option<Out> {
+  let rest = s.strip_prefix("<path>")?;
+  let (_, rest) = rest.split_once("</path>\n<type>file</type>\n<content>\n")?;
+  let body = rest.strip_suffix("\n</content>")?;
+  let (lines, footer) = body.rsplit_once("\n\n").unwrap_or(("", body));
+  let k = footer.strip_prefix('(')?.strip_suffix(')')?.to_string();
+  let mut n = None;
+  let mut x = Vec::new();
+  for l in lines.split('\n').filter(|_| !lines.is_empty()) {
+    let (num, text) = l.split_once(": ")?;
+    n.get_or_insert(num.parse().ok()?);
+    x.push(text.to_string());
+  }
+  Some(Out::File {
+    k,
+    n: n.unwrap_or(1),
+    x,
+  })
 }
 
 fn result(lines: &[&str]) -> Option<Out> {
@@ -412,18 +417,22 @@ mod tests {
 
   #[test]
   fn results_read_as_files() {
-    let read = output("a\nb\n[lines 4-5 of 9]");
+    let read = output(
+      "<path>/a/f</path>\n<type>file</type>\n<content>\n4: a\n5: b: c\n\n(Showing lines 4-5 of 9. Use offset=6 to continue.)\n</content>",
+    );
     assert_eq!(
       read,
       vec![Out::File {
-        k: "lines 4-5 of 9".into(),
+        k: "Showing lines 4-5 of 9. Use offset=6 to continue.".into(),
         n: 4,
-        x: vec!["a".into(), "b".into()]
+        x: vec!["a".into(), "b: c".into()]
       }]
     );
+    let empty = output("<path>/a/f</path>\n<type>file</type>\n<content>\n(End of file - total 0 lines)\n</content>");
+    assert!(matches!(&empty[0], Out::File { x, .. } if x.is_empty()));
     let diff = output("--- f\n+++ f\n@@ -1,2 +1,2 @@\n a\n-b\n+B");
     assert!(matches!(&diff[0], Out::Diff { k, x } if k == "f" && x[0].len() == 3));
-    assert_eq!(output("ok\n(exit 0 in 0.1 s)").len(), 1);
+    assert_eq!(output("ok\n[exit code: 1]").len(), 1);
     assert_eq!(flat("**bold** and `code` [x](http://y)"), "bold and code x");
     assert_eq!(
       link_names("ask [RedAnt] and [x](y)"),
