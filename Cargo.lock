@@ -9,6 +9,7 @@ dependencies = [
  "acorn-core",
  "chrono",
  "env_logger",
+ "image",
  "mimalloc",
  "nsh-base",
  "nsh-core",

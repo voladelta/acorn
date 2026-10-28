@@ -64,31 +64,74 @@ pub fn image_kind(head: &[u8]) -> Option<&'static str> {
 
 pub const IMAGES_ARE: &str = "Images are png, jpeg, gif or webp.";
 
-/// An image's bytes put in a chat's dir by their hash, its copy for models
-/// beside it (scaled to FIT, as a JPEG); its name. Blocking: run off the
-/// chat's lock.
-pub fn image_add(dir: &Path, bytes: &[u8]) -> Result<String> {
-  use sha2::Digest;
+/// An image read: its kind, its width and height, and its copy for models
+/// if it needs one.
+struct Fitted {
+  kind: &'static str,
+  small: Option<Vec<u8>>,
+  size: (u32, u32),
+}
+
+/// An image read, its copy for models scaled to FIT, as a JPEG, when
+/// larger than that or IMAGE bytes (and no more than PIXELS decoded; a
+/// larger one goes as is).
+fn fitted(bytes: &[u8]) -> Result<Fitted> {
   let kind = image_kind(bytes).context(IMAGES_ARE)?;
   let img = image::load_from_memory(bytes).context(IMAGES_ARE)?;
   let (w, h) = (img.width(), img.height());
+  let k = (FIT / w.max(h) as f64).min(1.0);
+  if !((k < 1.0 || bytes.len() > IMAGE) && (w as u64) * (h as u64) <= PIXELS) {
+    return Ok(Fitted {
+      kind,
+      small: None,
+      size: (w, h),
+    });
+  }
+  let small = img.resize_exact(
+    (w as f64 * k).round() as u32,
+    (h as f64 * k).round() as u32,
+    image::imageops::FilterType::Lanczos3,
+  );
+  let mut out = Vec::new();
+  image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&small.to_rgb8())?;
+  Ok(Fitted {
+    kind,
+    small: Some(out),
+    size: (w, h),
+  })
+}
+
+/// An image as models get it (its copy, if it needs one), and its width
+/// and height. Blocking.
+pub fn image_for_model(bytes: &[u8]) -> Result<(Img, (u32, u32))> {
+  let Fitted { kind, small, size } = fitted(bytes)?;
+  let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+  let img = match small {
+    Some(jpeg) => Img {
+      mime: "image/jpeg".into(),
+      data: b64(&jpeg),
+    },
+    None => Img {
+      mime: kind.into(),
+      data: b64(bytes),
+    },
+  };
+  Ok((img, size))
+}
+
+/// An image's bytes put in a chat's dir by their hash, its copy for models
+/// beside it (`fitted`); its name. Blocking: run off the chat's lock.
+pub fn image_add(dir: &Path, bytes: &[u8]) -> Result<String> {
+  use sha2::Digest;
+  let Fitted { kind, small, .. } = fitted(bytes)?;
   let hash = sha2::Sha256::digest(bytes);
   let hex: String = hash.iter().take(8).map(|b| format!("{b:02x}")).collect();
   let name = format!("{hex}.{}", &kind["image/".len()..]);
-  let k = (FIT / w.max(h) as f64).min(1.0);
-  let fit = (k < 1.0 || bytes.len() > IMAGE) && (w as u64) * (h as u64) <= PIXELS;
   let images = dir.join(IMAGES);
   fs::create_dir_all(&images)?;
-  if fit {
-    let small = img.resize_exact(
-      (w as f64 * k).round() as u32,
-      (h as f64 * k).round() as u32,
-      image::imageops::FilterType::Lanczos3,
-    );
-    let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&small.to_rgb8())?;
+  if let Some(jpeg) = small {
     let file = images.join(format!("{name}.jpg"));
-    fs::write(&file, out)?;
+    fs::write(&file, jpeg)?;
     disk::wrote(&file);
   }
   let file = images.join(&name);

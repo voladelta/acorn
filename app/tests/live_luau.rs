@@ -356,3 +356,66 @@ fn luau_does_the_big_jobs_live() {
   let biggest = echoes(&db).iter().map(String::len).max().unwrap_or(0);
   assert!(biggest < 20_000, "a result of {biggest} bytes came back");
 }
+
+/// A picture only seen can answer: a square of one colour, which view
+/// shows the model. Run alone (one engine a process).
+#[test]
+#[ignore]
+fn luau_views_an_image_live() {
+  let dir = tempfile::tempdir().unwrap();
+  let proj = dir.path().join("proj");
+  std::fs::create_dir_all(&proj).unwrap();
+  let db = dir.path().join("chats/default/chat.db");
+  let _dump = Dump(db.clone());
+  let (name, rgb) = [
+    ("red", [220, 30, 30]),
+    ("green", [30, 170, 60]),
+    ("blue", [30, 70, 220]),
+  ][std::process::id() as usize % 3];
+  let mut img = image::RgbImage::from_pixel(400, 300, image::Rgb([255, 255, 255]));
+  for x in 100..300 {
+    for y in 50..250 {
+      img.put_pixel(x, y, image::Rgb(rgb));
+    }
+  }
+  img.save(proj.join("shape.png")).unwrap();
+
+  // SAFETY: set once, before any thread of the test starts.
+  unsafe {
+    std::env::set_var("HOME", dir.path().join("user"));
+    std::env::set_var("ACORN_DIR", dir.path().join("home"));
+    std::env::set_var("ACORN_CHATS", dir.path().join("chats"));
+  }
+  let mut app = Headless::start(EngineConfig::new(Root::of::<acorn::App>())).unwrap();
+  app.first_render().unwrap();
+  app
+    .wait_for_within("Hello! This is Acorn.", Duration::from_secs(20))
+    .unwrap();
+  app
+    .type_text(
+      "label:Message Acorn",
+      &format!(
+        "Look at the picture {}/shape.png. What colour is the square in it? Answer as COLOR=<one word>.",
+        proj.display()
+      ),
+    )
+    .unwrap();
+  app.submit("label:Message Acorn").unwrap();
+  let said = "select group_concat(text, ' ') from msgs where log = '' and kind = 'unii' and text like '%COLOR=%';";
+  app
+    .wait_until("COLOR=", Duration::from_secs(300), |_| {
+      !sql(&db, said).trim().is_empty()
+    })
+    .unwrap();
+  let reply = sql(&db, said).to_lowercase();
+  let calls = tool_calls(&db);
+  println!("reply: {reply}\ncalls: {calls:#?}");
+  assert!(
+    calls.iter().any(|c| c.starts_with("luau {") && c.contains("view(")),
+    "looked without view: {calls:#?}"
+  );
+  assert!(
+    reply.contains(&format!("color={name}")),
+    "the square is {name}: {reply}"
+  );
+}
