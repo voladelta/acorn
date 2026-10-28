@@ -167,8 +167,9 @@ an agent only for a task.
 fn mac(work: &Path) -> String {
   let work = work.display();
   format!(
-    "Your bash, read, write and edit tools run on the user's Mac, in your work\ndir, {work}/<you> (Acorn's: {work}/main), where relative paths start.\n\n{guide}",
+    "Your bash, read, write and edit tools run on the user's Mac, in your work\ndir, {work}/<you> (Acorn's: {work}/main), where relative paths start.\n\n{guide}\n\n{web}",
     guide = machine::GUIDE,
+    web = web::GUIDE,
   )
 }
 

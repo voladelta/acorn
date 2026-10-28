@@ -27,9 +27,9 @@ const HEAD: &str = "Turn: the user's new message:\n\n";
 /// turn or a compaction, made the model summarize the chat instead of
 /// answering), asked after the chat (the view, its latest messages whole)
 /// of its goal; unmet, the user's nudge.
-const GOAL: &str = "You check a goal. Below is a chat between a user and an AI assistant: its older messages as summary lines (id+n|text), then its latest messages whole, then the goal the assistant set itself from the user's words. Answer yes if the chat shows the goal fully satisfied now, else no. Write that one word, nothing else.";
+const GOAL: &str = "You check a goal. Below is a chat between a user and an AI assistant: its older messages as summary lines (id+n|text), then its latest messages whole, then the goal the assistant set itself from the user's words. Answer yes if the chat shows the goal fully satisfied now, by evidence in it (tool results, files, outputs), not by the assistant's word alone; else no. Write that one word, nothing else.";
 const GOAL_ASK: &str = "\nThe goal:\n\n";
-const GOAL_NO: &str = "The goal isn't satisfied yet: keep working.";
+const GOAL_NO: &str = "The goal isn't satisfied yet: keep working. Treat the current workspace, tool results and files as authoritative; inspect them instead of assuming earlier narration is still current. Make concrete progress and verify the result. Before saying the goal is done, gather evidence that the whole of it is achieved.";
 
 impl Engine {
   /// A message from the person (its images first put in place), logged
