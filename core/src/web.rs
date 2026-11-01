@@ -149,7 +149,9 @@ pub struct Req {
 
 /// A request sent, redirects followed: its response, or why it failed (any
 /// status but a 2xx is a failure). A redirect to another origin takes no
-/// headers along: they may hold a key, under any name.
+/// headers along, since they may hold a key under any name; one that would
+/// take a body along is a failure, since without it the request would be
+/// another one.
 pub async fn request(req: &Req, cancel: &CancellationToken) -> Result<Response, String> {
   let mut sent = req.clone();
   for _ in 0..=HOPS {
@@ -164,9 +166,6 @@ pub async fn request(req: &Req, cancel: &CancellationToken) -> Result<Response, 
         u.port_or_known_default(),
       )
     };
-    if origin(res.url()) != origin(&next) {
-      sent.headers.clear();
-    }
     let code = res.status();
     if code == StatusCode::SEE_OTHER
       || (sent.method.eq_ignore_ascii_case("POST") && matches!(code, StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND))
@@ -174,6 +173,15 @@ pub async fn request(req: &Req, cancel: &CancellationToken) -> Result<Response, 
       sent.method = "GET".into();
       sent.body = None;
       sent.headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-type"));
+    }
+    if origin(res.url()) != origin(&next) {
+      if sent.body.is_some() {
+        return Err(format!(
+          "{code}: not sending the body on to {}",
+          next.host_str().unwrap_or("another host")
+        ));
+      }
+      sent.headers.clear();
     }
     sent.url = next.to_string();
     sent.query.clear();
@@ -388,6 +396,28 @@ mod tests {
       last.starts_with("GET / ") && !last.contains("KEY"),
       "another origin: {last}"
     );
+  }
+
+  #[tokio::test]
+  async fn a_redirect_wont_take_a_body_to_another_origin() {
+    let cancel = CancellationToken::new();
+    for code in [307, 308] {
+      let (far, mut far_seen) = raw_server(vec![DONE.to_string()]).await;
+      let (near, _seen) = raw_server(vec![moved(code, &far)]).await;
+      let why = request(&post_with_key(&near), &cancel).await.unwrap_err();
+      assert!(
+        why.starts_with(&code.to_string()) && why.contains("not sending the body"),
+        "{why}"
+      );
+      assert!(far_seen.try_recv().is_err(), "{code}: the other origin heard nothing");
+    }
+    // A GET has no body to keep, so it goes on, without its headers.
+    let (far, mut far_seen) = raw_server(vec![DONE.to_string()]).await;
+    let (near, _seen) = raw_server(vec![moved(307, &far)]).await;
+    let mut got = get(&near);
+    got.headers.push(("x-api-key".into(), "KEY".into()));
+    assert!(request(&got, &cancel).await.is_ok());
+    assert!(!far_seen.recv().await.unwrap().contains("KEY"));
   }
 
   #[tokio::test]
