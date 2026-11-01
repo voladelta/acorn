@@ -3,7 +3,7 @@
 //! An agent's name: a common adjective and noun, capitalized, joined
 //! (FireAnt; older ones Fire-Ant): 16,384; one taken is drawn again.
 
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 
 const ADJS: &str = "
 red blue green yellow orange purple pink brown black white gray silver golden
@@ -33,7 +33,7 @@ radish taco waffle";
 pub fn random() -> String {
   let adjs: Vec<&str> = ADJS.split_whitespace().collect();
   let nouns: Vec<&str> = NOUNS.split_whitespace().collect();
-  let mut rng = rand::thread_rng();
+  let mut rng = rand::rng();
   word(adjs.choose(&mut rng).unwrap()) + &word(nouns.choose(&mut rng).unwrap())
 }
 

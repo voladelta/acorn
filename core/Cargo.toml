@@ -7,22 +7,22 @@ version.workspace = true
 
 [dependencies]
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 libc = "0.2"
 mlua = { version = "0.12", features = ["luau", "async", "serialize", "send"] }
-parking_lot = "0.12"
-rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
-rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
+parking_lot = "0.13"
+rand = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json", "query"] }
+rusqlite = { version = "0.41.1", features = ["bundled", "fallible_uint"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-sha2 = "0.10"
+sha2 = "0.11"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"

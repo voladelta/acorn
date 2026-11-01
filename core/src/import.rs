@@ -547,8 +547,9 @@ fn export(file: &Path) -> Result<Vec<Session>, String> {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| e.to_string())?;
     let name = zip
       .file_names()
-      .find(|n| *n == "conversations.json" || n.ends_with("/conversations.json"))
-      .map(str::to_string);
+      .flatten()
+      .find(|n| n == "conversations.json" || n.ends_with("/conversations.json"))
+      .map(|n| n.into_owned());
     let Some(name) = name else {
       return Err("No conversations.json in the zip.".into());
     };
