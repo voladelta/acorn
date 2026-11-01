@@ -21,6 +21,7 @@
 
 use crate::config;
 use crate::luau::clean;
+use mlua::chunk::ChunkMode;
 use mlua::{Lua, Table, Value};
 use std::collections::BTreeMap;
 use std::fs;
@@ -28,6 +29,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 const EXT: &str = "luau";
+/// The largest plugin file.
+const MOST_BYTES: u64 = 10 << 20;
 
 /// Where the plugins are.
 pub fn dir() -> PathBuf {
@@ -64,23 +67,47 @@ run as you do, so read one from elsewhere before installing it.",
   )
 }
 
-/// The plugins' files as they are: each one's name, time and size, in order.
-pub type Stamp = Vec<(String, SystemTime, u64)>;
+/// What a layer was built from: the plugins' files, each one's name, time and
+/// size, in order; and the config.json beside their dir, whose keys they read
+/// as they load, so a key added or changed counts as an edit does.
+#[derive(PartialEq)]
+pub struct Stamp {
+  files: Vec<(String, SystemTime, u64)>,
+  config: Option<(SystemTime, u64)>,
+}
 
 pub fn stamp(dir: &Path) -> Stamp {
-  let mut files: Stamp = fs::read_dir(dir)
+  let seen = |path: &Path| {
+    let meta = fs::metadata(path).ok()?;
+    Some((meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), meta.len()))
+  };
+  let mut files: Vec<_> = fs::read_dir(dir)
     .into_iter()
     .flatten()
     .flatten()
     .filter(|e| e.path().extension().is_some_and(|x| x == EXT))
-    .filter_map(|e| {
-      let meta = fs::metadata(e.path()).ok()?;
-      let time = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-      Some((e.file_name().to_string_lossy().into_owned(), time, meta.len()))
+    .map(|e| {
+      // One that can't be looked at is still listed, for its load to report.
+      let (time, size) = seen(&e.path()).unwrap_or((SystemTime::UNIX_EPOCH, 0));
+      (e.file_name().to_string_lossy().into_owned(), time, size)
     })
     .collect();
   files.sort();
-  files
+  let config = dir.parent().and_then(|at| seen(&at.join("config.json")));
+  Stamp { files, config }
+}
+
+/// A plugin's source: only a regular file of a sane size, since reading a
+/// pipe or a device could never end.
+fn source(path: &Path) -> Result<String, String> {
+  let meta = fs::metadata(path).map_err(|e| e.to_string())?;
+  if !meta.is_file() {
+    return Err("it is not a regular file".into());
+  }
+  if meta.len() > MOST_BYTES {
+    return Err(format!("it is over {} MB", MOST_BYTES >> 20));
+  }
+  fs::read_to_string(path).map_err(|e| e.to_string())
 }
 
 /// A set of plugins, loaded: what the model's code sees, each global's doc,
@@ -120,12 +147,10 @@ pub fn load(
     warns: Vec::new(),
   };
   let mut values = Vec::new();
-  for (file, ..) in stamp(dir) {
+  for (file, ..) in stamp(dir).files {
     tick();
     let plugin = file.strip_suffix(&format!(".{EXT}")).unwrap_or(&file).to_string();
-    let got = fs::read_to_string(dir.join(&file))
-      .map_err(|e| e.to_string())
-      .and_then(|src| one(lua, &layer.view, host, &plugin, &src));
+    let got = source(&dir.join(&file)).and_then(|src| one(lua, &layer.view, host, &plugin, &src));
     match got {
       Ok(globals) => {
         for (name, doc, value) in globals {
@@ -163,6 +188,7 @@ fn one(lua: &Lua, view: &Table, host: &Table, plugin: &str, src: &str) -> Result
   let got: Value = lua
     .load(src)
     .set_name(format!("={plugin}"))
+    .set_mode(ChunkMode::Text)
     .set_environment(env)
     .eval()
     .map_err(bad)?;
@@ -187,7 +213,7 @@ fn one(lua: &Lua, view: &Table, host: &Table, plugin: &str, src: &str) -> Result
     let Some(doc) = doc else {
       return Err(format!("{name} has no doc"));
     };
-    if doc.contains('\n') {
+    if doc.contains(['\n', '\r']) {
       return Err(format!("{name}'s doc must be one line"));
     }
     let value: Value = entry.get("value").map_err(bad)?;
@@ -207,15 +233,37 @@ fn is_name(name: &str) -> bool {
     && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// A value's tables, read-only all the way down, so the model's code can't
-/// change what a plugin's functions rely on.
+/// A value's tables, read-only all the way down, keys and metatables too, so
+/// the model's code can't change what a plugin's functions rely on. A list,
+/// not recursion: a plugin's table may nest deeper than the stack.
 fn freeze(value: &Value) {
-  if let Value::Table(t) = value
-    && !t.is_readonly()
-  {
-    t.set_readonly(true);
-    for (_, v) in t.pairs::<Value, Value>().flatten() {
-      freeze(&v);
+  let mut todo = vec![value.clone()];
+  while let Some(value) = todo.pop() {
+    let Value::Table(t) = value else { continue };
+    if t.is_readonly() {
+      continue;
     }
+    t.set_readonly(true);
+    todo.extend(t.metatable().map(Value::Table));
+    for (k, v) in t.pairs::<Value, Value>().flatten() {
+      todo.push(k);
+      todo.push(v);
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_key_changed_in_config_changes_the_stamp() {
+    let at = tempfile::tempdir().unwrap();
+    let dir = at.path().join("plugins");
+    fs::create_dir(&dir).unwrap();
+    let before = stamp(&dir);
+    assert!(before == stamp(&dir));
+    fs::write(at.path().join("config.json"), "{\"exa_api_key\": \"k\"}").unwrap();
+    assert!(before != stamp(&dir));
   }
 }

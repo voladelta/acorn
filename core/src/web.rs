@@ -7,13 +7,13 @@
 //! through the same `request`; its errors never name the url, which may hold
 //! a key.
 
-use crate::ai::agent::HTTP;
 use crate::ai::{Out, nap};
 use crate::clip;
 use crate::config;
-use reqwest::Response;
+use reqwest::{Response, StatusCode, Url};
 use serde_json::{Value, json};
 use std::path::Path;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt as _;
@@ -28,6 +28,17 @@ const WAIT: Duration = Duration::from_secs(2);
 pub const TIMEOUT: Duration = Duration::from_secs(120);
 /// The most bytes of a response read into memory (`save` has no such limit).
 const TEXT_BYTES: usize = 50 << 20;
+
+/// Redirects followed, each by `request`, which knows what goes with one.
+const HOPS: usize = 10;
+
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+  reqwest::Client::builder()
+    .user_agent("Acorn/0.1")
+    .redirect(reqwest::redirect::Policy::none())
+    .build()
+    .expect("an HTTP client")
+});
 
 /// The next part file's number.
 static PARTS: AtomicU64 = AtomicU64::new(1);
@@ -126,6 +137,7 @@ async fn post(url: &str, body: &Value, cancel: &CancellationToken) -> Result<Val
 }
 
 /// A request to send.
+#[derive(Clone)]
 pub struct Req {
   pub method: String,
   pub url: String,
@@ -135,13 +147,55 @@ pub struct Req {
   pub timeout: Duration,
 }
 
-/// A request sent, tried again while busy: its response, or why it failed
-/// (any status but a 2xx is a failure).
+/// A request sent, redirects followed: its response, or why it failed (any
+/// status but a 2xx is a failure). A redirect to another origin takes no
+/// headers along: they may hold a key, under any name.
 pub async fn request(req: &Req, cancel: &CancellationToken) -> Result<Response, String> {
+  let mut sent = req.clone();
+  for _ in 0..=HOPS {
+    let res = attempt(&sent, cancel).await?;
+    let Some(next) = redirect(&res) else {
+      return Ok(res);
+    };
+    let origin = |u: &Url| {
+      (
+        u.scheme().to_string(),
+        u.host_str().map(str::to_string),
+        u.port_or_known_default(),
+      )
+    };
+    if origin(res.url()) != origin(&next) {
+      sent.headers.clear();
+    }
+    let code = res.status();
+    if code == StatusCode::SEE_OTHER
+      || (sent.method.eq_ignore_ascii_case("POST") && matches!(code, StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND))
+    {
+      sent.method = "GET".into();
+      sent.body = None;
+      sent.headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-type"));
+    }
+    sent.url = next.to_string();
+    sent.query.clear();
+  }
+  Err(format!("over {HOPS} redirects"))
+}
+
+/// Where a response redirects to, if it does.
+fn redirect(res: &Response) -> Option<Url> {
+  if !res.status().is_redirection() {
+    return None;
+  }
+  let to = res.headers().get(reqwest::header::LOCATION)?.to_str().ok()?;
+  res.url().join(to).ok()
+}
+
+/// One hop of a request, tried again while busy.
+async fn attempt(req: &Req, cancel: &CancellationToken) -> Result<Response, String> {
   let method = reqwest::Method::from_bytes(req.method.as_bytes()).map_err(|_| format!("no method {}", req.method))?;
   let mut wait = WAIT;
   for n in 1..=TRIES {
-    let mut sent = HTTP
+    let mut sent = CLIENT
       .request(method.clone(), &req.url)
       .query(&req.query)
       .timeout(req.timeout);
@@ -156,10 +210,14 @@ pub async fn request(req: &Req, cancel: &CancellationToken) -> Result<Response, 
         _ = cancel.cancelled() => return Err("stopped".into()),
     };
     let why = match res {
-      Ok(res) if res.status().is_success() => return Ok(res),
+      Ok(res) if res.status().is_success() || redirect(&res).is_some() => return Ok(res),
       Ok(res) => {
         let code = res.status();
-        let why = format!("{code}: {}", reason(&res.text().await.unwrap_or_default()));
+        let body = read(res, cancel).await.unwrap_or_default();
+        if cancel.is_cancelled() {
+          return Err("stopped".into());
+        }
+        let why = format!("{code}: {}", reason(&String::from_utf8_lossy(&body)));
         if !(code.as_u16() == 408 || code.as_u16() == 429 || code.is_server_error()) {
           return Err(why);
         }
@@ -265,6 +323,97 @@ mod tests {
       "1. V4 (A, 2026-06-01)\nhttps://a.com/v4\nlong\n\n2. B\nhttps://b.com\nonly a snippet"
     );
     assert_eq!(results(&json!({"results": []})), "No results.");
+  }
+
+  /// A server answering each connection with the next of `replies`, whole;
+  /// its address. Each request it saw comes back on the channel.
+  async fn raw_server(replies: Vec<String>) -> (String, tokio::sync::mpsc::UnboundedReceiver<String>) {
+    use tokio::io::AsyncReadExt as _;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let at = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+      // Kept open, so a reply cut short stalls rather than ends.
+      let mut open = Vec::new();
+      for reply in replies {
+        let (mut sock, _) = listener.accept().await.unwrap();
+        let mut got = vec![0; 8192];
+        let n = sock.read(&mut got).await.unwrap();
+        let _ = tx.send(String::from_utf8_lossy(&got[..n]).into_owned());
+        sock.write_all(reply.as_bytes()).await.unwrap();
+        open.push(sock);
+      }
+      tokio::time::sleep(Duration::from_secs(30)).await;
+      drop(open);
+    });
+    (at, rx)
+  }
+
+  fn moved(code: u16, to: &str) -> String {
+    format!("HTTP/1.1 {code} X\r\nlocation: {to}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+  }
+
+  const DONE: &str = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok";
+
+  fn post_with_key(url: &str) -> Req {
+    Req {
+      method: "POST".into(),
+      headers: vec![
+        ("x-api-key".into(), "KEY".into()),
+        ("content-type".into(), "application/json".into()),
+      ],
+      body: Some(b"{}".to_vec()),
+      ..get(url)
+    }
+  }
+
+  #[tokio::test]
+  async fn a_redirect_keeps_headers_only_within_its_origin() {
+    let (far, mut far_seen) = raw_server(vec![DONE.to_string()]).await;
+    let (near, mut near_seen) = raw_server(vec![moved(307, "/next"), moved(302, &far)]).await;
+    let cancel = CancellationToken::new();
+    let res = request(&post_with_key(&near), &cancel).await.unwrap();
+    assert_eq!(read(res, &cancel).await.unwrap(), b"ok");
+    let (first, second) = (near_seen.recv().await.unwrap(), near_seen.recv().await.unwrap());
+    assert!(
+      first.starts_with("POST / ") && first.contains("x-api-key: KEY"),
+      "{first}"
+    );
+    assert!(
+      second.starts_with("POST /next ") && second.contains("x-api-key: KEY"),
+      "{second}"
+    );
+    let last = far_seen.recv().await.unwrap();
+    assert!(
+      last.starts_with("GET / ") && !last.contains("KEY"),
+      "another origin: {last}"
+    );
+  }
+
+  #[tokio::test]
+  async fn redirects_end_and_a_bare_one_is_a_failure() {
+    let (at, _seen) = raw_server((0..=HOPS).map(|_| moved(302, "/again")).collect()).await;
+    let cancel = CancellationToken::new();
+    assert!(request(&get(&at), &cancel).await.unwrap_err().contains("redirects"));
+    let (at, _seen) = raw_server(vec![
+      "HTTP/1.1 304 X\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".into(),
+    ])
+    .await;
+    assert!(request(&get(&at), &cancel).await.unwrap_err().starts_with("304"));
+  }
+
+  #[tokio::test]
+  async fn a_stop_ends_the_read_of_an_error_body() {
+    let (at, _seen) = raw_server(vec!["HTTP/1.1 400 X\r\ncontent-length: 100\r\n\r\npart".into()]).await;
+    let cancel = CancellationToken::new();
+    let stop = cancel.clone();
+    tokio::spawn(async move {
+      tokio::time::sleep(Duration::from_millis(200)).await;
+      stop.cancel();
+    });
+    let began = std::time::Instant::now();
+    assert_eq!(request(&get(&at), &cancel).await.unwrap_err(), "stopped");
+    assert!(began.elapsed() < Duration::from_secs(5));
   }
 
   /// A server answering each connection with the next of `replies` (status,

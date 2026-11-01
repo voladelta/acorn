@@ -25,6 +25,7 @@ use crate::ai::{Out, Spec};
 use crate::memory::{PICS, image_for_model};
 use crate::plugins::{self, Stamp};
 use crate::{config, machine, web};
+use mlua::chunk::ChunkMode;
 use mlua::{Function, IntoLua, Lua, LuaSerdeExt as _, MultiValue, Table, Value, VmState};
 use parking_lot::Mutex;
 use serde_json::{Value as Json, json};
@@ -59,20 +60,11 @@ pub fn tool() -> Spec {
     "luau",
     format!(
       "Run Luau code (Roblox's Lua dialect) in a VM of your own that stays between calls: globals set in one call are there in the next; locals are not. Returns what the code printed, the value of its last expression, and any error with a traceback. In it, run in your work dir:
-read(path: string, opts?: {{offset: number?, limit: number?}}): string   -- the file whole (or limit lines from line offset), unnumbered; counts as reading it
-write(path: string, content: string): number   -- creates or replaces the file whole; bytes written
-edit(path: string, old: string, new: string, opts?: {{all: boolean?}}): string   -- replaces old, which must be there once (or every time, all = true)
-sh(cmd: string, opts?: {{timeout: number?, cwd: string?}}): {{stdout: string, stderr: string, code: number, timed_out: boolean, truncated: boolean, full: string?, full_err: string?}}   -- runs bash -c; timeout in seconds, {SH_TIMEOUT} by default, at most {SH_TIMEOUT_MAX}; a stream past {OUT} KB keeps only its last {OUT} KB (truncated), the whole of it in the file full (stdout) or full_err (stderr)
 {docs}
-view(path: string): string   -- attaches a png, jpeg, gif or webp image (scaled to fit) to this call's result, so you see it on your next step; at most {PICS} a call
-json.encode(v): string, json.decode(s: string): any
-vars(): your globals, by name
 A failed call raises an error: pcall it to go on. A call has {CHUNK}s of Luau's own time (waiting on sh or the web is not counted) and {MB} MB of memory.",
-      OUT = machine::OUTPUT_BYTES / 1000,
       docs = docs(),
       CHUNK = CHUNK.as_secs(),
       MB = MEMORY >> 20,
-      PICS = PICS,
     ),
     json!({
       "description": {"type": "string", "description": "What the code does, in active voice, 5-10 words (shown in the UI)."},
@@ -82,20 +74,25 @@ A failed call raises an error: pcall it to go on. A call has {CHUNK}s of Luau's 
   )
 }
 
-/// The web's tools' docs, by name, before any plugin replaces one.
-fn web_docs() -> BTreeMap<String, String> {
+/// The docs of the globals a VM starts with, by name; a plugin replacing one
+/// replaces its doc.
+fn base_docs() -> BTreeMap<String, String> {
   [
-    (
-      "web_fetch",
-      format!(
-        "web_fetch(url: string, opts?: {{at: number?}}): string   -- a page's title and content as Markdown; past {CAP} characters it comes in pages from character at, saying where to go on",
-        CAP = crate::clip::CAP,
-      ),
-    ),
-    (
-      "web_search",
-      "web_search(query: string, opts?: {count: number?, question: string?}): string   -- each result's title, url, site, date and summary, best first. query: 1 to 128 characters, with operators: site:github.com (several joined with OR), -site:, -word, \"exact phrase\", -\"phrase\", lang:en,zh, after:2025-01-01, before:2026. count: 1 to 50 (10 by default). question: the user's question that led to it".to_string(),
-    ),
+    ("read", "read(path: string, opts?: {offset: number?, limit: number?}): string   -- the file whole (or limit lines from line offset), unnumbered; counts as reading it".to_string()),
+    ("write", "write(path: string, content: string): number   -- creates or replaces the file whole; bytes written".to_string()),
+    ("edit", "edit(path: string, old: string, new: string, opts?: {all: boolean?}): string   -- replaces old, which must be there once (or every time, all = true)".to_string()),
+    ("sh", format!(
+      "sh(cmd: string, opts?: {{timeout: number?, cwd: string?}}): {{stdout: string, stderr: string, code: number, timed_out: boolean, truncated: boolean, full: string?, full_err: string?}}   -- runs bash -c; timeout in seconds, {SH_TIMEOUT} by default, at most {SH_TIMEOUT_MAX}; a stream past {OUT} KB keeps only its last {OUT} KB (truncated), the whole of it in the file full (stdout) or full_err (stderr)",
+      OUT = machine::OUTPUT_BYTES / 1000,
+    )),
+    ("web_search", "web_search(query: string, opts?: {count: number?, question: string?}): string   -- each result's title, url, site, date and summary, best first. query: 1 to 128 characters, with operators: site:github.com (several joined with OR), -site:, -word, \"exact phrase\", -\"phrase\", lang:en,zh, after:2025-01-01, before:2026. count: 1 to 50 (10 by default). question: the user's question that led to it".to_string()),
+    ("web_fetch", format!(
+      "web_fetch(url: string, opts?: {{at: number?}}): string   -- a page's title and content as Markdown; past {CAP} characters it comes in pages from character at, saying where to go on",
+      CAP = crate::clip::CAP,
+    )),
+    ("view", format!("view(path: string): string   -- attaches a png, jpeg, gif or webp image (scaled to fit) to this call's result, so you see it on your next step; at most {PICS} a call")),
+    ("json", "json.encode(v): string, json.decode(s: string): any".to_string()),
+    ("vars", "vars(): your globals, by name".to_string()),
   ]
   .into_iter()
   .map(|(k, v)| (k.to_string(), v))
@@ -122,7 +119,7 @@ fn docs() -> String {
     vm.refresh().map_err(mlua::Error::runtime)?;
     Ok(joined(&vm.docs))
   });
-  let docs = got.unwrap_or_else(|_| joined(&web_docs()));
+  let docs = got.unwrap_or_else(|_| joined(&base_docs()));
   *last = Some((now, docs.clone()));
   docs
 }
@@ -199,6 +196,7 @@ local function raising(f, acts)
 		end
 		local ran, ok, v = pcall(f, ...)
 		if not ran then
+			__give_up()
 			error((string.match(tostring(ok), "^[^\n]*")), 2)
 		end
 		if not ok then
@@ -232,6 +230,8 @@ function print(...)
 	__emit(table.concat(parts, "\t"))
 end
 
+-- debug.info walks the stack to any function on it, a tool's raw form too.
+debug = { traceback = debug.traceback }
 getfenv = nil
 setfenv = nil
 loadstring = nil
@@ -380,6 +380,19 @@ impl Vm {
     g.set("json", json)?;
     let r = run.clone();
     g.set("__loading", lua.create_function(move |_, ()| Ok(r.lock().loading))?)?;
+    // A call given up where Luau can't wait lives till collected, and its
+    // wait would blind the time limit: so collected now, as its error passes.
+    let r = run.clone();
+    g.set(
+      "__give_up",
+      lua.create_function(move |lua, ()| {
+        if r.lock().waiting > 0 {
+          lua.gc_collect()?;
+          lua.gc_collect()?;
+        }
+        Ok(())
+      })?,
+    )?;
     tools(&lua, cwd, &run)?;
     lua.load(PRELUDE).set_name("=prelude").exec()?;
     lua.sandbox(true)?;
@@ -424,7 +437,7 @@ impl Vm {
     self.run.lock().loading = true;
     let run = self.run.clone();
     let tick = move || run.lock().deadline = Some(Instant::now() + LOAD);
-    let layer = plugins::load(&self.lua, &self.base, web_docs(), &self.host, &self.dir, tick);
+    let layer = plugins::load(&self.lua, &self.base, base_docs(), &self.host, &self.dir, tick);
     {
       let mut run = self.run.lock();
       run.loading = false;
@@ -484,6 +497,7 @@ impl Vm {
         .lua
         .load(src)
         .set_name("=luau")
+        .set_mode(ChunkMode::Text)
         .set_environment(self.env.clone())
         .into_function()
     };
@@ -492,7 +506,13 @@ impl Vm {
       let (head, last) = code.split_at(at + 1);
       // Only when the lines before it make a chunk alone: else the last
       // closes a block (`end`), and `return end` would leave it early.
-      if self.lua.load(head).set_name("=luau").into_function().is_ok()
+      if self
+        .lua
+        .load(head)
+        .set_name("=luau")
+        .set_mode(ChunkMode::Text)
+        .into_function()
+        .is_ok()
         && let Ok(f) = load(&format!("{head}return {last}"))
       {
         return Ok(f);
@@ -669,6 +689,19 @@ impl Drop for Call {
   }
 }
 
+/// A url as a call's log shows it: no query or credentials, which may hold a
+/// key.
+fn bare(url: &str) -> String {
+  let Ok(mut url) = reqwest::Url::parse(url) else {
+    return "(a bad url)".into();
+  };
+  url.set_query(None);
+  url.set_fragment(None);
+  let _ = url.set_username("");
+  let _ = url.set_password(None);
+  url.to_string().trim_end_matches('/').to_string()
+}
+
 /// A field of an options table, if given.
 fn opt<T: mlua::FromLua>(opts: &Option<Table>, k: &str) -> mlua::Result<Option<T>> {
   opts.as_ref().map_or(Ok(None), |t| t.get(k))
@@ -825,9 +858,10 @@ fn tools(lua: &Lua, cwd: &Path, run: &Arc<Mutex<Run>>) -> mlua::Result<()> {
         let method = method.unwrap_or_else(|| if body.is_some() { "POST" } else { "GET" }.into());
         let timeout = req
           .get::<Option<f64>>("timeout")?
+          .filter(|t| !t.is_nan())
           .map_or(web::TIMEOUT, |t| Duration::from_secs_f64(t.clamp(1.0, SH_TIMEOUT_MAX)));
         let save = req.get::<Option<String>>("save")?;
-        let call = Call::start(&r, "http", url.split(['?', '#']).next().unwrap_or_default());
+        let call = Call::start(&r, "http", &bare(&url));
         let cancel = call.cancel.clone();
         let sent = web::Req {
           method,
@@ -839,7 +873,7 @@ fn tools(lua: &Lua, cwd: &Path, run: &Arc<Mutex<Run>>) -> mlua::Result<()> {
         };
         let to = save.as_ref().map(|path| dir.join(path));
         // Before a request that may cost money, not after.
-        if let Some(to) = to.as_ref().filter(|to| to.exists()) {
+        if let Some(to) = to.as_ref().filter(|to| to.symlink_metadata().is_ok()) {
           return call.end(
             &lua,
             Err::<Table, _>(format!("http: {} is already there", to.display())),
@@ -1378,7 +1412,7 @@ mod tests {
       vm.docs["web_fetch"].starts_with("web_fetch(url"),
       "a tool not replaced keeps its doc"
     );
-    assert_eq!(vm.docs.len(), 2);
+    assert_eq!(vm.docs.len(), base_docs().len(), "nothing added by the broken one");
   }
 
   /// A server answering one request, with what it saw sent back.
@@ -1583,5 +1617,131 @@ mod tests {
       let bad = lab.go("pcall(web_fetch, 'https://nonexistent.invalid/')").await;
       println!("{name} bad fetch:\n{}\n", bad.text);
     }
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn text_that_looks_like_bytecode_is_only_a_syntax_error() {
+    let lab = Lab::new();
+    lab.file("b.luau", "\u{5}\u{1}\u{1}aaaaaaaaaa");
+    let out = lab.go("\u{5}\u{1}\u{1}aaaaaaaaaa").await;
+    assert!(out.fail && out.text.contains("plugin b did not load"), "{}", out.text);
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn a_table_nested_past_the_stack_is_frozen_all_the_same() {
+    let lab = Lab::new();
+    lab.file(
+      "d.luau",
+      "local t = {} for i = 1, 200000 do t = {t} end return { d = { doc = 'd', value = t } }",
+    );
+    assert!(lab.go("d[1] = 1").await.fail);
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn keys_and_metatables_are_frozen_too() {
+    let lab = Lab::new();
+    lab.file(
+      "m.luau",
+      "local key = {}\nreturn { m = { doc = 'm', value = setmetatable({ [key] = 1, key = function() return key end }, { __index = function() return 'theirs' end }) } }",
+    );
+    assert!(lab.go("getmetatable(m).__index = 1").await.fail);
+    assert!(lab.go("m.key().x = 1").await.fail);
+    assert!(lab.go("m.other").await.text.starts_with("=> theirs"));
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn only_a_regular_file_is_read() {
+    let lab = Lab::new();
+    let pipe = lab.plugins.path().join("pipe.luau");
+    assert!(
+      std::process::Command::new("mkfifo")
+        .arg(&pipe)
+        .status()
+        .unwrap()
+        .success()
+    );
+    std::os::unix::fs::symlink("/dev/zero", lab.plugins.path().join("zero.luau")).unwrap();
+    std::os::unix::fs::symlink("/nonexistent", lab.plugins.path().join("gone.luau")).unwrap();
+    std::fs::create_dir(lab.plugins.path().join("dir.luau")).unwrap();
+    let began = Instant::now();
+    let out = lab.go("1").await;
+    assert!(began.elapsed() < Duration::from_secs(5), "{:?}", began.elapsed());
+    for name in ["pipe", "zero", "gone", "dir"] {
+      assert!(
+        out.text.contains(&format!("plugin {name} did not load")),
+        "{name}: {}",
+        out.text
+      );
+    }
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn a_call_given_up_doesnt_blind_the_time_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    for code in [
+      "pcall(table.sort, {3, 1, 2}, function(a, b) sh('sleep 100') return a < b end)\nwhile true do end",
+      "pcall(string.gsub, 'abc', 'b', function() sh('sleep 100') end)\nwhile true do end",
+    ] {
+      let began = Instant::now();
+      let out = eval(
+        dir.path().to_path_buf(),
+        code,
+        Duration::from_millis(300),
+        CancellationToken::new(),
+      )
+      .await;
+      assert!(
+        began.elapsed() < Duration::from_secs(5),
+        "{code}: {:?}",
+        began.elapsed()
+      );
+      assert!(
+        out.fail && out.text.contains("time budget exceeded"),
+        "{code}: {}",
+        out.text
+      );
+    }
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn the_stack_shows_no_tools_raw_form() {
+    let lab = Lab::new();
+    lab.file("h.luau", HANDS);
+    assert_eq!(
+      lab.go("debug.info == nil").await.text.lines().next().unwrap(),
+      "=> true"
+    );
+    assert!(lab.go("typeof(debug.traceback())").await.text.starts_with("=> string"));
+  }
+
+  #[test]
+  fn each_global_has_one_doc_line_a_plugin_can_replace() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+      dir.path().join("r.luau"),
+      "return { read = { doc = 'read(path) -- mine', value = function() return 'mine' end } }",
+    )
+    .unwrap();
+    let mut vm = Vm::new(dir.path(), dir.path()).unwrap();
+    vm.refresh().unwrap();
+    assert_eq!(vm.docs["read"], "read(path) -- mine");
+    for name in ["write", "edit", "sh", "web_search", "web_fetch", "view", "json", "vars"] {
+      assert!(vm.docs.contains_key(name), "{name}");
+    }
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn the_log_shows_a_url_without_what_may_hold_a_key() {
+    assert_eq!(bare("https://u:PASS@a.com:8/x?key=K#f"), "https://a.com:8/x");
+    let lab = Lab::new();
+    lab.file("h.luau", HANDS);
+    let out = lab
+      .go("pcall(get, {url = 'http://user:PASS@127.0.0.1:1/?k=KEY', timeout = 0/0})")
+      .await;
+    assert!(
+      out.text.starts_with("=> false") && !out.text.contains("PASS") && !out.text.contains("KEY"),
+      "{}",
+      out.text
+    );
   }
 }
