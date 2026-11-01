@@ -15,15 +15,20 @@
 //! and MEMORY. Running past either, or a stop, raises an error in the VM,
 //! which keeps its globals. A VM idle for IDLE is dropped; all of them go
 //! with Acorn.
+//!
+//! `plugins` add to these globals or replace them, in a layer of the VM that
+//! is built anew at a call's start when their files have changed. No code
+//! runs in the VM then, and the model's globals are apart from it.
 
 use crate::Img;
 use crate::ai::{Out, Spec};
 use crate::memory::{PICS, image_for_model};
-use crate::{machine, web};
+use crate::plugins::{self, Stamp};
+use crate::{config, machine, web};
 use mlua::{Function, IntoLua, Lua, LuaSerdeExt as _, MultiValue, Table, Value, VmState};
 use parking_lot::Mutex;
 use serde_json::{Value as Json, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -46,6 +51,8 @@ const OUTPUT_CHARS: usize = 16_000;
 const VIEW_BYTES: usize = 50 << 20;
 /// Calls named in a result's list of them.
 const CALLS_SHOWN: usize = 20;
+/// A plugin's Luau time to load.
+const LOAD: Duration = Duration::from_secs(5);
 
 pub fn tool() -> Spec {
   machine::spec(
@@ -56,14 +63,13 @@ read(path: string, opts?: {{offset: number?, limit: number?}}): string   -- the 
 write(path: string, content: string): number   -- creates or replaces the file whole; bytes written
 edit(path: string, old: string, new: string, opts?: {{all: boolean?}}): string   -- replaces old, which must be there once (or every time, all = true)
 sh(cmd: string, opts?: {{timeout: number?, cwd: string?}}): {{stdout: string, stderr: string, code: number, timed_out: boolean, truncated: boolean, full: string?, full_err: string?}}   -- runs bash -c; timeout in seconds, {SH_TIMEOUT} by default, at most {SH_TIMEOUT_MAX}; a stream past {OUT} KB keeps only its last {OUT} KB (truncated), the whole of it in the file full (stdout) or full_err (stderr)
-web_search(query: string, opts?: {{count: number?, question: string?}}): string   -- each result's title, url, site, date and summary, best first. query: 1 to 128 characters, with operators: site:github.com (several joined with OR), -site:, -word, \"exact phrase\", -\"phrase\", lang:en,zh, after:2025-01-01, before:2026. count: 1 to 50 (10 by default). question: the user's question that led to it
-web_fetch(url: string, opts?: {{at: number?}}): string   -- a page's title and content as Markdown; past {CAP} characters it comes in pages from character at, saying where to go on
+{docs}
 view(path: string): string   -- attaches a png, jpeg, gif or webp image (scaled to fit) to this call's result, so you see it on your next step; at most {PICS} a call
 json.encode(v): string, json.decode(s: string): any
 vars(): your globals, by name
 A failed call raises an error: pcall it to go on. A call has {CHUNK}s of Luau's own time (waiting on sh or the web is not counted) and {MB} MB of memory.",
       OUT = machine::OUTPUT_BYTES / 1000,
-      CAP = crate::clip::CAP,
+      docs = docs(),
       CHUNK = CHUNK.as_secs(),
       MB = MEMORY >> 20,
       PICS = PICS,
@@ -74,6 +80,51 @@ A failed call raises an error: pcall it to go on. A call has {CHUNK}s of Luau's 
     }),
     &["description", "code"],
   )
+}
+
+/// The web's tools' docs, by name, before any plugin replaces one.
+fn web_docs() -> BTreeMap<String, String> {
+  [
+    (
+      "web_fetch",
+      format!(
+        "web_fetch(url: string, opts?: {{at: number?}}): string   -- a page's title and content as Markdown; past {CAP} characters it comes in pages from character at, saying where to go on",
+        CAP = crate::clip::CAP,
+      ),
+    ),
+    (
+      "web_search",
+      "web_search(query: string, opts?: {count: number?, question: string?}): string   -- each result's title, url, site, date and summary, best first. query: 1 to 128 characters, with operators: site:github.com (several joined with OR), -site:, -word, \"exact phrase\", -\"phrase\", lang:en,zh, after:2025-01-01, before:2026. count: 1 to 50 (10 by default). question: the user's question that led to it".to_string(),
+    ),
+  ]
+  .into_iter()
+  .map(|(k, v)| (k.to_string(), v))
+  .collect()
+}
+
+/// The docs last built, and of which files.
+static DOCS: Mutex<Option<(Stamp, String)>> = Mutex::new(None);
+
+/// The doc lines of the web's tools and the plugins, one line each, in order
+/// of name: from loading them as a VM does, so they say what a call will find.
+fn docs() -> String {
+  let dir = plugins::dir();
+  let now = plugins::stamp(&dir);
+  let mut last = DOCS.lock();
+  if let Some((stamp, docs)) = last.as_ref()
+    && *stamp == now
+  {
+    return docs.clone();
+  }
+  let joined = |docs: &BTreeMap<String, String>| docs.values().cloned().collect::<Vec<_>>().join("\n");
+  let got = Vm::new(&dir, &dir).and_then(|vm| {
+    let mut vm = vm;
+    vm.refresh().map_err(mlua::Error::runtime)?;
+    Ok(joined(&vm.docs))
+  });
+  let docs = got.unwrap_or_else(|_| joined(&web_docs()));
+  *last = Some((now, docs.clone()));
+  docs
 }
 
 /// What the system prompt says of luau, as hx's prompt does, and as
@@ -139,9 +190,13 @@ local function show(v, depth)
 end
 
 -- A tool's failure raised as its message alone; so is one of its call
--- (a bad argument, a yield where Luau can't), first line only.
-local function raising(f)
+-- (a bad argument, a yield where Luau can't), first line only. One that acts
+-- (`acts`) won't while a plugin loads: loading has no effects.
+local function raising(f, acts)
 	return function(...)
+		if acts and __loading() then
+			error("no tools while a plugin loads: call them in its functions", 2)
+		end
 		local ran, ok, v = pcall(f, ...)
 		if not ran then
 			error((string.match(tostring(ok), "^[^\n]*")), 2)
@@ -153,13 +208,16 @@ local function raising(f)
 	end
 end
 
-read = raising(__read)
-write = raising(__write)
-edit = raising(__edit)
-sh = raising(__sh)
-web_search = raising(__web_search)
-view = raising(__view)
-web_fetch = raising(__web_fetch)
+read = raising(__read, true)
+write = raising(__write, true)
+edit = raising(__edit, true)
+sh = raising(__sh, true)
+web_search = raising(__web_search, true)
+view = raising(__view, true)
+web_fetch = raising(__web_fetch, true)
+
+-- What a plugin has and the model's code does not.
+__host = { http = raising(__http, true), secret = raising(__secret) }
 
 function __format(v)
 	return show(v, 0)
@@ -193,6 +251,8 @@ struct Run {
   waiting: usize,
   imgs: Vec<Img>,
   cancel: CancellationToken,
+  /// A plugin is loading: no tool may act.
+  loading: bool,
 }
 
 /// A caller's VM: its globals (`env`) and its call under way.
@@ -200,6 +260,16 @@ struct Vm {
   lua: Lua,
   env: Table,
   run: Arc<Mutex<Run>>,
+  /// The globals under any plugin's, and what a plugin has besides.
+  base: Table,
+  host: Table,
+  /// Where its plugins are, and of which files its layer is (none: not built).
+  dir: PathBuf,
+  stamp: Option<Stamp>,
+  /// Its layer's docs, the globals it provides, and what is wrong with it.
+  docs: BTreeMap<String, String>,
+  provided: BTreeMap<String, String>,
+  warns: Vec<String>,
 }
 
 /// A caller's VM, made on its first call, and when it was last used.
@@ -231,6 +301,11 @@ pub async fn run(input: &Json, cwd: PathBuf, cancel: CancellationToken) -> Out {
 
 /// `code` run in the VM of the caller in `cwd`, with `budget` of Luau time.
 async fn eval(cwd: PathBuf, code: &str, budget: Duration, cancel: CancellationToken) -> Out {
+  eval_with(&plugins::dir(), cwd, code, budget, cancel).await
+}
+
+/// `eval`, with the plugins in `dir`.
+async fn eval_with(dir: &Path, cwd: PathBuf, code: &str, budget: Duration, cancel: CancellationToken) -> Out {
   let slot = {
     let mut vms = VMS.lock();
     vms.retain(|_, s| Arc::strong_count(s) > 1 || s.used.lock().elapsed() < IDLE);
@@ -249,19 +324,19 @@ async fn eval(cwd: PathBuf, code: &str, budget: Duration, cancel: CancellationTo
     () = cancel.cancelled() => return Out::fail("stopped"),
   };
   if held.is_none() {
-    match Vm::new(&cwd) {
+    match Vm::new(&cwd, dir) {
       Ok(vm) => *held = Some(vm),
       Err(e) => return Out::fail(format!("cannot start Luau: {e}")),
     }
   }
-  let vm = held.as_ref().expect("made above");
+  let vm = held.as_mut().expect("made above");
   let out = vm.eval(code, budget, cancel).await;
   *slot.used.lock() = Instant::now();
   out
 }
 
 impl Vm {
-  fn new(cwd: &Path) -> mlua::Result<Vm> {
+  fn new(cwd: &Path, dir: &Path) -> mlua::Result<Vm> {
     let lua = Lua::new();
     let run = Arc::new(Mutex::new(Run::default()));
     let g = lua.globals();
@@ -303,6 +378,8 @@ impl Vm {
       })?,
     )?;
     g.set("json", json)?;
+    let r = run.clone();
+    g.set("__loading", lua.create_function(move |_, ()| Ok(r.lock().loading))?)?;
     tools(&lua, cwd, &run)?;
     lua.load(PRELUDE).set_name("=prelude").exec()?;
     lua.sandbox(true)?;
@@ -320,22 +397,83 @@ impl Vm {
       }
       Ok(VmState::Continue)
     });
-    // The session sees the globals, read-only, but not _G or coroutine:
-    // mlua builds its async calls on coroutines of its own.
-    let view = lua.create_table()?;
-    for pair in g.pairs::<Value, Value>() {
-      let (k, v) = pair?;
-      if matches!(&k, Value::String(s) if matches!(&*s.to_str()?, "_G" | "coroutine")) {
-        continue;
-      }
-      view.raw_set(k, v)?;
+    let host = g.get("__host")?;
+    Ok(Vm {
+      lua,
+      env,
+      run,
+      base: g,
+      host,
+      dir: dir.to_path_buf(),
+      stamp: None,
+      docs: BTreeMap::new(),
+      provided: BTreeMap::new(),
+      warns: Vec::new(),
+    })
+  }
+
+  /// The plugins' layer, built anew if their files have changed since it
+  /// was; what the model should hear of a change. The files are read after
+  /// their stamp, so one edited meanwhile is loaded again next call. A stop
+  /// leaves the layer as it was.
+  fn refresh(&mut self) -> Result<String, String> {
+    let now = plugins::stamp(&self.dir);
+    if self.stamp.as_ref() == Some(&now) {
+      return Ok(String::new());
     }
-    view.set_readonly(true);
-    let meta = lua.create_table()?;
-    meta.set("__index", view)?;
-    meta.set("__metatable", "locked")?;
-    env.set_metatable(Some(meta))?;
-    Ok(Vm { lua, env, run })
+    self.run.lock().loading = true;
+    let run = self.run.clone();
+    let tick = move || run.lock().deadline = Some(Instant::now() + LOAD);
+    let layer = plugins::load(&self.lua, &self.base, web_docs(), &self.host, &self.dir, tick);
+    {
+      let mut run = self.run.lock();
+      run.loading = false;
+      run.out.clear();
+      if run.cancel.is_cancelled() {
+        return Err("stopped".into());
+      }
+    }
+    let layer = layer.map_err(|e| format!("cannot load plugins: {}", clean(&e)))?;
+    // The session sees the layer, read-only, through its own globals.
+    let meta = (|| {
+      let meta = self.lua.create_table()?;
+      meta.set("__index", layer.view)?;
+      meta.set("__metatable", "locked")?;
+      self.env.set_metatable(Some(meta))
+    })();
+    meta.map_err(|e| format!("cannot load plugins: {}", clean(&e)))?;
+    let said = layer
+      .provided
+      .keys()
+      .filter(|name| self.docs.get(*name) != layer.docs.get(*name))
+      .filter_map(|name| layer.docs.get(name).cloned())
+      .chain(
+        self
+          .provided
+          .keys()
+          .filter(|name| !layer.provided.contains_key(*name))
+          .map(|name| format!("{name}: its plugin is gone")),
+      )
+      .collect::<Vec<_>>();
+    self.docs = layer.docs;
+    self.provided = layer.provided;
+    self.warns = layer.warns;
+    self.stamp = Some(now);
+    Ok(if said.is_empty() {
+      String::new()
+    } else {
+      format!("[plugins changed:\n{}]", said.join("\n"))
+    })
+  }
+
+  /// What is wrong with the layer now, each call till it is fixed.
+  fn warnings(&self) -> Vec<String> {
+    let hidden = self
+      .provided
+      .iter()
+      .filter(|(name, _)| !matches!(self.env.raw_get::<Value>(name.as_str()), Ok(Value::Nil) | Err(_)))
+      .map(|(name, plugin)| format!("your global {name} hides plugin {plugin}'s: set it to nil to use that"));
+    self.warns.iter().cloned().chain(hidden).collect()
   }
 
   /// `code`, its last line an expression if it is one, so its value comes
@@ -365,13 +503,18 @@ impl Vm {
     load(code)
   }
 
-  async fn eval(&self, code: &str, budget: Duration, cancel: CancellationToken) -> Out {
+  async fn eval(&mut self, code: &str, budget: Duration, cancel: CancellationToken) -> Out {
     *self.run.lock() = Run {
       id: RUNS.fetch_add(1, Ordering::Relaxed),
-      deadline: Some(Instant::now() + budget),
       cancel,
       ..Run::default()
     };
+    let changed = match self.refresh() {
+      Ok(changed) => changed,
+      Err(why) => return Out::fail(why),
+    };
+    let warns = self.warnings();
+    self.run.lock().deadline = Some(Instant::now() + budget);
     let got = match self.compile(code) {
       Ok(f) => f.call_async::<MultiValue>(()).await,
       Err(e) => Err(e),
@@ -423,7 +566,11 @@ impl Vm {
       if run.calls.len() > CALLS_SHOWN {
         named.push_str(&format!(" · …({} in all)", run.calls.len()));
       }
-      text.push_str(&format!("[calls: {named}]"));
+      text.push_str(&format!("[calls: {named}]\n"));
+    }
+    for line in warns.iter().chain(Some(&changed).filter(|c| !c.is_empty())) {
+      text.push_str(line);
+      text.push('\n');
     }
     Out {
       text: squeeze(text.trim_end()),
@@ -434,7 +581,7 @@ impl Vm {
 }
 
 /// An error as the model reads it: its message, then its traceback.
-fn clean(e: &mlua::Error) -> String {
+pub(crate) fn clean(e: &mlua::Error) -> String {
   match e {
     mlua::Error::CallbackError { cause, traceback } => format!("{}\n{}", clean(cause), traceback.trim_end()),
     mlua::Error::MemoryError(_) => format!("out of memory ({} MB): keep less in globals", MEMORY >> 20),
@@ -639,6 +786,94 @@ fn tools(lua: &Lua, cwd: &Path, run: &Arc<Mutex<Run>>) -> mlua::Result<()> {
       }
     })?,
   )?;
+  g.set(
+    "__secret",
+    lua.create_function(|lua, name: String| {
+      Ok(match config::secret(&name) {
+        Ok(key) => (true, key.into_lua(lua)?),
+        Err(why) => (false, why.into_lua(lua)?),
+      })
+    })?,
+  )?;
+  let (dir, r) = (cwd.to_path_buf(), run.clone());
+  g.set(
+    "__http",
+    lua.create_async_function(move |lua, req: Table| {
+      let (dir, r) = (dir.clone(), r.clone());
+      async move {
+        let url: String = req.get("url")?;
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+          return Err(mlua::Error::runtime("http: give an http or https url"));
+        }
+        let pairs = |k: &str| -> mlua::Result<Vec<(String, String)>> {
+          Ok(match req.get::<Option<Table>>(k)? {
+            Some(t) => t.pairs::<String, String>().collect::<mlua::Result<_>>()?,
+            None => Vec::new(),
+          })
+        };
+        let (query, mut headers) = (pairs("query")?, pairs("headers")?);
+        let body = match req.get::<Value>("json")? {
+          Value::Nil => req
+            .get::<Option<mlua::LuaString>>("body")?
+            .map(|b| b.as_bytes().to_vec()),
+          v => {
+            headers.push(("content-type".into(), "application/json".into()));
+            Some(lua.from_value::<Json>(v)?.to_string().into_bytes())
+          }
+        };
+        let method = req.get::<Option<String>>("method")?;
+        let method = method.unwrap_or_else(|| if body.is_some() { "POST" } else { "GET" }.into());
+        let timeout = req
+          .get::<Option<f64>>("timeout")?
+          .map_or(web::TIMEOUT, |t| Duration::from_secs_f64(t.clamp(1.0, SH_TIMEOUT_MAX)));
+        let save = req.get::<Option<String>>("save")?;
+        let call = Call::start(&r, "http", url.split(['?', '#']).next().unwrap_or_default());
+        let cancel = call.cancel.clone();
+        let sent = web::Req {
+          method,
+          url,
+          query,
+          headers,
+          body,
+          timeout,
+        };
+        let to = save.as_ref().map(|path| dir.join(path));
+        // Before a request that may cost money, not after.
+        if let Some(to) = to.as_ref().filter(|to| to.exists()) {
+          return call.end(
+            &lua,
+            Err::<Table, _>(format!("http: {} is already there", to.display())),
+          );
+        }
+        let got = async {
+          let res = web::request(&sent, &cancel).await?;
+          let t = lua.create_table().map_err(|e| e.to_string())?;
+          let status = res.status().as_u16();
+          t.set("status", status).map_err(|e| e.to_string())?;
+          if let Some(to) = &to {
+            let bytes = web::save(res, to, &cancel).await?;
+            t.set("saved", save.clone()).map_err(|e| e.to_string())?;
+            t.set("bytes", bytes).map_err(|e| e.to_string())?;
+            return Ok(t);
+          }
+          let bytes = web::read(res, &cancel).await?;
+          if let Ok(v) = serde_json::from_slice::<Json>(&bytes) {
+            // A null is no field at all, not a value to trip on.
+            let options = mlua::serde::SerializeOptions::new()
+              .serialize_none_to_null(false)
+              .serialize_unit_to_null(false);
+            t.set("json", lua.to_value_with(&v, options).map_err(|e| e.to_string())?)
+              .map_err(|e| e.to_string())?;
+          }
+          t.set("text", lua.create_string(&bytes).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+          Ok(t)
+        }
+        .await;
+        call.end(&lua, got)
+      }
+    })?,
+  )?;
   let r = run.clone();
   g.set(
     "__web_search",
@@ -683,13 +918,18 @@ fn tools(lua: &Lua, cwd: &Path, run: &Arc<Mutex<Run>>) -> mlua::Result<()> {
 mod tests {
   use super::*;
 
+  /// `eval`, with no plugins, whatever this Mac has.
+  async fn eval(cwd: PathBuf, code: &str, budget: Duration, cancel: CancellationToken) -> Out {
+    eval_with(Path::new("/nonexistent"), cwd, code, budget, cancel).await
+  }
+
   #[tokio::test(flavor = "multi_thread")]
   async fn a_new_callers_dir_is_made_first() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().join("work/main");
     let input = json!({"description": "List the dir", "code": "sh('ls').code"});
     let out = run(&input, cwd, CancellationToken::new()).await;
-    assert_eq!(out.text, "=> 0\n[calls: sh \"ls\"]");
+    assert!(out.text.starts_with("=> 0\n[calls: sh \"ls\"]"), "{}", out.text);
   }
 
   async fn go(cwd: &Path, code: &str) -> Out {
@@ -920,5 +1160,301 @@ mod tests {
     assert_eq!(go(cwd, "return _G, coroutine, loadstring, getfenv").await.text, "");
     let out = go(cwd, "string.upper = nil").await;
     assert!(out.fail, "{}", out.text);
+  }
+
+  /// A caller's VM with plugins in a dir of their own: what `go`s in it, and
+  /// a file to write there.
+  struct Lab {
+    plugins: tempfile::TempDir,
+    cwd: tempfile::TempDir,
+  }
+
+  impl Lab {
+    fn new() -> Lab {
+      Lab {
+        plugins: tempfile::tempdir().unwrap(),
+        cwd: tempfile::tempdir().unwrap(),
+      }
+    }
+
+    fn file(&self, name: &str, src: &str) {
+      std::fs::write(self.plugins.path().join(name), src).unwrap();
+    }
+
+    async fn go(&self, code: &str) -> Out {
+      eval_with(
+        self.plugins.path(),
+        self.cwd.path().to_path_buf(),
+        code,
+        CHUNK,
+        CancellationToken::new(),
+      )
+      .await
+    }
+  }
+
+  const EXA: &str =
+    "return { web_search = { doc = 'web_search(q) -- exa', value = function(q) return 'exa:' .. q end } }";
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn a_plugin_replaces_a_tool_and_goes_with_its_file_and_the_globals_stay() {
+    let lab = Lab::new();
+    assert!(!lab.go("kept = 41").await.fail);
+    lab.file("exa.luau", EXA);
+    let on = lab.go("web_search('q')").await;
+    assert!(
+      on.text
+        .starts_with("=> exa:q\n[plugins changed:\nweb_search(q) -- exa]"),
+      "{}",
+      on.text
+    );
+    assert_eq!(
+      lab.go("kept + 1").await.text,
+      "=> 42",
+      "said once, and the global stays"
+    );
+    lab.file("exa.luau", &EXA.replace("exa:", "exa2:"));
+    assert!(lab.go("web_search('q')").await.text.starts_with("=> exa2:q"));
+    std::fs::remove_file(lab.plugins.path().join("exa.luau")).unwrap();
+    let off = lab.go("kept").await;
+    assert!(
+      off.text.contains("=> 41") && off.text.contains("web_search: its plugin is gone"),
+      "{}",
+      off.text
+    );
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn a_broken_plugin_is_said_every_call_and_what_it_replaces_stays() {
+    let lab = Lab::new();
+    lab.file("bad.luau", "return {");
+    for _ in 0..2 {
+      let out = lab.go("typeof(web_search)").await;
+      assert!(!out.fail, "{}", out.text);
+      assert!(
+        out.text.starts_with("=> function") && out.text.contains("plugin bad did not load"),
+        "{}",
+        out.text
+      );
+    }
+    lab.file("bad.luau", EXA);
+    let fixed = lab.go("web_search('q')").await;
+    assert!(
+      fixed.text.starts_with("=> exa:q") && !fixed.text.contains("did not load"),
+      "{}",
+      fixed.text
+    );
+    for src in [
+      "return 1",
+      "return { web_search = 1 }",
+      "return { web_search = { value = 1 } }",
+      "return { web_search = { doc = 'd' } }",
+      "return { web_search = { doc = 'two\\nlines', value = 1 } }",
+      "return { __read = { doc = 'd', value = 1 } }",
+      "return { ['a b'] = { doc = 'd', value = 1 } }",
+      "error('boom')",
+    ] {
+      lab.file("bad.luau", src);
+      let out = lab.go("typeof(web_search)").await;
+      assert!(out.text.contains("plugin bad did not load"), "{src}: {}", out.text);
+    }
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn a_plugin_that_loops_uses_its_own_time_and_the_next_still_loads() {
+    let lab = Lab::new();
+    lab.file("a_loop.luau", "while true do end");
+    lab.file("b_fine.luau", EXA);
+    let began = Instant::now();
+    let out = lab.go("web_search('q')").await;
+    assert!(began.elapsed() < LOAD * 2, "{:?}", began.elapsed());
+    assert!(
+      out.text.starts_with("=> exa:q") && out.text.contains("plugin a_loop did not load"),
+      "{}",
+      out.text
+    );
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn loading_has_no_effects() {
+    let lab = Lab::new();
+    for (i, tool) in [
+      "write('leak.txt', 'x')",
+      "sh('touch leak.txt')",
+      "http{url = 'http://127.0.0.1:1'}",
+    ]
+    .iter()
+    .enumerate()
+    {
+      lab.file(&format!("p{i}.luau"), &format!("{tool}\nreturn {{}}"));
+    }
+    let out = lab.go("1").await;
+    assert_eq!(
+      out.text.matches("no tools while a plugin loads").count(),
+      3,
+      "{}",
+      out.text
+    );
+    assert!(!lab.cwd.path().join("leak.txt").exists());
+    // A tool taken at load works when called later.
+    lab.file(
+      "p0.luau",
+      "local w = write\nreturn { put = { doc = 'put()', value = function() return w('later.txt', 'x') end } }",
+    );
+    std::fs::remove_file(lab.plugins.path().join("p1.luau")).unwrap();
+    std::fs::remove_file(lab.plugins.path().join("p2.luau")).unwrap();
+    assert!(lab.go("put()").await.text.starts_with("=> 1"));
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn the_model_cant_reach_what_a_plugin_has() {
+    let lab = Lab::new();
+    lab.file(
+      "p.luau",
+      "local key = 'SECRET'\nreturn { p = { doc = 'p', value = { len = function() return #key end, deep = { x = 1 } } } }",
+    );
+    for code in ["http", "secret", "__http", "__host", "__read", "__secret"] {
+      assert!(
+        lab.go(code).await.text.starts_with("[plugins") || lab.go(code).await.text.is_empty(),
+        "{code}"
+      );
+    }
+    assert!(lab.go("p.len = nil").await.fail, "a plugin's table is frozen");
+    assert!(lab.go("p.deep.x = 2").await.fail, "all the way down");
+    assert_eq!(lab.go("p.len()").await.text, "=> 6");
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn clashes_and_hidden_plugins_are_said() {
+    let lab = Lab::new();
+    assert!(!lab.go("web_search = 'mine'").await.fail);
+    lab.file("a.luau", EXA);
+    lab.file("b.luau", &EXA.replace("exa:", "b:"));
+    let out = lab.go("1").await;
+    assert!(
+      out.text.contains("web_search of plugin a is replaced by plugin b's"),
+      "{}",
+      out.text
+    );
+    assert!(
+      out.text.contains("your global web_search hides plugin b's"),
+      "{}",
+      out.text
+    );
+    assert!(
+      lab
+        .go("web_search = nil\nweb_search('q')")
+        .await
+        .text
+        .starts_with("=> b:q")
+    );
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn a_stop_while_loading_leaves_the_layer_to_be_built_again() {
+    let lab = Lab::new();
+    lab.file("slow.luau", "while true do end");
+    let cancel = CancellationToken::new();
+    let stop = cancel.clone();
+    tokio::spawn(async move {
+      tokio::time::sleep(Duration::from_millis(100)).await;
+      stop.cancel();
+    });
+    let out = eval_with(lab.plugins.path(), lab.cwd.path().to_path_buf(), "1", CHUNK, cancel).await;
+    assert!(out.fail && out.text == "stopped", "{}", out.text);
+    lab.file("slow.luau", EXA);
+    assert!(lab.go("web_search('q')").await.text.starts_with("=> exa:q"));
+  }
+
+  #[test]
+  fn docs_are_what_a_vm_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("exa.luau"), EXA).unwrap();
+    std::fs::write(dir.path().join("bad.luau"), "return {").unwrap();
+    let mut vm = Vm::new(dir.path(), dir.path()).unwrap();
+    vm.refresh().unwrap();
+    assert_eq!(vm.docs["web_search"], "web_search(q) -- exa");
+    assert!(
+      vm.docs["web_fetch"].starts_with("web_fetch(url"),
+      "a tool not replaced keeps its doc"
+    );
+    assert_eq!(vm.docs.len(), 2);
+  }
+
+  /// A server answering one request, with what it saw sent back.
+  async fn server(reply: &'static str) -> (String, tokio::sync::oneshot::Receiver<String>) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let at = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+      let (mut sock, _) = listener.accept().await.unwrap();
+      let mut got = vec![0; 8192];
+      let n = sock.read(&mut got).await.unwrap();
+      let _ = tx.send(String::from_utf8_lossy(&got[..n]).into_owned());
+      let head = format!(
+        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+        reply.len()
+      );
+      sock.write_all(head.as_bytes()).await.unwrap();
+    });
+    (at, rx)
+  }
+
+  /// A plugin that hands the model's code its http, for tests.
+  const HANDS: &str = "return { get = { doc = 'get(req)', value = function(req) return http(req) end } }";
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn http_sends_and_answers_and_keeps_the_query_out_of_the_log() {
+    let lab = Lab::new();
+    lab.file("h.luau", HANDS);
+    let (at, seen) = server(r#"{"a": 1, "gone": null}"#).await;
+    let code = format!(
+      "local r = get{{url = '{at}/x', query = {{key = 'SECRET', q = 'a b'}}, headers = {{['x-api-key'] = 'K'}}, json = {{n = 1}}}}\nreturn r.status, r.json.a, r.json.gone == nil"
+    );
+    let out = lab.go(&code).await;
+    assert!(out.text.starts_with("=> 200, 1, true"), "{}", out.text);
+    assert!(!out.text.contains("SECRET"), "{}", out.text);
+    let seen = seen.await.unwrap();
+    assert!(
+      seen.starts_with("POST /x?key=SECRET&q=a+b ") || seen.starts_with("POST /x?q=a+b&key=SECRET "),
+      "{seen}"
+    );
+    assert!(seen.contains("x-api-key: K") && seen.contains("{\"n\":1}"), "{seen}");
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn http_saves_a_file_viewable_and_wont_overwrite_or_pay_twice() {
+    let lab = Lab::new();
+    lab.file("h.luau", HANDS);
+    let (at, _) = server("\u{ff}bytes").await;
+    let out = lab
+      .go(&format!("get{{url = '{at}', save = 'got/out.bin'}}.bytes"))
+      .await;
+    assert!(out.text.starts_with("=> 7"), "{}", out.text);
+    assert_eq!(
+      std::fs::read(lab.cwd.path().join("got/out.bin")).unwrap(),
+      "\u{ff}bytes".as_bytes()
+    );
+    let again = lab
+      .go(&format!("pcall(get, {{url = '{at}', save = 'got/out.bin'}})"))
+      .await;
+    assert!(
+      again.text.contains("false") && again.text.contains("already there"),
+      "{}",
+      again.text
+    );
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn a_secret_missing_at_load_says_what_to_set() {
+    let lab = Lab::new();
+    lab.file("k.luau", "local k = secret('ACORN_NO_SUCH_KEY')\nreturn {}");
+    let out = lab.go("1").await;
+    assert!(
+      out.text.contains("plugin k did not load") && out.text.contains("acorn_no_such_key"),
+      "{}",
+      out.text
+    );
   }
 }

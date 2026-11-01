@@ -22,6 +22,7 @@ pub mod luau;
 pub mod machine;
 pub mod memory;
 pub mod names;
+pub mod plugins;
 pub mod price;
 pub mod skills;
 pub mod tools;

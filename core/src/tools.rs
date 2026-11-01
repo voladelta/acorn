@@ -14,7 +14,7 @@
 
 use crate::ai::Spec;
 use crate::machine::spec;
-use crate::{config, effort, luau, memory, skills};
+use crate::{config, effort, luau, memory, plugins, skills};
 use serde_json::json;
 use std::path::Path;
 
@@ -168,8 +168,9 @@ an agent only for a task.
 fn mac(work: &Path) -> String {
   let work = work.display();
   format!(
-    "Your hands on the user's Mac and on the web are your luau tool, and only\nit: its code reads, writes and edits files, runs commands and searches\nand fetches the web, in your work dir, {work}/<you> (Acorn's:\n{work}/main), where relative paths start.\n\n{luau}",
+    "Your hands on the user's Mac and on the web are your luau tool, and only\nit: its code reads, writes and edits files, runs commands and searches\nand fetches the web, in your work dir, {work}/<you> (Acorn's:\n{work}/main), where relative paths start.\n\n{luau}\n\n{plugins}",
     luau = luau::GUIDE,
+    plugins = plugins::note(),
   )
 }
 
