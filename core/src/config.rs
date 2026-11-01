@@ -108,6 +108,31 @@ impl Config {
   }
 }
 
+/// A key by its variable's name (EXA_API_KEY): the variable, else
+/// config.json's lowercase key (exa_api_key), read now, so a key added counts
+/// at once.
+pub fn secret(name: &str) -> Result<String, String> {
+  secret_in(&get().dir, name)
+}
+
+fn secret_in(dir: &std::path::Path, name: &str) -> Result<String, String> {
+  if let Some(key) = std::env::var(name).ok().filter(|k| !k.trim().is_empty()) {
+    return Ok(key.trim().to_string());
+  }
+  let file = dir.join("config.json");
+  let file: HashMap<String, serde_json::Value> = match std::fs::read_to_string(&file) {
+    Ok(text) => serde_json::from_str(&text).map_err(|e| format!("config.json: {e}"))?,
+    Err(_) => HashMap::new(),
+  };
+  file
+    .get(&name.to_lowercase())
+    .and_then(|v| v.as_str())
+    .map(str::trim)
+    .filter(|k| !k.is_empty())
+    .map(str::to_string)
+    .ok_or_else(|| format!("no key: set {name}, or {} in config.json", name.to_lowercase()))
+}
+
 /// A path, "~/" as home.
 pub fn expand(path: &str) -> PathBuf {
   path
@@ -126,4 +151,24 @@ fn run(key: &str, text: &str) -> Result<Effort, String> {
     return Err(format!("{key} is no model:effort offered here: {text}"));
   }
   Effort::parse(effort).ok_or_else(|| format!("{key} is no effort offered here: {text}"))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_secret_comes_from_the_file_as_it_is_now() {
+    let dir = tempfile::tempdir().unwrap();
+    let name = "ACORN_TEST_SECRET_UNSET";
+    assert!(
+      secret_in(dir.path(), name)
+        .unwrap_err()
+        .contains("acorn_test_secret_unset")
+    );
+    std::fs::write(dir.path().join("config.json"), r#"{"acorn_test_secret_unset": " k1 "}"#).unwrap();
+    assert_eq!(secret_in(dir.path(), name).unwrap(), "k1");
+    std::fs::write(dir.path().join("config.json"), r#"{"acorn_test_secret_unset": "k2"}"#).unwrap();
+    assert_eq!(secret_in(dir.path(), name).unwrap(), "k2");
+  }
 }
