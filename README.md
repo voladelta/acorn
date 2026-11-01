@@ -101,6 +101,27 @@ Ask for what you want in plain words: "stop", "fire Scout", "hire three agents t
 
 An assistant answering another in a thread has its work tools only: it can't consult further, keep facts or change the user's settings.
 
+### Plugins
+
+A plugin adds a global to `luau`, or replaces one, without restarting Acorn. Each is a Luau file in `~/.acorn/plugins`, and it counts from the caller's next `luau` call: edit or remove it and that counts too, and the agent's own globals stay. Ask Acorn for one in plain words ("use Exa for search"), or copy one from [plugins](plugins):
+
+| Plugin | Replaces | Key |
+|---|---|---|
+| [exa.luau](plugins/exa.luau) | `web_search`, `web_fetch` | `exa_api_key` in `config.json`, or `EXA_API_KEY` |
+| [tinyfish.luau](plugins/tinyfish.luau) | `web_search`, `web_fetch` | `tinyfish_api_key` in `config.json`, or `TINYFISH_API_KEY` |
+
+Install one search provider at a time: with both, the last by name wins, and each call says so. A file returns its globals, each with a one-line doc that goes in the tool's description:
+
+```lua
+local key = secret("EXA_API_KEY")
+local function search(query)
+  return http{ url = "https://api.exa.ai/search", headers = { ["x-api-key"] = key }, json = { query = query } }.json
+end
+return { web_search = { doc = "web_search(query: string): table -- via Exa", value = search } }
+```
+
+A plugin has what `luau`'s code has, plus `http` and `secret`, which that code does not. One that fails to load is left out, whatever it would have replaced stays, and every call reports it until it is fixed. Plugins run as the agent does, so read one from elsewhere before installing it. A key kept in `config.json` stays out of the chat, but it doesn't stop an agent that means to read it.
+
 ## Configuration
 
 Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). Any key can instead be set as `ACORN_<KEY>` in the environment, which wins. Paths may start with `~/`.
@@ -125,6 +146,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `~/.acorn/config.json` | The settings above |
 | `~/.acorn/assistants.json` | The assistants created, oldest first |
 | `~/.acorn/facts.db` | Facts, shared by all assistants |
+| `~/.acorn/plugins/` | Luau files that add to or replace `luau`'s globals |
 | `~/.acorn/work/` | The agents' work dirs: `main` for Acorn, `assistants/<id>` for others |
 | `~/.acorn/chats/<id>/chat.db` | A chat: messages, agent logs, the summary tree, the view and usage (SQLite, WAL) |
 | `~/.acorn/chats/<id>/docs/images/` | The chat's images, by hash |
@@ -136,6 +158,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 ## Privacy
 
 - The chat and its summaries are sent to DeepSeek on every call, as is any fact an assistant sees.
+- A search or fetch goes to DeepSeek, or to the service of a plugin that replaces it, as does whatever else a plugin sends.
 - `purge` erases a message at once from everything a call or the app can see. Its old bytes stay in `chat.db`'s pages until a wipe rewrites the file, which runs once the chat is idle (no turn, agent or summary at work) and is retried at the next launch if it fails or Acorn quits first.
 - Summaries written while a purged message's summary was in the compactor's context may still echo it.
 - Copies the disk itself keeps, such as APFS snapshots and Time Machine backups, are beyond Acorn's reach; FileVault protects them.

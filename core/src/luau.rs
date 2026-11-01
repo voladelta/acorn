@@ -1457,4 +1457,104 @@ mod tests {
       out.text
     );
   }
+
+  /// A shipped plugin, its APIs at `at`, its key given.
+  fn shipped(src: &str, at: &str) -> String {
+    let src = src
+      .replace("secret(\"EXA_API_KEY\")", "'K'")
+      .replace("secret(\"TINYFISH_API_KEY\")", "'K'");
+    [
+      "https://api.exa.ai",
+      "https://api.search.tinyfish.ai",
+      "https://api.fetch.tinyfish.ai",
+    ]
+    .iter()
+    .fold(src, |src, api| src.replace(api, at))
+  }
+
+  const EXA_FILE: &str = include_str!("../../plugins/exa.luau");
+  const TINYFISH_FILE: &str = include_str!("../../plugins/tinyfish.luau");
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn exa_searches_and_fetches() {
+    let lab = Lab::new();
+    let (at, seen) = server(
+      r#"{"results":[{"title":"V4","url":"https://a.com","publishedDate":"2026-06-01T00:00:00Z","highlights":["one","two"]},{"title":"B","url":"https://b.com","publishedDate":null}]}"#,
+    )
+    .await;
+    lab.file("exa.luau", &shipped(EXA_FILE, &at));
+    let out = lab.go("web_search('rust', {count = 2})").await;
+    assert!(
+      out
+        .text
+        .starts_with("=> 1. V4 (2026-06-01)\nhttps://a.com\none … two\n\n2. B\nhttps://b.com\n"),
+      "{}",
+      out.text
+    );
+    let seen = seen.await.unwrap();
+    assert!(
+      seen.starts_with("POST /search ") && seen.contains("x-api-key: K"),
+      "{seen}"
+    );
+    assert!(
+      seen.contains("\"numResults\":2") && seen.contains("\"highlights\":true"),
+      "{seen}"
+    );
+    let (at, seen) =
+      server(r#"{"results":[{"title":"T","text":"body"}],"statuses":[{"id":"u","status":"success"}]}"#).await;
+    lab.file("exa.luau", &shipped(EXA_FILE, &at));
+    assert!(
+      lab
+        .go("web_fetch('https://a.com')")
+        .await
+        .text
+        .contains("# T\nhttps://a.com\n\nbody")
+    );
+    assert!(seen.await.unwrap().starts_with("POST /contents "));
+    let (at, _) =
+      server(r#"{"results":[],"statuses":[{"id":"u","status":"error","error":{"tag":"CRAWL_NOT_FOUND"}}]}"#).await;
+    lab.file("exa.luau", &shipped(EXA_FILE, &at));
+    let failed = lab.go("web_fetch('https://a.com')").await;
+    assert!(
+      failed.fail && failed.text.contains("CRAWL_NOT_FOUND"),
+      "{}",
+      failed.text
+    );
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn tinyfish_searches_and_fetches() {
+    let lab = Lab::new();
+    let (at, seen) = server(
+      r#"{"query":"q","results":[{"position":1,"site_name":"A","title":"One","snippet":"s1","url":"https://a.com"},{"position":2,"site_name":"B","title":"Two","snippet":"s2","url":"https://b.com"}],"total_results":2,"page":0}"#,
+    )
+    .await;
+    lab.file("tinyfish.luau", &shipped(TINYFISH_FILE, &at));
+    let out = lab.go("web_search('a b', {count = 1})").await;
+    assert!(out.text.starts_with("=> 1. One (A)\nhttps://a.com\ns1"), "{}", out.text);
+    assert!(!out.text.contains("Two"), "{}", out.text);
+    let seen = seen.await.unwrap();
+    assert!(
+      seen.starts_with("GET /?query=a+b ") && seen.contains("x-api-key: K"),
+      "{seen}"
+    );
+    let (at, seen) = server(r#"{"results":[{"url":"u","title":"T","text":"body"}],"errors":[]}"#).await;
+    lab.file("tinyfish.luau", &shipped(TINYFISH_FILE, &at));
+    assert!(
+      lab
+        .go("web_fetch('https://a.com')")
+        .await
+        .text
+        .contains("# T\nhttps://a.com\n\nbody")
+    );
+    let seen = seen.await.unwrap();
+    assert!(
+      seen.starts_with("POST / ") && seen.contains("\"format\":\"markdown\""),
+      "{seen}"
+    );
+    let (at, _) = server(r#"{"results":[],"errors":[{"url":"u","error":"blocked"}]}"#).await;
+    lab.file("tinyfish.luau", &shipped(TINYFISH_FILE, &at));
+    let failed = lab.go("web_fetch('https://a.com')").await;
+    assert!(failed.fail && failed.text.contains("blocked"), "{}", failed.text);
+  }
 }
