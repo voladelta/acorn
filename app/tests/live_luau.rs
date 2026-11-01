@@ -419,3 +419,72 @@ fn luau_views_an_image_live() {
     "the square is {name}: {reply}"
   );
 }
+
+/// Plugins on a chat that goes on, Acorn never restarted: search as shipped,
+/// then Exa's plugin dropped in, then TinyFish's for it, then Acorn installing
+/// Exa's itself when asked. Run alone (one engine a process), with
+/// DEEPSEEK_API_KEY, EXA_API_KEY and TINYFISH_API_KEY.
+#[test]
+#[ignore]
+fn plugins_change_search_mid_chat_live() {
+  let dir = tempfile::tempdir().unwrap();
+  let db = dir.path().join("chats/default/chat.db");
+  let _dump = Dump(db.clone());
+  let home = dir.path().join("home");
+  let plugins = home.join("plugins");
+  std::fs::create_dir_all(&plugins).unwrap();
+  let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins");
+  // SAFETY: set once, before any thread of the test starts.
+  unsafe {
+    std::env::set_var("HOME", dir.path().join("user"));
+    std::env::set_var("ACORN_DIR", &home);
+    std::env::set_var("ACORN_CHATS", dir.path().join("chats"));
+  }
+  let mut app = Headless::start(EngineConfig::new(Root::of::<acorn::App>())).unwrap();
+  app.first_render().unwrap();
+  app
+    .wait_for_within("Hello! This is Acorn.", Duration::from_secs(20))
+    .unwrap();
+  let mut ask = |tag: &str, what: &str| {
+    app
+      .type_text(
+        "label:Message Acorn",
+        &format!("{what} Search with web_search in luau, once, and answer as {tag}=<the url you found>."),
+      )
+      .unwrap();
+    app.submit("label:Message Acorn").unwrap();
+    let said = format!("select text from msgs where log = '' and kind = 'unii' and text like '%{tag}=%';");
+    app
+      .wait_until(tag, Duration::from_secs(300), |_| !sql(&db, &said).trim().is_empty())
+      .unwrap();
+    println!("{tag}: {}", sql(&db, &said).trim());
+    echoes(&db).join("\n")
+  };
+
+  let first = ask("FIRST", "Find the Rust language's home page.");
+  assert!(
+    !first.contains("http \""),
+    "shipped search goes through no plugin: {first}"
+  );
+
+  std::fs::copy(shipped.join("exa.luau"), plugins.join("exa.luau")).unwrap();
+  let exa = ask("SECOND", "Find the Python language's home page.");
+  assert!(exa.contains("http \"https://api.exa.ai/search\""), "{exa}");
+  assert!(exa.contains("plugins changed"), "{exa}");
+  assert!(!exa.contains("did not load"), "{exa}");
+
+  std::fs::remove_file(plugins.join("exa.luau")).unwrap();
+  std::fs::copy(shipped.join("tinyfish.luau"), plugins.join("tinyfish.luau")).unwrap();
+  let fish = ask("THIRD", "Find the Go language's home page.");
+  assert!(fish.contains("http \"https://api.search.tinyfish.ai\""), "{fish}");
+  assert!(!fish.contains("did not load"), "{fish}");
+
+  let asked = format!(
+    "Use Exa instead of TinyFish for search from now on: the plugin is at {}, so remove TinyFish's and install that as your plugins note says. Then find the Zig language's home page.",
+    shipped.join("exa.luau").display()
+  );
+  let done = ask("FOURTH", &asked);
+  assert!(plugins.join("exa.luau").exists() && !plugins.join("tinyfish.luau").exists());
+  assert_eq!(done.matches("http \"https://api.exa.ai/search\"").count(), 2, "{done}");
+  assert!(!done.contains("did not load"), "{done}");
+}

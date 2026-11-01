@@ -1557,4 +1557,31 @@ mod tests {
     let failed = lab.go("web_fetch('https://a.com')").await;
     assert!(failed.fail && failed.text.contains("blocked"), "{}", failed.text);
   }
+
+  /// The shipped plugins, unchanged, against their real services; run with
+  /// `cargo test -- --ignored` and EXA_API_KEY and TINYFISH_API_KEY.
+  #[tokio::test(flavor = "multi_thread")]
+  #[ignore]
+  async fn the_shipped_plugins_read_the_web() {
+    for (name, src) in [("exa", EXA_FILE), ("tinyfish", TINYFISH_FILE)] {
+      let lab = Lab::new();
+      lab.file(&format!("{name}.luau"), src);
+      let found = lab.go("web_search('Rust programming language', {count = 3})").await;
+      println!("{name} search:\n{}\n", found.text);
+      assert!(
+        !found.fail && found.text.starts_with("=> 1. ") && found.text.contains("http"),
+        "{}",
+        found.text
+      );
+      assert!(!found.text.contains("did not load"), "{}", found.text);
+      assert!(!found.text.contains("4. "), "at most count: {}", found.text);
+      let page = lab
+        .go("local s = web_fetch('https://example.com')\nprint(s)\nreturn #s")
+        .await;
+      println!("{name} fetch:\n{}\n", page.text);
+      assert!(!page.fail && page.text.contains("Example Domain"), "{}", page.text);
+      let bad = lab.go("pcall(web_fetch, 'https://nonexistent.invalid/')").await;
+      println!("{name} bad fetch:\n{}\n", bad.text);
+    }
+  }
 }
