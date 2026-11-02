@@ -10,7 +10,7 @@ use crate::ai::{self, Handle, Out, Spec, Toolbox};
 use crate::effort::Effort;
 use crate::tools::{self, MAIN, SUB_AT, SUB_NOTE};
 use crate::wire::{Event, Live};
-use crate::{Block, Kind, Served, clip, config};
+use crate::{Block, Kind, Served, clip, config, memory};
 use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -139,6 +139,12 @@ impl Engine {
         }
       }
       "date" => Out::ok(self.lock().mem.date(num("id", u64::MAX))),
+      "search" => Out::ok(
+        self
+          .lock()
+          .mem
+          .search(memory::CHAT, &str("query"), num("n", 10) as usize),
+      ),
       "list_skills" => Out::ok(crate::skills::list(&crate::skills::roots(&cwd, &str("dir")))),
       "load_skill" => {
         crate::skills::load(&crate::skills::roots(&cwd, &str("dir")), &str("name")).map_or_else(Out::fail, Out::ok)

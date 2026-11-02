@@ -172,8 +172,11 @@ pub fn erase(db: &Connection) -> Result<()> {
 }
 
 /// The chat in `dir` wiped (`erase`), on a connection of its own: blocking.
+/// Its search index is first merged whole, as FTS5 keeps a deleted text's
+/// words in its older segments till then.
 pub fn wipe(dir: &Path) -> Result<()> {
   let db = Connection::open(dir.join("chat.db"))?;
   db.busy_timeout(std::time::Duration::from_secs(60))?;
+  db.execute("insert into search (search) values ('optimize')", [])?;
   erase(&db)
 }

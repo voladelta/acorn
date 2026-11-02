@@ -1,8 +1,8 @@
 //! Tools
 //! =====
 //! Acorn's prompts and tools. The user acts only by words, so whatever the
-//! app does, an assistant does by a tool. Everyone gets zoom and date
-//! (OWN); an assistant hires, tells and fires agents (BOSS); in its chat
+//! app does, an assistant does by a tool. Everyone gets zoom, date and
+//! search (OWN); an assistant hires, tells and fires agents (BOSS); in its chat
 //! with the user it also creates assistants and consults them (PEERS),
 //! keeps facts and purges messages (KEEP), and sets goals, reads usage,
 //! imports, exports and draws its memory (HOME); in a thread, where
@@ -57,6 +57,7 @@ Tools:
 - zoom(id, 1) gives message id whole, with its images
 - zoom(\"Name\") gives an agent's whole chat
 - date(id) gives the date and time of message id
+- search(query) finds the messages whose words match, newest first
 
 # Turns
 
@@ -67,8 +68,9 @@ they want work done.
 The view is your memory, and its latest word on a thing is the truth. Whenever
 you need any information, first find its latest mention in the view and zoom
 until you have it whole, before any other source, and before you act, guess or
-ask. Never grep or search memories manually; zoom is your only
-allowed mechanism to navigate the tree. Summaries keep little of tool output, so
+ask. When no line of the view mentions what you need, search the messages for a
+word or name you expect in it, then zoom the ids it gives. Summaries keep
+little of tool output, so
 say in your reply what you learned that will matter later.
 
 The user cuts in as a person would: a message they send while you work stops
@@ -210,8 +212,10 @@ messages it was made from; zoom(id, 1) gives message id in full, with
 the images its \"[image <file>]\" lines name. Zoom whenever a summary
 only mentions something you need, such as what your last reply said, a
 decision, a past attempt or where a file is, before you act, guess or
-ask. date(id) gives the date and time of message id. zoom(\"Name\") gives
-an agent's whole chat.
+ask. When no line mentions what you need, search(query) the messages
+for a word or name you expect in it, then zoom the ids it gives. date(id)
+gives the date and time of message id. zoom(\"Name\") gives an agent's
+whole chat.
 
 {mac}
 
@@ -253,6 +257,12 @@ fn own() -> Vec<Spec> {
       "The date and time of message id.",
       json!({"id": {"type": "integer"}}),
       &["id"],
+    ),
+    spec(
+      "search",
+      "Search this chat's messages, word for word (summaries aside), for when no line of the view mentions what you need: up to n (10 by default) of those whose text matches, newest first, each as id|kind: the words around the hit. Then zoom(id, 1) to read one whole. query: words, all of which must match (a word* matches its prefix), \"an exact phrase\", OR between alternatives.",
+      json!({"query": {"type": "string"}, "n": {"type": "integer"}}),
+      &["query"],
     ),
     spec(
       "list_skills",

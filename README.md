@@ -40,7 +40,7 @@ a view:    0+4 | 4+2 | 6+1 | 7+1 | 8+1 ...        old: merged; recent: one each
 
 Each line is named `id+n`: the `n` messages from `id` on. A message short enough is its own line; a longer one, and every merge, is written by a compaction call on the configured `compactor` effort. When the view passes its byte limit, a batch merges the most due pairs (the oldest since their last message) down to half, so between batches the view changes only at its end and DeepSeek's prefix cache keeps hitting.
 
-The model is told to find the latest mention of anything it needs in the view and zoom until it has it whole, before it acts, guesses or asks.
+The model is told to find the latest mention of anything it needs in the view and zoom until it has it whole, before it acts, guesses or asks. When no line mentions it, `search` finds the messages holding a word or name (a full-text index of `chat.db`), and it zooms the ids found.
 
 ## Install
 
@@ -91,7 +91,7 @@ Ask for what you want in plain words: "stop", "fire Scout", "hire three agents t
 
 | Tool | Who | What |
 |---|---|---|
-| `zoom`, `date` | everyone | Open a line of the view; a message's date |
+| `zoom`, `date`, `search` | everyone | Open a line of the view; a message's date; find the messages whose words match (full text, newest first) |
 | `luau` | assistants, hired agents | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch` and `json`, on this Mac in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s) |
 | `hire`, `tell`, `fire` | assistants | Hire agents for one task each, in parallel, in the background; message one at work (it cuts in); fire one or all |
 | `create_assistant` | with you | Hire an assistant: name, about, effort, instructions |

@@ -1,7 +1,8 @@
 //! A chat's memory in chat.db: logged, built and opened again as it was;
-//! a message purged with every node built from it, its secret gone from
-//! disk; facts kept, shadowed and forgotten across assistants; a view's
-//! last lines, the latest messages there before they are summarized.
+//! searched; a message purged with every node built from it, its secret
+//! gone from disk and the search; facts kept, shadowed and forgotten
+//! across assistants; a view's last lines, the latest messages there
+//! before they are summarized.
 
 use acorn_core::memory::{self, Memory, Msg, PURGED, Part};
 use acorn_core::{Kind, facts};
@@ -81,6 +82,28 @@ fn memory_in_sqlite() {
   assert_eq!(mem.message(5).unwrap().text, format!("my key is {SECRET}"));
   assert_eq!(mem.node(Part::new(3, 0)).as_deref(), Some(top.as_str()));
 
+  // searched: the messages' words, newest first; a query FTS5 can't read, why
+  assert_eq!(
+    mem.search(memory::CHAT, "hunter2", 10),
+    format!("5|unii: my key is {SECRET}")
+  );
+  let ids: Vec<String> = mem
+    .search(memory::CHAT, "message", 3)
+    .lines()
+    .map(|l| l.split('|').next().unwrap().to_string())
+    .collect();
+  assert_eq!(ids, ["11", "10", "9"]);
+  assert!(
+    mem
+      .search(memory::CHAT, "nowhere", 10)
+      .starts_with("No message matches")
+  );
+  assert!(
+    mem
+      .search(memory::CHAT, "\"unclosed", 10)
+      .starts_with("Can't read the query")
+  );
+
   // purged: its text, and every node built from it
   let age = mem.age;
   let said = mem.purge(None, 5).unwrap();
@@ -95,6 +118,12 @@ fn memory_in_sqlite() {
     "the rest stays"
   );
   assert!(mem.view.parts.iter().all(|p| mem.text(*p).find(SECRET).is_none()));
+  assert!(
+    mem
+      .search(memory::CHAT, "hunter2", 10)
+      .starts_with("No message matches"),
+    "a purged message is found no more"
+  );
   build(&mut mem);
   assert!(
     mem.node(Part::new(3, 0)).is_some_and(|t| !t.contains(SECRET)),

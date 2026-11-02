@@ -217,6 +217,37 @@ impl Memory {
     }
   }
 
+  /// Up to n messages of a log (CHAT, or an agent's) whose text matches
+  /// an FTS5 query, newest first, each "id|kind: snippet" around its hit;
+  /// a query FTS5 can't read, why.
+  pub fn search(&self, log: &str, query: &str, n: usize) -> String {
+    if query.trim().is_empty() {
+      return "Give a query: a word or name the message holds.".into();
+    }
+    let end = if log == CHAT { self.count } else { u64::MAX >> 1 };
+    let sql =
+      "select s.i, m.kind, snippet(search, 2, '', '', '…', 24) from search s join msgs m on m.log = s.log and m.i = s.i
+        where search match ?1 and s.log = ?2 and s.i < ?3 order by s.i desc limit ?4";
+    let hits = self.db.prepare_cached(sql).and_then(|mut q| {
+      q.query_map(params![query, log, end, n.clamp(1, HITS)], |r| {
+        Ok(format!(
+          "{}|{}: {}",
+          r.get::<_, u64>(0)?,
+          r.get::<_, String>(1)?,
+          flat(&r.get::<_, String>(2)?)
+        ))
+      })?
+      .collect::<rusqlite::Result<Vec<String>>>()
+    });
+    match hits {
+      Ok(hits) if hits.is_empty() => format!("No message matches {query}."),
+      Ok(hits) => hits.join("\n"),
+      Err(err) => format!(
+        "Can't read the query {query}: {err}. Give words (all must match), \"an exact phrase\", word* for a prefix, OR between alternatives."
+      ),
+    }
+  }
+
   pub fn date(&self, id: u64) -> String {
     self
       .message(id)

@@ -23,7 +23,9 @@
 //!
 //! Files: chat.db (SQLite, WAL) holds the messages (`msgs`, log ''), each
 //! agent's log (`msgs`, log its name), the nodes by slot (`nodes`) and the
-//! views, the chat's goal and work (`state`, written over). Pages
+//! views, the chat's goal and work (`state`, written over), and a
+//! full-text index of the messages' texts (`search`, FTS5), kept by
+//! triggers on `msgs`, so no write can leave it behind. Pages
 //! `more` after the last that isn't are not in the chat. Memory holds only
 //! the views' nodes and those built above them; any other row is read as
 //! needed. Images are in docs/images/ by their hash.
@@ -75,7 +77,7 @@ pub const WAIT: &str = "(not summarized yet: zoom it)";
 pub const PURGED: &str = "(purged)";
 const IMAGES: &str = "docs/images";
 /// The chat's log in `msgs`; an agent's is its name.
-const CHAT: &str = "";
+pub const CHAT: &str = "";
 /// A wipe owed: this file in the chat's dir.
 const WIPE: &str = "chat.db.wipe";
 
@@ -84,7 +86,17 @@ create table if not exists msgs (log text not null, i integer not null, kind tex
     images text not null, imported integer not null, line text, more integer not null, size integer not null, primary key (log, i)) without rowid;
 create table if not exists nodes (slot integer primary key, text text not null);
 create table if not exists agents (name text primary key) without rowid;
-create table if not exists state (id integer primary key check (id = 1), json text not null);";
+create table if not exists state (id integer primary key check (id = 1), json text not null);
+create virtual table if not exists search using fts5 (log unindexed, i unindexed, text);
+create trigger if not exists search_add after insert on msgs begin
+    insert into search (log, i, text) values (new.log, new.i, new.text); end;
+create trigger if not exists search_drop after delete on msgs begin
+    delete from search where log = old.log and i = old.i; end;
+create trigger if not exists search_change after update of text on msgs begin
+    delete from search where log = old.log and i = old.i;
+    insert into search (log, i, text) values (new.log, new.i, new.text); end;";
+/// The most hits a search gives.
+pub const HITS: usize = 50;
 
 /// A compaction's task, before its <input>: one message to compress
 /// (level 0), or two lines to merge. The ruler, not a sample line: the
@@ -321,6 +333,10 @@ impl Memory {
     // only a wipe holds it up (no other process opens it): wait it out
     db.busy_timeout(std::time::Duration::from_secs(600))?;
     db.execute_batch(SCHEMA)?;
+    db.execute(
+      "insert into search (log, i, text) select log, i, text from msgs where not exists (select 1 from search)",
+      [],
+    )?;
     let saved = saved(&db);
     let mut mem = Memory {
       dir: dir.to_path_buf(),
