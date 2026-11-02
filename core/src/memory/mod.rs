@@ -22,13 +22,13 @@
 //! cache (`ai`).
 //!
 //! Files: chat.db (SQLite, WAL) holds the messages (`msgs`, log ''), each
-//! agent's log (`msgs`, log its name), the nodes by slot (`nodes`) and the
-//! views, the chat's goal and work (`state`, written over), and a
-//! full-text index of the messages' texts (`search`, FTS5), kept by
-//! triggers on `msgs`, so no write can leave it behind. Pages
-//! `more` after the last that isn't are not in the chat. Memory holds only
-//! the views' nodes and those built above them; any other row is read as
-//! needed. Images are in docs/images/ by their hash.
+//! agent's log (`msgs`, log its name) and effort (`agents`), the nodes by
+//! slot (`nodes`), the views, the chat's goal and what ran (`state`,
+//! written over), and a full-text index of the messages' texts (`search`,
+//! FTS5), kept by triggers on `msgs`, so no write can leave it behind.
+//! Pages `more` after the last that isn't are not in the chat. Memory
+//! holds only the views' nodes and those built above them; any other row
+//! is read as needed. Images are in docs/images/ by their hash.
 //!
 //! A purge erases a message (a secret pasted in): at once, its text and
 //! images and every node built from it, so no call sees it again; its node
@@ -49,6 +49,7 @@ pub use images::{IMAGES_ARE, image_add, image_for_model, image_kind};
 pub use purge::{GRACE, erase, wipe};
 
 use crate::clip;
+use crate::effort::Effort;
 use crate::{Img, Kind, Served, config, disk, names};
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
@@ -87,7 +88,7 @@ const SCHEMA: &str = "pragma journal_mode = wal; pragma synchronous = normal; pr
 create table if not exists msgs (log text not null, i integer not null, kind text not null, text text not null, date text not null,
     images text not null, imported integer not null, line text, more integer not null, size integer not null, primary key (log, i)) without rowid;
 create table if not exists nodes (slot integer primary key, text text not null);
-create table if not exists agents (name text primary key) without rowid;
+create table if not exists agents (name text primary key, effort text) without rowid;
 create table if not exists state (id integer primary key check (id = 1), json text not null);
 create virtual table if not exists search using fts5 (log unindexed, i unindexed, text);
 create trigger if not exists search_add after insert on msgs begin
@@ -276,6 +277,44 @@ struct Kept {
   batch: bool,
 }
 
+/// What ran: the chat's turn, the agents at work.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "WorkAs")]
+pub struct Work {
+  pub turn: bool,
+  pub agents: Vec<String>,
+}
+
+/// Work as saved: now, or before, as names, the turn among them as
+/// "your turn" (or "Acorn's turn", before that).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WorkAs {
+  Names(Vec<String>),
+  Work {
+    #[serde(default)]
+    turn: bool,
+    #[serde(default)]
+    agents: Vec<String>,
+  },
+}
+
+impl From<WorkAs> for Work {
+  fn from(w: WorkAs) -> Work {
+    match w {
+      WorkAs::Work { turn, agents } => Work { turn, agents },
+      WorkAs::Names(names) => {
+        let (turns, agents): (Vec<String>, Vec<String>) =
+          names.into_iter().partition(|n| n == "your turn" || n == "Acorn's turn");
+        Work {
+          turn: !turns.is_empty(),
+          agents,
+        }
+      }
+    }
+  }
+}
+
 /// The state row: the chat's view, the compactions', the goal and work.
 #[derive(Serialize, Deserialize, Default)]
 struct Saved {
@@ -284,7 +323,7 @@ struct Saved {
   #[serde(default)]
   goal: Option<String>,
   #[serde(default)]
-  work: Vec<String>,
+  work: Work,
 }
 
 /// The chat's memory. db: chat.db, shared with `chat::usage`; count: the
@@ -306,7 +345,7 @@ pub struct Memory {
   pub count: u64,
   pub open: u64,
   pub goal: Option<String>,
-  pub work: Vec<String>,
+  pub work: Work,
   nodes: HashMap<u64, String>,
   agents: HashMap<String, u64>,
   pub view: View,
@@ -336,6 +375,14 @@ impl Memory {
     db.busy_timeout(std::time::Duration::from_secs(600))?;
     db.execute_batch(SCHEMA)?;
     purge::tables(&db)?;
+    let efforts: bool = db.query_row(
+      "select exists (select 1 from pragma_table_info('agents') where name = 'effort')",
+      [],
+      |r| r.get(0),
+    )?;
+    if !efforts {
+      db.execute("alter table agents add column effort text", [])?;
+    }
     db.execute(
       "insert into search (log, i, text) select log, i, text from msgs where not exists (select 1 from search)",
       [],
@@ -347,7 +394,7 @@ impl Memory {
       count: 0,
       open: 0,
       goal: None,
-      work: Vec::new(),
+      work: Work::default(),
       nodes: HashMap::new(),
       agents: HashMap::new(),
       view: View {
@@ -768,14 +815,30 @@ impl Memory {
     names.unwrap_or_default()
   }
 
-  pub fn agent_new(&mut self) -> Result<String> {
+  /// A new agent, at its effort (none: the run's).
+  pub fn agent_new(&mut self, effort: Option<Effort>) -> Result<String> {
     loop {
       let name = names::random();
-      if self.db.execute("insert or ignore into agents values (?)", [&name])? == 1 {
+      let effort = effort.map(Effort::as_str);
+      if self
+        .db
+        .execute("insert or ignore into agents values (?, ?)", params![name, effort])?
+        == 1
+      {
         self.agents.insert(name.clone(), 0);
         return Ok(name);
       }
     }
+  }
+
+  /// An agent's effort; None: the run's (or no such agent).
+  pub fn agent_effort(&self, name: &str) -> Option<Effort> {
+    let effort: Option<String> = self
+      .db
+      .query_row("select effort from agents where name = ?", [name], |r| r.get(0))
+      .optional()
+      .ok()??;
+    Effort::parse(&effort?)
   }
 
   /// A message to an agent's log: its length read once, then counted.
@@ -940,4 +1003,23 @@ pub fn over(line: &str) -> String {
 
 pub fn line(part: Part, text: &str) -> String {
   format!("{}|{}", part.name(), flat(text))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::Work;
+
+  #[test]
+  fn work_reads_as_saved_before() {
+    let read = |json: &str| serde_json::from_str::<Work>(json).unwrap();
+    let typed = Work {
+      turn: true,
+      agents: vec!["Ann".into()],
+    };
+    assert_eq!(read(&serde_json::to_string(&typed).unwrap()), typed);
+    assert_eq!(read(r#"["your turn", "Ann"]"#), typed);
+    assert_eq!(read(r#"["Acorn's turn", "Ann"]"#), typed);
+    assert!(!read(r#"["Ann"]"#).turn);
+    assert_eq!(read("[]"), Work::default());
+  }
 }

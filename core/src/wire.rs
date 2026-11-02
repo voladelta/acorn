@@ -157,6 +157,3 @@ pub enum Command {
   /// An agent's log.
   Agent(String),
 }
-
-/// The turn, as the work a quit cut names it among the agents.
-pub const TURN: &str = "your turn";

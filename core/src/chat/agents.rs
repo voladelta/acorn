@@ -8,7 +8,7 @@
 use super::{Chat, Engine};
 use crate::ai::{self, Handle, Out, Spec, Toolbox};
 use crate::effort::Effort;
-use crate::tools::{self, MAIN, SUB_AT, SUB_NOTE};
+use crate::tools::{self, MAIN, SUB_NOTE};
 use crate::wire::{Event, Live};
 use crate::{Block, Kind, Served, clip, config, memory};
 use futures_util::FutureExt as _;
@@ -467,38 +467,24 @@ impl Chat {
 
   /// An agent started on its task, its log opened with what it is.
   fn start(&mut self, effort: Option<Effort>, task: &str, view: Vec<Block>) -> String {
-    let name = match self.mem.agent_new() {
+    let name = match self.mem.agent_new(effort) {
       Ok(name) => name,
       Err(err) => return format!("(no agent: {err})"),
     };
     let _ = std::fs::create_dir_all(self.me.work().join(&name));
     self.agents.insert(name.clone(), Agent::new(&name, effort, view));
-    let note = match effort {
-      None => SUB_NOTE.to_string(),
-      Some(effort) => format!("{SUB_NOTE}{SUB_AT}{}", effort.as_str()),
-    };
-    self.push(Some(&name), Kind::Note, &note);
+    self.push(Some(&name), Kind::Note, SUB_NOTE);
     self.push(Some(&name), Kind::User, task);
     tokio::spawn(self.engine().run(name.clone()));
     name
   }
 
   /// An agent; one not met since Acorn started is taken back from its
-  /// log, idle.
+  /// row, idle (one from before efforts were kept: at the run's).
   fn agent(&mut self, name: &str) -> Option<&mut Agent> {
     if !self.agents.contains_key(name) {
-      let note = self
-        .mem
-        .agent(name)?
-        .first()
-        .filter(|r| r.kind == Kind::Note)?
-        .text
-        .clone();
-      let effort = if note == SUB_NOTE {
-        None
-      } else {
-        Effort::parse(note.strip_prefix(&format!("{SUB_NOTE}{SUB_AT}"))?)
-      };
+      self.mem.agent(name)?;
+      let effort = self.mem.agent_effort(name);
       self.agents.insert(name.into(), Agent::new(name, effort, Vec::new()));
     }
     self.agents.get_mut(name)

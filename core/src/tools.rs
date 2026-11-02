@@ -236,10 +236,8 @@ pub fn system(head: &str) -> String {
   format!("{head}\n\n{rules}")
 }
 
-/// An agent's log starts with a note of what it is: SUB_NOTE, and its
-/// effort if not the configured one.
+/// An agent's log starts with a note of what it is.
 pub const SUB_NOTE: &str = "subagent";
-pub const SUB_AT: &str = " at effort ";
 
 /// Who calls: Acorn itself, or an agent by name.
 pub const MAIN: &str = "main";

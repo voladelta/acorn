@@ -15,7 +15,7 @@
 use super::{Chat, Engine, Span};
 use crate::ai::{self, Event as AiEvent};
 use crate::memory::{self, IMAGES_ARE, Msg, Part};
-use crate::wire::{Event, Live, TURN, live_push};
+use crate::wire::{Event, Live, live_push};
 use crate::{Block, Kind, Served, config};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -617,9 +617,11 @@ impl Chat {
   }
 
   /// What runs: the turn, the agents at work.
-  pub(super) fn running(&self) -> Vec<String> {
-    let turn = self.busy.then(|| TURN.to_string());
-    turn.into_iter().chain(self.working()).collect()
+  pub(super) fn running(&self) -> memory::Work {
+    memory::Work {
+      turn: self.busy,
+      agents: self.working(),
+    }
   }
 
   /// What runs changed: saved, and told.

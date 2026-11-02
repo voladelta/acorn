@@ -4,6 +4,7 @@
 //! kept, shadowed and forgotten across assistants; a view's last lines,
 //! the latest messages there before they are summarized.
 
+use acorn_core::effort::Effort;
 use acorn_core::memory::{self, Memory, Msg, PURGED, Part};
 use acorn_core::{Kind, facts};
 
@@ -195,7 +196,8 @@ fn memory_in_sqlite() {
   assert_eq!(mem.message(count).unwrap().text, "next");
 
   // an agent's log
-  let name = mem.agent_new().unwrap();
+  let name = mem.agent_new(Some(Effort::Low)).unwrap();
+  assert_eq!(mem.agent_effort(&name), Some(Effort::Low));
   mem.agent_push(&name, Kind::Note, "subagent").unwrap();
   mem
     .agent_push(&name, Kind::Echo, &format!("cat .env: {SECRET}"))
@@ -208,6 +210,16 @@ fn memory_in_sqlite() {
   wipe(&mut mem);
   assert!(!on_disk(&dir, SECRET));
   assert!(mem.agent("Nobody").is_none());
+
+  // an agent from before efforts were kept: its column added, at the run's
+  let old = home.path().join("chats/old");
+  std::fs::create_dir_all(&old).unwrap();
+  rusqlite::Connection::open(old.join("chat.db"))
+    .unwrap()
+    .execute_batch("create table agents (name text primary key) without rowid; insert into agents values ('Ann');")
+    .unwrap();
+  let was = Memory::load(&old).unwrap();
+  assert!(was.agent("Ann").is_some() && was.agent_effort("Ann").is_none());
 
   // facts, across assistants
   let fact = |mine, subject: &str, predicate: &str, value: &str, many| facts::Fact {

@@ -27,8 +27,8 @@ use crate::ai::{self, Handle, Used};
 use crate::assistant::Assistant;
 use crate::compactor;
 use crate::import;
-use crate::memory::{self, Memory, Msg, Part};
-use crate::wire::{Command, Event, Live, Seg, TURN};
+use crate::memory::{self, Memory, Msg, Part, Work};
+use crate::wire::{Command, Event, Live, Seg};
 use crate::{Kind, Served, Spend};
 use anyhow::Result;
 use parking_lot::{Mutex, MutexGuard};
@@ -321,20 +321,23 @@ impl Engine {
 
   /// The work a quit cut goes on, told so: each agent, and the turn by a
   /// note.
-  async fn resume(self: Arc<Self>, work: Vec<String>) {
-    if work.is_empty() {
+  async fn resume(self: Arc<Self>, work: Work) {
+    if work == Work::default() {
       return;
     }
-    let text = format!("Acorn quit, cutting {}; nothing was lost: go on.", work.join(", "));
+    let cut: Vec<&str> = work
+      .turn
+      .then_some("your turn")
+      .into_iter()
+      .chain(work.agents.iter().map(String::as_str))
+      .collect();
+    let text = format!("Acorn quit, cutting {}; nothing was lost: go on.", cut.join(", "));
     let msg = self.lock().push(None, Kind::Note, &text);
-    for w in work {
-      // "Acorn's turn": as a chat saved it before
-      if w == TURN || w == "Acorn's turn" {
-        self.lock().take(msg);
-      } else {
-        let text = text.clone();
-        self.tell_agent(&w, &text).await;
-      }
+    if work.turn {
+      self.lock().take(msg);
+    }
+    for name in &work.agents {
+      self.tell_agent(name, &text).await;
     }
   }
 }
