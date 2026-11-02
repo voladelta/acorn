@@ -5,7 +5,6 @@
 
 use acorn_core::chat::hub;
 use acorn_core::memory::{Msg, Part};
-use acorn_core::wire::Command;
 use acorn_core::{Kind, assistant::Assistant};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
