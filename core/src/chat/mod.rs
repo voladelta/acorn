@@ -134,6 +134,8 @@ pub struct Chat {
   then: Option<import::Want>,
   reply: Option<String>,
   cut_in: bool,
+  /// When a wipe waiting on a held purge is woken (ms; 0: none).
+  wake: i64,
 }
 
 /// The chat, held: as it is let go, what its changes set off runs.
@@ -196,6 +198,7 @@ impl Engine {
         then: None,
         reply: None,
         cut_in: false,
+        wake: 0,
       }),
       events,
       fitted: watch::channel(0).0,
@@ -363,19 +366,22 @@ impl Chat {
     }
   }
 
-  /// A message purged (`Memory::purge`): a chat's, the summaries' calls
-  /// cut first (none stores a line its words went into), then the app
-  /// shown the chat anew; or an agent's.
-  pub(super) fn purge(&mut self, agent: Option<&str>, id: u64) -> String {
+  /// A message purged (`Memory::purge`), or a purge taken back
+  /// (`Memory::unpurge`, `back`): a chat's, the summaries' calls cut first
+  /// (none stores a line built on the text as it was), then the app shown
+  /// the chat anew; or an agent's.
+  pub(super) fn purge(&mut self, agent: Option<&str>, id: u64, back: bool) -> String {
     if agent.is_none() {
       for (call, _, _) in &self.compactions {
         call.stop();
       }
     }
-    let said = self
-      .mem
-      .purge(agent, id)
-      .unwrap_or_else(|err| format!("The purge failed: {err}"));
+    let said = if back {
+      self.mem.unpurge(agent, id)
+    } else {
+      self.mem.purge(agent, id)
+    };
+    let said = said.unwrap_or_else(|err| format!("The {} failed: {err}", if back { "unpurge" } else { "purge" }));
     if agent.is_none() {
       self.seen.clear();
       self.show();
@@ -409,17 +415,32 @@ impl Chat {
 
   /// A wipe owed (`Memory::purge`) started once the chat is idle (no
   /// turn, agent or summary at work), so its rewrite of chat.db holds up
-  /// no write, on a thread of its own. One that fails is left owed, till
-  /// Acorn starts again.
+  /// no write, and no purge is held in its GRACE (till then, woken as the
+  /// last one's ends), on a thread of its own. One that fails is left
+  /// owed, till Acorn starts again.
   fn wipe(&mut self) {
     let mem = &self.mem;
     if mem.wiping || mem.wiped == mem.purged || self.busy || !mem.busy.is_empty() || !self.working().is_empty() {
       return;
     }
+    let now = crate::now_ms();
+    if let Some(till) = self.mem.held_till().filter(|&t| t > now) {
+      if self.wake != till {
+        self.wake = till;
+        let this = self.this.clone();
+        tokio::spawn(async move {
+          tokio::time::sleep(std::time::Duration::from_millis((till - now) as u64 + 1)).await;
+          if let Some(engine) = this.upgrade() {
+            drop(engine.lock());
+          }
+        });
+      }
+      return;
+    }
     self.mem.wiping = true;
     let (this, dir, upto) = (self.this.clone(), self.mem.dir.clone(), self.mem.purged);
     std::thread::spawn(move || {
-      let done = memory::wipe(&dir);
+      let done = memory::wipe(&dir, now - memory::GRACE);
       let Some(engine) = this.upgrade() else { return };
       let mut chat = engine.lock();
       match done {

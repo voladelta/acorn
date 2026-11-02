@@ -22,7 +22,7 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Cut in** | A message sent while an assistant talks or works stops it at once, as a person would stop and listen; it answers you, then goes on only if you say so |
 | **Consult** | Assistants ask each other (`list_assistants`, `search_assistants`, `ask_assistant`), each pair in a thread of its own that never ends |
 | **Facts** | `remember` and `forget` keep facts you state, for every assistant or one; each call's system prompt lists them |
-| **Purge** | `purge` erases a message (a pasted key or password) and every summary made from it, then wipes it from the database file |
+| **Purge** | `purge` erases a message (a pasted key or password) and every summary made from it; `unpurge` takes it back for ten minutes, then it is wiped from the database file |
 | **Import** | Your past Claude Code and Codex sessions on this Mac, and Claude and ChatGPT chats from their websites' exports, read into the chat |
 | **Goals** | Name a finish line ("keep at it until the tests pass") and the assistant works until a check says it is met; the goal shows above the message box |
 
@@ -96,7 +96,7 @@ Ask for what you want in plain words: "stop", "fire Scout", "hire three agents t
 | `hire`, `tell`, `fire` | assistants | Hire agents for one task each, in parallel, in the background; message one at work (it cuts in); fire one or all |
 | `create_assistant` | with you | Hire an assistant: name, about, effort, instructions |
 | `list_assistants`, `search_assistants`, `ask_assistant` | with you | Find another assistant and ask it, in your two's thread; its reply comes back as a message |
-| `remember`, `forget`, `purge` | with you | Keep and drop facts; erase a message |
+| `remember`, `forget`, `purge`, `unpurge` | with you | Keep and drop facts; erase a message, or take that back within ten minutes |
 | `goal`, `usage`, `import`, `export`, `tree` | with you | Set or drop the goal; read costs; import past chats; save the memory as JSON; open the tree as a page |
 
 An assistant answering another in a thread has its work tools only: it can't consult further, keep facts or change the user's settings.
@@ -149,7 +149,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `~/.acorn/facts.db` | Facts, shared by all assistants |
 | `~/.acorn/plugins/` | Luau files that add to or replace `luau`'s globals |
 | `~/.acorn/work/` | The agents' work dirs: `main` for Acorn, `assistants/<id>` for others |
-| `~/.acorn/chats/<id>/chat.db` | A chat: messages, agent logs, the summary tree, the view and usage (SQLite, WAL) |
+| `~/.acorn/chats/<id>/chat.db` | A chat: messages and their full-text index, agent logs, the summary tree, the view, usage, and purged messages for their ten minutes (SQLite, WAL) |
 | `~/.acorn/chats/<id>/docs/images/` | The chat's images, by hash |
 | `~/.acorn/chats/<id>/chat.db.wipe` | Present while a purge's wipe is owed |
 | `~/.acorn/chats/<id>/with/<asker>/` | The thread where assistant `<asker>` asks `<id>`, kept as a chat is |
@@ -160,7 +160,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 
 - The chat and its summaries are sent to DeepSeek on every call, as is any fact an assistant sees.
 - A search or fetch goes to DeepSeek, or to the service of a plugin that replaces it, as does whatever else a plugin sends.
-- `purge` erases a message at once from everything a call or the app can see. Its old bytes stay in `chat.db`'s pages until a wipe rewrites the file, which runs once the chat is idle (no turn, agent or summary at work) and is retried at the next launch if it fails or Acorn quits first.
+- `purge` erases a message at once from everything a call or the app can see. It is held in `chat.db` for ten minutes, so `unpurge` can take it back; its text and old bytes stay in the file until a wipe deletes it and rewrites the file, which runs once the chat is idle (no turn, agent or summary at work) and no purge is still in its ten minutes, and is retried at the next launch if it fails or Acorn quits first.
 - Summaries written while a purged message's summary was in the compactor's context may still echo it.
 - Copies the disk itself keeps, such as APFS snapshots and Time Machine backups, are beyond Acorn's reach; FileVault protects them.
 

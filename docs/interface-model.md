@@ -115,7 +115,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Agent | hands for one task | The assistant hires a freelancer for one task; it works in the background, reports once and is gone. "Fire Scout" ends it early. |
 | Goal | persistence | Name the finish line; it keeps taking turns until a check says it's met or you call it off. |
 | Fact | knowledge across chats | "Remember X" and every assistant (or one) knows X until you say forget it. |
-| Purge | erase a secret | "Purge the message with my token": it and its summaries vanish and are wiped from disk. |
+| Purge | erase a secret | "Purge the message with my token": it and its summaries vanish; "unpurge it" brings it back within ten minutes, then it is wiped from disk. |
 | Create assistant | more people | Ask for someone with a name and an about; they appear in the sidebar and stay. |
 | Mention | name an assistant in the box | `@Max` alone opens your chat with Max; `@Max what do you think?` has the one you talk to ask Max. |
 
@@ -152,7 +152,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Ask another assistant | `list_assistants`, `search_assistants`, `ask_assistant`; `@Name` in a message | – |
 | Create an assistant | `create_assistant` (name, about, instructions, effort) | – |
 | Set / drop goal | `goal` | – |
-| Remember / forget / purge | `remember`, `forget`, `purge` | – |
+| Remember / forget / purge / unpurge | `remember`, `forget`, `purge`, `unpurge` | – |
 | Usage, import, export, tree | `usage`, `import_find`, `import`, `import_pause`, `export`, `tree` | – |
 | Switch assistant | `@Name` alone (voice later: "let me talk to Max") | sidebar, Cmd+B |
 | Open / collapse a block | – | click |
@@ -185,12 +185,12 @@ Most structural first. Symptom → cause → fix → on screen.
 | Act | Feedback | Undo / confirm |
 |---|---|---|
 | Any message | appears at once; a reply in progress ends "— cut off" | – |
-| A tool act | the assistant says what it did | reversible ones by asking ("undo that": remember↔forget, goal↔drop) |
+| A tool act | the assistant says what it did | reversible ones by asking ("undo that": remember↔forget, goal↔drop, purge↔unpurge for ten minutes) |
 | Ask | call row linking the thread; reply framed under the asker's name | "never mind" cuts it |
 | Create assistant | row appears in the sidebar with its about | – |
 | Hire | a tab while it works; its report framed under its name | "fire it" |
 | `@Name` alone | that assistant's chat shown | Esc, or the sidebar |
-| Purge | the message vanishes | the assistant asks back once ("This can't be undone. Purge it?"); your yes confirms |
+| Purge | the message vanishes | no confirmation; "unpurge it" brings it back within ten minutes, after which it is wiped for good |
 | Import | sessions and price stated, then asked | your yes; "pause the import" |
 
 **Surviving modes:** Overview (caption; a key, because it's looking). Goal (visible line).
@@ -199,7 +199,7 @@ Most structural first. Symptom → cause → fix → on screen.
 
 - **Content layer:** the chat; an agent's page; a thread's page.
 - **Functional layer, report-only:** sidebar (name, mark, a dot while at work, about on hover); header (name · about, import progress); footer (goal line, today's cost, the box, tabs for agents and open threads).
-- **No menus, no modals.** The one confirmation (Purge) is asked in the conversation.
+- **No menus, no modals.** Purge needs no confirmation: it is undone by asking, for ten minutes.
 
 ## Open questions
 

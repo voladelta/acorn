@@ -2,15 +2,15 @@
 //! =====
 //! Acorn's prompts and tools. The user acts only by words, so whatever the
 //! app does, an assistant does by a tool. Everyone gets zoom, date and
-//! search (OWN); an assistant hires, tells and fires agents (BOSS); in its chat
-//! with the user it also creates assistants and consults them (PEERS),
-//! keeps facts and purges messages (KEEP), and sets goals, reads usage,
-//! imports, exports and draws its memory (HOME); in a thread, where
-//! another assistant asks it something, it gets none of those. Its hands
-//! on this Mac and the web are luau alone (`luau`): code that reads,
-//! writes, edits and runs commands (`machine`), each caller in its own dir
-//! under the work dir, and searches and fetches the web (`web`). The
-//! agents themselves run in `chat::agents`.
+//! search (OWN); an assistant hires, tells and fires agents (BOSS); in its
+//! chat with the user it also creates assistants and consults them
+//! (PEERS), keeps facts and purges messages or takes a purge back (KEEP),
+//! and sets goals, reads usage, imports, exports and draws its memory
+//! (HOME); in a thread, where another assistant asks it something, it gets
+//! none of those. Its hands on this Mac and the web are luau alone
+//! (`luau`): code that reads, writes, edits and runs commands (`machine`),
+//! each caller in its own dir under the work dir, and searches and fetches
+//! the web (`web`). The agents themselves run in `chat::agents`.
 
 use crate::ai::Spec;
 use crate::machine::spec;
@@ -149,7 +149,8 @@ whatever they ask of Acorn, do with your tools. When the user tells you
 something to keep for good (who they are, a preference, a decision, a rule for
 your work), remember it as a fact; forget one they say is wrong. When they ask
 you to erase something from the chat, such as a password or key they pasted,
-purge its message, once they confirm: it can't be undone. When they name a
+purge its message at once, no confirmation needed, and tell them unpurge can
+take it back for ten minutes. When they name a
 finish line (\"keep at it until the tests pass\"), set it as your goal first,
 before any other work, even if you expect to be done this turn.
 
@@ -396,7 +397,13 @@ fn keep() -> Vec<Spec> {
     ),
     spec(
       "purge",
-      "Erase a message for good, when the user asks, as for a password, key or other secret pasted in: no call sees its text or images again, every summary made from it is written anew without it, and its old bytes are wiped from Acorn's files once the chat is idle. id: the message's id; or an agent's name, with n the index of the message in that agent's chat (as zoom(\"Name\") shows it).",
+      "Erase a message, when the user asks, as for a password, key or other secret pasted in; no confirmation needed: no call sees its text or images again, and every summary made from it is written anew without it. unpurge takes it back for ten minutes; then its old bytes are wiped from Acorn's files once the chat is idle. id: the message's id; or an agent's name, with n the index of the message in that agent's chat (as zoom(\"Name\") shows it).",
+      json!({"id": {"type": ["integer", "string"]}, "n": {"type": "integer"}}),
+      &["id"],
+    ),
+    spec(
+      "unpurge",
+      "Take back a purge of the last ten minutes, when the user asks: the message is back as it was, and the summaries over it are written anew with it. id and n as for purge.",
       json!({"id": {"type": ["integer", "string"]}, "n": {"type": "integer"}}),
       &["id"],
     ),

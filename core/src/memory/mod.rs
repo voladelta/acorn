@@ -30,21 +30,23 @@
 //! the views' nodes and those built above them; any other row is read as
 //! needed. Images are in docs/images/ by their hash.
 //!
-//! A purge erases a message for good (a secret pasted in): at once, its
-//! text and images and every node built from it, so no call sees it again;
-//! its node and those above build anew without it. Other nodes built while
-//! its summary was in the compactions' view may still echo it. Its old
-//! bytes stay in chat.db's pages till a wipe rewrites the file (`erase`),
-//! owed in a marker file (WIPE) till done, and run by the chat once idle,
-//! as it holds up every write while it runs. Copies the disk itself keeps
-//! (APFS snapshots, the SSD) are beyond Acorn's reach.
+//! A purge erases a message (a secret pasted in): at once, its text and
+//! images and every node built from it, so no call sees it again; its node
+//! and those above build anew without it. Other nodes built while its
+//! summary was in the compactions' view may still echo it. Its text and
+//! images are held GRACE (`held`), so an unpurge can bring them back; then
+//! a wipe deletes them and rewrites the file (`erase`), as old bytes stay
+//! in chat.db's pages till then. The wipe is owed in a marker file (WIPE)
+//! till done, and run by the chat once idle and nothing held is in its
+//! GRACE, as it holds up every write while it runs. Copies the disk itself
+//! keeps (APFS snapshots, the SSD) are beyond Acorn's reach.
 
 mod images;
 mod purge;
 mod view;
 
 pub use images::{IMAGES_ARE, image_add, image_for_model, image_kind};
-pub use purge::{erase, wipe};
+pub use purge::{GRACE, erase, wipe};
 
 use crate::clip;
 use crate::{Img, Kind, Served, config, disk, names};
@@ -333,6 +335,7 @@ impl Memory {
     // only a wipe holds it up (no other process opens it): wait it out
     db.busy_timeout(std::time::Duration::from_secs(600))?;
     db.execute_batch(SCHEMA)?;
+    purge::tables(&db)?;
     db.execute(
       "insert into search (log, i, text) select log, i, text from msgs where not exists (select 1 from search)",
       [],

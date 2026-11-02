@@ -1,8 +1,8 @@
 //! A chat's memory in chat.db: logged, built and opened again as it was;
-//! searched; a message purged with every node built from it, its secret
-//! gone from disk and the search; facts kept, shadowed and forgotten
-//! across assistants; a view's last lines, the latest messages there
-//! before they are summarized.
+//! searched; a message purged with every node built from it, taken back,
+//! and past its grace its secret gone from disk and the search; facts
+//! kept, shadowed and forgotten across assistants; a view's last lines,
+//! the latest messages there before they are summarized.
 
 use acorn_core::memory::{self, Memory, Msg, PURGED, Part};
 use acorn_core::{Kind, facts};
@@ -30,9 +30,10 @@ fn build(mem: &mut Memory) {
   mem.fit(false);
 }
 
-/// A chat's wipe owed, done as the chat does it once idle.
+/// A chat's wipe owed, done as the chat does it once idle and no purge
+/// is held in its grace.
 fn wipe(mem: &mut Memory) {
-  memory::wipe(&mem.dir).unwrap();
+  memory::wipe(&mem.dir, i64::MAX).unwrap();
   mem.wiped(mem.purged);
 }
 
@@ -124,6 +125,19 @@ fn memory_in_sqlite() {
       .starts_with("No message matches"),
     "a purged message is found no more"
   );
+
+  // taken back: its text, and the nodes over it built anew with it
+  let said = mem.unpurge(None, 5).unwrap();
+  assert!(said.starts_with("Unpurged message 5"), "{said}");
+  assert_eq!(mem.message(5).unwrap().text, format!("my key is {SECRET}"));
+  assert!(mem.node(Part::new(0, 5)).is_none() && mem.node(Part::new(3, 0)).is_none());
+  build(&mut mem);
+  assert!(mem.node(Part::new(0, 5)).is_some_and(|t| t.contains(SECRET)));
+  assert!(mem.node(Part::new(3, 0)).is_some());
+  assert!(mem.search(memory::CHAT, "hunter2", 10).starts_with("5|"));
+  assert!(mem.unpurge(None, 5).unwrap().contains("isn't held"));
+  mem.purge(None, 5).unwrap();
+
   build(&mut mem);
   assert!(
     mem.node(Part::new(3, 0)).is_some_and(|t| !t.contains(SECRET)),
@@ -135,7 +149,11 @@ fn memory_in_sqlite() {
   let mut mem = Memory::load(&dir).unwrap();
   assert_eq!(mem.message(5).unwrap().text, PURGED);
   assert!(mem.purged > mem.wiped, "a quit doesn't lose the wipe owed");
+  assert!(mem.held_till().is_some_and(|t| t > acorn_core::now_ms()));
+  memory::wipe(&dir, acorn_core::now_ms() - memory::GRACE).unwrap();
+  assert!(on_disk(&dir, SECRET), "held in its grace, a wipe leaves it");
   wipe(&mut mem);
+  assert!(mem.held_till().is_none(), "past its grace, a wipe deletes it");
   assert!(
     !owed.exists() && !on_disk(&dir, SECRET),
     "erased from chat.db and its WAL"
@@ -152,7 +170,7 @@ fn memory_in_sqlite() {
   assert!(said.contains("its pages"), "{said}");
   let upto = mem.purged;
   mem.purge(None, 0).unwrap();
-  memory::wipe(&dir).unwrap();
+  memory::wipe(&dir, i64::MAX).unwrap();
   mem.wiped(upto);
   assert!(owed.exists(), "a purge during a wipe owes another");
   wipe(&mut mem);

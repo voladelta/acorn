@@ -227,14 +227,14 @@ impl Engine {
         };
         crate::facts::forget(&me, id).map_or_else(|err| Out::fail(format!("Not forgotten: {err}")), Out::ok)
       }
-      "purge" => {
-        let mut chat = self.lock();
+      "purge" | "unpurge" => {
+        let (mut chat, back) = (self.lock(), name == "unpurge");
         match &input["id"] {
           Value::String(name) if name.starts_with(|c: char| c.is_ascii_alphabetic()) => match input["n"].as_u64() {
-            Some(n) => Out::ok(chat.purge(Some(name), n)),
+            Some(n) => Out::ok(chat.purge(Some(name), n, back)),
             None => Out::fail("Give n: the index of the message in the agent's chat."),
           },
-          id => Out::ok(chat.purge(None, number(id).unwrap_or(u64::MAX))),
+          id => Out::ok(chat.purge(None, number(id).unwrap_or(u64::MAX), back)),
         }
       }
       "create_assistant" => {
