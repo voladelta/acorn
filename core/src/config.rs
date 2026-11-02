@@ -5,7 +5,8 @@
 //! key of config.json may be set as ACORN_<KEY> instead; a path may start
 //! with "~/". The API key is DEEPSEEK_API_KEY, else config.json's
 //! `deepseek_api_key` (an app opened from the Finder has no shell's
-//! variables); no program the agent runs inherits it (`machine`).
+//! variables); no program the agent runs inherits it (`machine`). The
+//! `budget` caps what every chat's calls spend a day (`chat::usage`).
 
 use crate::effort::Effort;
 use std::collections::HashMap;
@@ -41,6 +42,8 @@ pub struct Config {
   /// What hired agents run on (none: their assistant's effort).
   pub agents: Option<Effort>,
   pub view: usize,
+  /// USD every chat's calls may spend together a day, here (none: no cap).
+  pub budget: Option<f64>,
   pub key: String,
 }
 
@@ -101,6 +104,7 @@ impl Config {
         .ok()
         .filter(|&v| v > 0)
         .map_or(MOST_VIEW, |v: usize| v.min(MOST_VIEW)),
+      budget: budget(&get("budget", ""))?,
       key: key.trim().to_string(),
       chat,
       dir,
@@ -144,6 +148,17 @@ pub fn home() -> PathBuf {
   std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
 
+/// A daily budget in USD: none if empty or 0.
+fn budget(text: &str) -> Result<Option<f64>, String> {
+  match text.trim().trim_start_matches('$') {
+    "" => Ok(None),
+    usd => match usd.parse::<f64>() {
+      Ok(usd) if usd.is_finite() && usd >= 0.0 => Ok(Some(usd).filter(|&u| u > 0.0)),
+      _ => Err(format!("budget is USD a day, as 5 or 0.5: {text}")),
+    },
+  }
+}
+
 /// `model:effort` or `effort`, the only model being deepseek-flash.
 fn run(key: &str, text: &str) -> Result<Effort, String> {
   let (model, effort) = text.split_once(':').map_or((None, text), |(m, e)| (Some(m), e));
@@ -156,6 +171,15 @@ fn run(key: &str, text: &str) -> Result<Effort, String> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_budget_is_usd_a_day_or_none() {
+    assert_eq!(budget(""), Ok(None));
+    assert_eq!(budget("0"), Ok(None));
+    assert_eq!(budget(" 5 "), Ok(Some(5.0)));
+    assert_eq!(budget("$0.5"), Ok(Some(0.5)));
+    assert!(budget("-1").is_err() && budget("five").is_err() && budget("inf").is_err());
+  }
 
   #[test]
   fn a_secret_comes_from_the_file_as_it_is_now() {

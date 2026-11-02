@@ -50,6 +50,8 @@ pub enum Halt {
   Tools,
   Busy,
   Down,
+  /// Not sent: the daily budget is spent (`chat::over_budget`).
+  Capped,
   Lost,
   Fail,
 }

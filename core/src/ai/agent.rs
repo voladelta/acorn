@@ -15,7 +15,9 @@
 //! model's room). A call ends answered (`Fail`: the model's answer failed,
 //! a refusal or a stop reason: its input's doing) or not: `Down`, the
 //! service's (a refusal of the request, as when the API key's credit is
-//! gone, or busy past TRIES); `Lost`, ours (a stop). The service's why
+//! gone, or busy past TRIES), or the daily budget's, spent before a
+//! request (`chat::over_budget`: no request goes, and its why is told, so
+//! a patient call waits it out as an outage); `Lost`, ours (a stop). The service's why
 //! goes to the log; the user reads only that the AI service is busy. A
 //! stop ends the call at once, its request cut. What each request used
 //! goes to its meter, a stream cut short counting what it read.
@@ -121,13 +123,13 @@ async fn turns(
         items.push(Item::Said(said.join("\n\n")));
       }
     } else if let Some(stop) = match step.halt {
-      Halt::Down => Some(Stop::Down),
+      Halt::Down | Halt::Capped => Some(Stop::Down),
       Halt::Lost => Some(Stop::Lost),
       Halt::Fail => Some(Stop::Fail),
       _ => None,
     } {
       if end.text.is_empty() {
-        end.text = if stop == Stop::Down {
+        end.text = if step.halt == Halt::Down {
           BUSY.into()
         } else {
           step.why.clone()
@@ -257,6 +259,9 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
   let step = loop {
     if cancel.is_cancelled() {
       break fail("stopped", &[], Halt::Lost);
+    }
+    if let Some(why) = crate::chat::over_budget() {
+      break fail(&why, &[], Halt::Capped);
     }
     let waits: Vec<&str> = match (&ask.yields, asking) {
       (None, _) => vec![],

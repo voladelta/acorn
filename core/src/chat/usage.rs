@@ -3,7 +3,8 @@
 //! Each request a call of the chat makes is counted as it ends (`ai::Meter`):
 //! kept in chat.db, summed into the running turn's if it serves the turn
 //! (its call, its goal check), and today's total told. A turn ending puts
-//! its sum on its last message.
+//! its sum on its last message. Past the config's `budget`, today's spend
+//! of every open chat together, no request goes (`ai::agent`).
 
 use super::{Chat, hub};
 use crate::ai::Used;
@@ -94,6 +95,23 @@ pub(super) fn told(days: i64) -> String {
     .collect();
   lines.push(line(format!("All {days} days"), &total));
   lines.join("\n")
+}
+
+/// Why no request may go now: every open chat's spend today has reached
+/// the config's budget (None: under it, or no budget).
+pub fn over_budget() -> Option<String> {
+  let cap = crate::config::get().budget?;
+  let spent = hub::all().iter().filter_map(|e| e.lock().today()).map(|s| s.usd).sum();
+  over(cap, spent)
+}
+
+/// Why today's spend is past a cap (None: it is under).
+fn over(cap: f64, spent: f64) -> Option<String> {
+  (spent >= cap).then(|| {
+    format!(
+      "today's spend, ${spent:.2}, has reached the daily budget of ${cap:.2} (budget in config.json); calls go again tomorrow, or once it is raised"
+    )
+  })
 }
 
 impl Chat {
@@ -219,5 +237,15 @@ impl Chat {
       eprintln!("acorn: usage: {err}");
       Vec::new()
     })
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  #[test]
+  fn a_request_waits_past_the_budget() {
+    assert_eq!(super::over(5.0, 4.99), None);
+    let why = super::over(5.0, 5.004).unwrap();
+    assert!(why.contains("$5.00") && why.contains("daily budget of $5.00"), "{why}");
   }
 }

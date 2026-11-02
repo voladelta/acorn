@@ -39,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 
 pub use agents::Agent;
 pub(crate) use imports::Batch;
+pub use usage::over_budget;
 
 /// The first message: a new chat opens with it, its node written with it,
 /// so no compactor call summarizes it.

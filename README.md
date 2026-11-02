@@ -136,6 +136,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `compactor` | `low` | The effort of every summary call |
 | `agents` | their assistant's | The effort of hired agents |
 | `view` | `2000000` | Bytes past which a view merges to half; capped at 2 MB |
+| `budget` | none | USD a day (here) that every chat's calls may spend together; once reached, no request goes till midnight: a turn says why, summaries wait. `0`: none |
 | `rules` | none | A file appended to every system prompt: who you are, how you want work done |
 | `after` | none | A shell command run after each turn |
 
@@ -170,6 +171,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 - Chats kept by UniiChat (JSONL day files) are not read; Acorn starts them anew.
 - The view loses detail with age by design: an old line covers many messages, and what its summary left out is found only by zooming.
 - Facts beyond 16 KB are left out of the system prompt, oldest first.
+- The `budget` is checked before each request, so the request that reaches it runs to its end: a day can pass it by one request's cost per call at work.
 - A wipe holds up writes to its chat while it runs (about 2 s for a 450 MB `chat.db`).
 
 ## Development
