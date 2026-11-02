@@ -1,6 +1,6 @@
 # Interface model: Acorn (the app)
 
-Status: built · Last updated: 2026-10-27
+Status: built · Last updated: 2026-11-02
 
 **As built, where it differs from the text below:**
 - Consult goes one level deep: an assistant answering in a thread has its work tools only (no `ask_assistant`, facts, goal, import or delegating), so asks can't loop.
@@ -12,6 +12,10 @@ Status: built · Last updated: 2026-10-27
 - An assistant answering in a thread hears nothing of what only your chat has: no facts, purges, goals, asking or `@Name`.
 - An assistant remembers its threads in its chat with you: each turn sees each thread's latest 8 lines ("Your threads", after the agents at work), and `zoom("Acorn")` gives one whole. Talk to Max the day after he warned Acorn, and he knows.
 - "Hire" a named person who should stay ("hire a stylist called Marrie") makes an assistant; agents get tasks by `delegate`, so the user's word and the tool never collide.
+- One `import` tool finds, starts, pauses and resumes an import (its `do`).
+- An assistant made can be archived (off the sidebar, its files kept) and restored, by words: `archive_assistant`, `restore_assistant`.
+- When no block mentions what it needs, an assistant searches the messages' words (`search`) and opens the hits; how often zooms and searches find something is part of `usage`.
+- Purge needs no confirmation: it is held ten minutes, and `unpurge` takes it back.
 
 ## The principle
 
@@ -70,9 +74,9 @@ Most structural first. Symptom → cause → fix → on screen.
 
 3. **model: assistants are introduced by their tuning.** Symptom: the header says "Acorn  high effort"; the sidebar tooltip says "Doug · max effort". Cause: `Assistant` has `name`, `instructions` (the system prompt, too long to show) and `effort`, but nothing that says who it is. Fix: add **`about`** to `Assistant`, a short line saying who it is ("Personal stylist"), required by `create_assistant`, written from what you said. Acorn's and Max's are built in. Effort stays in the model and the prompt, never in the UI. On screen: the header is "Marrie · Personal stylist"; the sidebar tooltip is the same line.
 
-4. **model: assistants can't talk to each other.** Symptom: Acorn can't ask Max for a second opinion or Marrie what to wear; you copy between chats. Cause: a missing concept. Fix: **Consult** (below): `list_assistants`, `search_assistants`, `ask_assistant`, with a lasting chat per pair of assistants.
+4. **model: assistants can't talk to each other.** Symptom: Acorn can't ask Max for a second opinion or Marrie what to wear; you copy between chats. Cause: a missing concept. Fix: **Consult** (below): `list_assistants`, `ask_assistant`, with a lasting chat per pair of assistants.
 
-5. **model: the assistant can't stop its own agents.** Symptom: "stop Scout" has nowhere to go. Fix: a `stop` tool (an agent's name, or all of this assistant's), beside `tell`.
+5. **model: the assistant can't stop its own agents.** Symptom: "stop Scout" has nowhere to go. Fix: a `fire` tool (an agent's name, or all of this assistant's), beside `tell`.
 
 6. **model: commands live in a menu and slash words.** Symptom: Import, Usage, Export memory, Memory tree, Fold all, Stop in ☰; `/goal`, `/halt`; "the ☰ menu has the commands". Fix: each is said and done by a tool (table under *Acts*). The ☰ menu goes; `/goal` may stay a while as a typed alias.
 
@@ -115,6 +119,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Agent | hands for one task | The assistant delegates one task to a freelancer; it works in the background, reports once and is gone. "Fire Scout" ends it early. |
 | Goal | persistence | Name the finish line; it keeps taking turns until a check says it's met or you call it off. |
 | Fact | knowledge across chats | "Remember X" and every assistant (or one) knows X until you say forget it. |
+| Search | find what no summary mentions | The assistant searches the messages for a word or name, then opens the hits. |
 | Purge | erase a secret | "Purge the message with my token": it and its summaries vanish; "unpurge it" brings it back within ten minutes, then it is wiped from disk. |
 | Create assistant | more people | Ask for someone with a name and an about; they appear in the sidebar and stay. |
 | Mention | name an assistant in the box | `@Max` alone opens your chat with Max; `@Max what do you think?` has the one you talk to ask Max. |
@@ -125,7 +130,7 @@ Most structural first. Symptom → cause → fix → on screen.
 
 **Purpose:** let any assistant draw on another's character, effort and memory, the way Alfred calls in Lucius Fox, without you carrying messages.
 
-**Tools (every assistant has them):**
+**Tools (every assistant has them, in its chat with you):**
 
 | Tool | Input | Answer |
 |---|---|---|
@@ -147,12 +152,14 @@ Most structural first. Symptom → cause → fix → on screen.
 | Act | Said to the assistant (tool) | By hand (looking only) |
 |---|---|---|
 | Interrupt, redirect, stop the turn | any message (barge-in) | – |
+| Look back in memory | `zoom`, `date`, `search` (the assistant's own) | – |
+| Work on the Mac and the web | `luau`; `list_skills`, `load_skill` | – |
 | Delegate to / message / fire an agent | `delegate`, `tell`, `fire` | – |
 | Ask another assistant | `list_assistants`, `ask_assistant`; `@Name` in a message | – |
-| Create an assistant | `create_assistant` (name, about, instructions, effort) | – |
+| Create / archive / restore an assistant | `create_assistant` (name, about, effort, instructions, welcome), `archive_assistant`, `restore_assistant` | – |
 | Set / drop goal | `goal` | – |
 | Remember / forget / purge / unpurge | `remember`, `forget`, `purge`, `unpurge` | – |
-| Usage, import, export, tree | `usage`, `import_find`, `import`, `import_pause`, `export`, `tree` | – |
+| Usage, import, export, tree | `usage`, `import` (find, start, pause, resume), `export`, `tree` | – |
 | Switch assistant | `@Name` alone (voice later: "let me talk to Max") | sidebar, Cmd+B |
 | Open / collapse a block | – | click |
 | Overview | – | Cmd+Shift+F |
@@ -171,6 +178,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Ask | one assistant consulting another | call |
 | Agent | a freelancer an assistant delegates one task to; it reports once and is gone | worker, subagent, helper |
 | Delegate / Fire | give an agent its task / let it go | spawn, start, hire, stop, kill (for agents) |
+| Archive / Restore | take an assistant off the sidebar, its files kept / bring it back | delete, fire (for assistants) |
 | Mention | `@Name` in the box | tag, ping |
 | Block | a summary standing for n messages | line, part, node, nx |
 | Open / Collapse | a block's halves / back to its summary | fold, unfold, zoom |
@@ -178,6 +186,9 @@ Most structural first. Symptom → cause → fix → on screen.
 | Cut off | what barge-in does to a reply | interrupted, halted |
 | Summarizing | the compactor at work | compressing |
 | Fact | something remembered across chats | memory |
+| Search | find the messages holding a word | grep |
+| Purge / Unpurge | erase a message / take that back within ten minutes | delete, redact |
+| Skill | a how-to the user keeps for a kind of task | recipe, playbook |
 
 ## Interaction contract
 

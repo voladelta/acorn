@@ -92,9 +92,10 @@ Ask for what you want in plain words: "stop", "fire Scout", "have three agents c
 | Tool | Who | What |
 |---|---|---|
 | `zoom`, `date`, `search` | everyone | Open a line of the view; a message's date; find the messages whose words match (full text, newest first) |
-| `luau` | assistants, agents | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch` and `json`, on this Mac in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s) |
+| `list_skills`, `load_skill` | everyone | The user's skills (how-tos for kinds of task), and one's steps |
+| `luau` | everyone | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch` and `json`, on this Mac in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s) |
 | `delegate`, `tell`, `fire` | assistants | Give agents one task each, in parallel, in the background; message one at work (it cuts in); fire one or all |
-| `create_assistant` | with you | Make an assistant: name, about, effort, instructions |
+| `create_assistant`, `archive_assistant`, `restore_assistant` | with you | Make an assistant (name, about, effort, instructions, welcome); take one off the sidebar, its files kept; bring it back |
 | `list_assistants`, `ask_assistant` | with you | List the other assistants (or those a query matches) and ask one, in your two's thread; its reply comes back as a message |
 | `remember`, `forget`, `purge`, `unpurge` | with you | Keep and drop facts; erase a message, or take that back within ten minutes |
 | `goal`, `usage`, `import`, `export`, `tree` | with you | Set or drop the goal; read costs, and each day's zooms and searches that found something or not; import past chats; save the memory as JSON; open the tree as a page |
