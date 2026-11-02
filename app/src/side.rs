@@ -9,7 +9,6 @@
 use crate::Ui;
 use crate::look::*;
 use acorn_core::assistant::Assistant;
-use acorn_core::chat::hub;
 use nsh_core::prelude::*;
 
 /// Its width, shown.
@@ -81,9 +80,10 @@ fn row(ui: Ui, a: Assistant) -> impl IntoElement {
   };
   let works = {
     let id = id.clone();
-    move || ui.working.with(|w| w.iter().any(|chat| hub::whose(chat) == id))
+    move || ui.working.with(|w| w.iter().any(|chat| crate::link::whose(chat) == id))
   };
-  let mark = if a.is_acorn() {
+  let acorn = ui.assistants.with_untracked(|all| all.first().is_some_and(|f| f.id == a.id));
+  let mark = if acorn {
     text("🌰").text_size(px(15.0)).into_element()
   } else {
     let initial = a

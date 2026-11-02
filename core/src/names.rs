@@ -3,8 +3,6 @@
 //! An agent's name: a common adjective and noun, capitalized, joined
 //! (FireAnt; older ones Fire-Ant): 16,384; one taken is drawn again.
 
-use rand::seq::IndexedRandom;
-
 const ADJS: &str = "
 red blue green yellow orange purple pink brown black white gray silver golden
 amber azure bronze copper jade lemon lime mint navy peach plum ruby violet
@@ -30,7 +28,9 @@ toucan trout tuna turkey turtle walrus wasp whale wolf wombat yak zebra apple
 banana bagel cookie mango melon muffin noodle pancake pepper potato pretzel
 radish taco waffle";
 
+#[cfg(feature = "engine")]
 pub fn random() -> String {
+  use rand::seq::IndexedRandom;
   let adjs: Vec<&str> = ADJS.split_whitespace().collect();
   let nouns: Vec<&str> = NOUNS.split_whitespace().collect();
   let mut rng = rand::rng();
@@ -55,7 +55,7 @@ fn word(w: &str) -> String {
     .unwrap_or_default()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "engine"))]
 mod tests {
   #[test]
   fn names_read_back() {

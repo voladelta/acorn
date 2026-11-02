@@ -15,6 +15,7 @@
 //! box, the tabs while agents work).
 
 mod call;
+mod link;
 mod look;
 mod model;
 mod rows;
@@ -22,25 +23,13 @@ mod side;
 mod text;
 
 use acorn_core::assistant::Assistant;
-use acorn_core::chat::hub;
 use acorn_core::wire::{Command, Event};
 use look::*;
 use model::{Act, Model, Then};
 use nsh_base::input;
 use nsh_core::prelude::*;
 use std::collections::HashSet;
-use std::sync::LazyLock;
 use std::time::Duration;
-
-/// The engines' threads: their calls, tools and files never hold the
-/// window's.
-static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
-  tokio::runtime::Builder::new_multi_thread()
-    .enable_all()
-    .thread_name("acorn")
-    .build()
-    .expect("the engine's runtime")
-});
 
 /// What every part of the window shares: the model (of the chat shown),
 /// the assistants, the one you talk to, the chat shown (its chat with
@@ -72,10 +61,7 @@ impl Ui {
 
   /// A command to the shown chat's engine.
   pub fn send(self, cmd: Command) {
-    if let Some(engine) = hub::get(&self.shown.get_untracked()) {
-      let _in = RUNTIME.enter();
-      engine.command(cmd);
-    }
+    link::send(&self.shown.get_untracked(), cmd);
   }
 
   /// The assistant you talk to.
@@ -84,7 +70,8 @@ impl Ui {
     self
       .assistants
       .with(|all| all.iter().find(|a| a.id == talk).cloned())
-      .unwrap_or_else(Assistant::acorn)
+      .or_else(|| self.assistants.with(|all| all.first().cloned()))
+      .unwrap_or_else(|| link::nobody(&talk))
   }
 
   /// An assistant's name, by id.
@@ -160,7 +147,7 @@ impl Ui {
       return true;
     }
     let talk = self.talk.get_untracked();
-    if hub::get(&talk).is_none() {
+    if link::opening(&talk) {
       self.note(format!(
         "{}'s chat is still opening: send again in a moment.",
         self.named(&talk)
@@ -210,8 +197,8 @@ impl Ui {
 /// The window's root.
 #[component]
 pub fn App() -> impl IntoElement {
-  let assistants = acorn_core::assistant::all();
-  let first = assistants[0].id.clone();
+  let assistants = link::assistants();
+  let first = assistants.first().map(|a| a.id.clone()).unwrap_or_default();
   let ui = Ui {
     model: signal_with(Model::default(), SignalEquals::Never),
     assistants: signal(assistants),
@@ -223,12 +210,12 @@ pub fn App() -> impl IntoElement {
     draft: signal(String::new()),
     field: element_ref(),
     list: element_ref(),
-    now: signal(acorn_core::now_ms()),
+    now: signal(text::now_ms()),
   };
   provide_context(ui);
   ui.model.set(ui.fresh(&ui.shown.get_untracked()));
   hear(ui);
-  set_interval(Duration::from_secs(60), move || ui.now.set(acorn_core::now_ms()));
+  set_interval(Duration::from_secs(60), move || ui.now.set(text::now_ms()));
   keys(ui);
   view()
     .flex_1()
@@ -251,17 +238,9 @@ pub fn App() -> impl IntoElement {
 /// you talk to Acorn, if it was), a hidden chat's notes (named),
 /// always; the rest, of the chat shown.
 fn hear(ui: Ui) {
-  let (tx, mut heard) = tokio::sync::mpsc::unbounded_channel::<(String, Event)>();
-  if !hub::listen(tx) {
+  let Some(mut heard) = link::listen(ui.shown.get_untracked()) else {
     return;
-  }
-  let first = ui.shown.get_untracked();
-  RUNTIME.spawn(async move {
-    hub::open_all();
-    if let Some(engine) = hub::get(&first) {
-      engine.attach();
-    }
-  });
+  };
   spawn(async move {
     while let Some((id, ev)) = heard.recv().await {
       if let Event::State(s) = &ev {
@@ -273,15 +252,32 @@ fn hear(ui: Ui) {
         }
       }
       if let Event::Assistant(made) = ev {
-        ui.assistants.update(|all| all.push(made));
+        let first = ui.talk.get_untracked().is_empty().then(|| made.id.clone());
+        if !ui.assistants.with_untracked(|all| all.iter().any(|a| a.id == made.id)) {
+          ui.assistants.update(|all| all.push(made));
+        }
+        if let Some(id) = first {
+          ui.talk_to(id);
+        }
+        continue;
+      }
+      if id.is_empty() {
+        // The link's own notes: events lost, the chat shown told anew.
+        if let Event::Note(text) = ev {
+          if text == link::LOST {
+            ui.send(Command::Attach);
+          } else {
+            ui.note(text);
+          }
+        }
         continue;
       }
       if let Event::Gone(gone) = ev {
         ui.assistants.update(|all| all.retain(|a| a.id != gone));
         ui.working
-          .update(|w| w.retain(|chat| hub::whose(chat) != gone && !chat.ends_with(&format!("/{gone}"))));
+          .update(|w| w.retain(|chat| link::whose(chat) != gone && !chat.ends_with(&format!("/{gone}"))));
         let shown = ui.shown.get_untracked();
-        if ui.talk.get_untracked() == gone || hub::whose(&shown) == gone || shown.ends_with(&format!("/{gone}")) {
+        if ui.talk.get_untracked() == gone || link::whose(&shown) == gone || shown.ends_with(&format!("/{gone}")) {
           ui.talk_to(ui.assistants.with_untracked(|all| all[0].id.clone()));
         }
         continue;

@@ -71,6 +71,19 @@ cargo build --release -p acorn
 
 3. Type a message. Acorn answers in its chat; its tools run in `~/.acorn/work/main`.
 
+## In a browser
+
+The same window runs in a browser, built for WebAssembly on nsh's web runtime. The engines stay native: `acorn-server` runs them on a Mac or Linux machine and serves the window and its API, so the agent's tools act on that machine.
+
+```bash
+./web/build.sh                                   # the window into web/dist (needs the wasm32-unknown-unknown target)
+DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn-server
+```
+
+Open the link it prints (`http://127.0.0.1:8484/?token=...`): the token becomes a cookie, and every request needs it, since the agent runs commands there. The token is kept in `$ACORN_DIR/server-token`. `--addr HOST:PORT` (or `ACORN_ADDR`) listens elsewhere; on anything but localhost, put it behind HTTPS. `--web DIR` (or `ACORN_WEB`) serves another build.
+
+The server and the desktop app both hear every chat, so don't run both on the same `$ACORN_DIR` at once.
+
 ## Using it
 
 You act by words alone: there are no menus and no stop button. Clicks and keys only look.

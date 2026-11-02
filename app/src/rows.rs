@@ -16,7 +16,6 @@ use crate::look::*;
 use crate::model::{Act, Model, Row};
 use crate::text::{self, Out};
 use acorn_core::Kind;
-use acorn_core::chat::hub;
 use nsh_base::{TextViewLinkPressEvent, text_view};
 use nsh_core::prelude::*;
 
@@ -381,12 +380,12 @@ fn file(out: Out) -> View {
 
 /// A message's images, each opened by a click.
 fn pictures(ui: Ui, names: &[String]) -> View {
-  let dir = hub::dir(&ui.shown.get_untracked()).join("docs/images");
+  let chat = ui.shown.get_untracked();
   view().flex_row().flex_wrap().gap_2().mt_2().child(
     names
       .iter()
       .map(|name| {
-        let url = format!("file://{}", dir.join(name).display());
+        let url = crate::link::image(&chat, name);
         let open = url.clone();
         image(url)
           .h(px(120.0))

@@ -8,13 +8,17 @@
 //! shows it.
 
 use crate::{Kind, Spend};
+use serde::{Deserialize, Serialize};
+
+/// The one model every call runs on (DeepSeek Flash; `ai::deepseek`).
+pub const MODEL: &str = "deepseek-flash";
 
 /// The n messages from id on (n a power of two).
 pub type Seg = (u64, u64);
 
 /// A message logged: its kind, text, date (ISO), images, and, the last of
 /// a turn, what the turn's requests used.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Entry {
   pub kind: Kind,
   pub text: String,
@@ -24,14 +28,14 @@ pub struct Entry {
 }
 
 /// A summary: its text, its last message's date.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Node {
   pub text: String,
   pub to: String,
 }
 
 /// A piece of a message streaming.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Live {
   pub kind: Kind,
   pub text: String,
@@ -52,7 +56,7 @@ pub fn live_push(live: &mut Vec<Live>, kind: Kind, text: &str, fresh: bool) {
 /// An import's progress: its time done and in all (micro-USD of calls),
 /// USD spent and left, why paused, its messages, its nodes not built by
 /// level.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Progress {
   pub done: f64,
   pub total: f64,
@@ -64,7 +68,7 @@ pub struct Progress {
 }
 
 /// What a turn waits on while nothing streams.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Wait {
   None,
   /// The summaries of the messages before its own.
@@ -75,7 +79,7 @@ pub enum Wait {
 
 /// The chat's state: a turn runs; what it waits on; the agents at work;
 /// the goal it works to; an import's progress; what every call used today.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct State {
   pub busy: bool,
   pub wait: Wait,
@@ -85,7 +89,7 @@ pub struct State {
   pub today: Option<Spend>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
   /// Messages and summaries a view will show.
   Know {
@@ -144,10 +148,14 @@ pub enum Event {
 
 /// What the app sends: the person's words, and looks. Every other act is
 /// said, and an assistant does it by a tool (`tools`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
   /// A message; one sent while the assistant works cuts in.
-  Say { text: String, images: Vec<Vec<u8>> },
+  Say {
+    text: String,
+    #[serde(with = "base64s")]
+    images: Vec<Vec<u8>>,
+  },
   /// The app (again) shows this chat: tell it all anew.
   Attach,
   /// Open a part into its halves.
@@ -156,4 +164,22 @@ pub enum Command {
   Root,
   /// An agent's log.
   Agent(String),
+}
+
+/// Images on the wire as base64, not arrays of numbers.
+mod base64s {
+  use base64::Engine;
+  use base64::engine::general_purpose::STANDARD;
+  use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+  pub fn serialize<S: Serializer>(images: &[Vec<u8>], s: S) -> Result<S::Ok, S::Error> {
+    images.iter().map(|i| STANDARD.encode(i)).collect::<Vec<_>>().serialize(s)
+  }
+
+  pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<u8>>, D::Error> {
+    Vec::<String>::deserialize(d)?
+      .iter()
+      .map(|i| STANDARD.decode(i).map_err(serde::de::Error::custom))
+      .collect()
+  }
 }

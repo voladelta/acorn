@@ -328,7 +328,7 @@ impl Model {
     }
     let cap = match wait {
       Wait::Summaries => SUMS.to_string(),
-      _ => format!("waiting for {}…", acorn_core::ai::deepseek::MODEL),
+      _ => format!("waiting for {}…", acorn_core::wire::MODEL),
     };
     std::iter::once(Row::Cap(cap)).chain(load).collect()
   }

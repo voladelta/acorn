@@ -8,24 +8,40 @@
 //! A chat is kept in its chat.db (`memory`); what the user asked to keep
 //! for good, facts every assistant (or one) sees, in facts.db (`facts`).
 
+#[cfg(feature = "engine")]
 pub mod ai;
 pub mod assistant;
+#[cfg(feature = "engine")]
 pub mod chat;
+#[cfg(feature = "engine")]
 pub mod clip;
+#[cfg(feature = "engine")]
 pub mod compactor;
+#[cfg(feature = "engine")]
 pub mod config;
+#[cfg(feature = "engine")]
 pub mod disk;
 pub mod effort;
+#[cfg(feature = "engine")]
 pub mod facts;
+#[cfg(feature = "engine")]
 pub mod import;
+#[cfg(feature = "engine")]
 pub mod luau;
+#[cfg(feature = "engine")]
 pub mod machine;
+#[cfg(feature = "engine")]
 pub mod memory;
 pub mod names;
+#[cfg(feature = "engine")]
 pub mod plugins;
+#[cfg(feature = "engine")]
 pub mod price;
+#[cfg(feature = "engine")]
 pub mod skills;
+#[cfg(feature = "engine")]
 pub mod tools;
+#[cfg(feature = "engine")]
 pub mod web;
 pub mod wire;
 
@@ -143,6 +159,7 @@ impl std::ops::Add for Spend {
 }
 
 /// Milliseconds since 1970.
+#[cfg(feature = "engine")]
 pub fn now_ms() -> i64 {
   chrono::Utc::now().timestamp_millis()
 }

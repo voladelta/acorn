@@ -291,10 +291,35 @@ pub fn grouped(n: u64) -> String {
   out
 }
 
-fn local(at: i64) -> chrono::DateTime<chrono::Local> {
-  chrono::DateTime::from_timestamp_millis(at)
-    .unwrap_or_default()
-    .with_timezone(&chrono::Local)
+/// Milliseconds since 1970.
+pub fn now_ms() -> i64 {
+  nsh_core::time::unix_ms() as i64
+}
+
+fn local(at: i64) -> chrono::DateTime<chrono::FixedOffset> {
+  let utc = chrono::DateTime::from_timestamp_millis(at).unwrap_or_default();
+  utc.with_timezone(&offset(utc))
+}
+
+/// Local time's offset from UTC at a time: the system's.
+#[cfg(not(target_arch = "wasm32"))]
+fn offset(at: chrono::DateTime<chrono::Utc>) -> chrono::FixedOffset {
+  use chrono::Offset;
+  at.with_timezone(&chrono::Local).offset().fix()
+}
+
+/// Local time's offset from UTC at a time: the browser's (nsh's page
+/// runtime answers it, daylight saving time included).
+#[cfg(target_arch = "wasm32")]
+fn offset(at: chrono::DateTime<chrono::Utc>) -> chrono::FixedOffset {
+  #[link(wasm_import_module = "nsh")]
+  unsafe extern "C" {
+    #[link_name = "local_offset"]
+    fn local_offset(ms: f64) -> f64;
+  }
+  // SAFETY: a pure function of the page's.
+  let east = unsafe { local_offset(at.timestamp_millis() as f64) };
+  chrono::FixedOffset::east_opt(if east.is_finite() { east as i32 } else { 0 }).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap())
 }
 
 fn clock_full(at: i64) -> String {
@@ -304,7 +329,7 @@ fn clock_full(at: i64) -> String {
 /// 14:03 (today), else Oct 25 14:03.
 pub fn clock_show(at: i64) -> String {
   let d = local(at);
-  if d.date_naive() == chrono::Local::now().date_naive() {
+  if d.date_naive() == local(now_ms()).date_naive() {
     d.format("%H:%M").to_string()
   } else {
     d.format("%b %-d %H:%M").to_string()

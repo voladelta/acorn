@@ -13,7 +13,7 @@ use crate::{Img, Kind};
 use serde_json::{Value, json};
 use std::time::Duration;
 
-pub const MODEL: &str = "deepseek-flash";
+pub use crate::wire::MODEL;
 pub const URL: &str = "https://api.deepseek.com/responses";
 /// A request's most output tokens: DeepSeek's documented cap.
 pub const MAX_OUTPUT_TOKENS: u64 = 384_000;
