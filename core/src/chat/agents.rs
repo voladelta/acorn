@@ -201,8 +201,7 @@ impl Engine {
       "tree" => self.tree().await.map_or_else(Out::fail, |file| {
         Out::ok(format!("Opened in the browser: {}.", file.display()))
       }),
-      "list_assistants" => Out::ok(self.lock().peers(None)),
-      "search_assistants" => Out::ok(self.lock().peers(Some(&str("query")))),
+      "list_assistants" => Out::ok(self.lock().peers(&str("query"))),
       "ask_assistant" => self.ask(&str("name"), &str("message")),
       "remember" => {
         let (me, chat, msg) = {
@@ -547,14 +546,11 @@ impl Chat {
     }
   }
 
-  /// The user's other assistants, each its name and about; those a query
-  /// matches (each word in its name, about or instructions), best first.
-  fn peers(&self, query: Option<&str>) -> String {
-    let words: Vec<String> = query
-      .unwrap_or_default()
-      .split_whitespace()
-      .map(str::to_lowercase)
-      .collect();
+  /// The user's other assistants, each its name and about, then the
+  /// archived; with a query, those it matches (each word in its name,
+  /// about or instructions), best first.
+  fn peers(&self, query: &str) -> String {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
     let mut them: Vec<(usize, crate::assistant::Assistant)> = crate::assistant::all()
       .into_iter()
       .filter(|a| a.id != self.me.id)

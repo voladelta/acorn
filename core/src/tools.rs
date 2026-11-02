@@ -324,15 +324,9 @@ fn peers() -> Vec<Spec> {
     ),
     spec(
       "list_assistants",
-      "The user's other assistants: each one's name and about; then the archived.",
-      json!({}),
-      &[],
-    ),
-    spec(
-      "search_assistants",
-      "The user's other assistants whose name, about or instructions match a query (\"clothes\", \"second opinion\"), best first.",
+      "The user's other assistants: each one's name and about; then the archived. With a query (\"clothes\", \"second opinion\"), only those whose name, about or instructions match it, best first.",
       json!({"query": {"type": "string"}}),
-      &["query"],
+      &[],
     ),
     spec(
       "ask_assistant",

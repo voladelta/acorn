@@ -129,8 +129,7 @@ Most structural first. Symptom → cause → fix → on screen.
 
 | Tool | Input | Answer |
 |---|---|---|
-| `list_assistants` | – | every assistant: name, about (not instructions or effort) |
-| `search_assistants` | query | those whose name or about match, best first (e.g. "clothes" → Marrie) |
+| `list_assistants` | query (optional) | every other assistant: name, about (not instructions or effort), then the archived; with a query, those whose name, about or instructions match, best first (e.g. "clothes" → Marrie) |
 | `ask_assistant` | name, message | sends the message in the thread with that assistant; the answer comes back as a message "[Max] reply", like `tell`'s, so a slow thinker doesn't hold up the turn |
 
 **Threads.** Each pair of assistants has one thread, kept like a chat: never ends, memory tree, summaries, purge. Max answering Acorn is Max in his thread with Acorn: his own instructions and effort, his tools, the shared Facts, and what Acorn and he said before. Your chat with Max keeps its own messages, but Max remembers the thread there: its latest lines show on each of his turns with you.
@@ -149,7 +148,7 @@ Most structural first. Symptom → cause → fix → on screen.
 |---|---|---|
 | Interrupt, redirect, stop the turn | any message (barge-in) | – |
 | Delegate to / message / fire an agent | `delegate`, `tell`, `fire` | – |
-| Ask another assistant | `list_assistants`, `search_assistants`, `ask_assistant`; `@Name` in a message | – |
+| Ask another assistant | `list_assistants`, `ask_assistant`; `@Name` in a message | – |
 | Create an assistant | `create_assistant` (name, about, instructions, effort) | – |
 | Set / drop goal | `goal` | – |
 | Remember / forget / purge / unpurge | `remember`, `forget`, `purge`, `unpurge` | – |

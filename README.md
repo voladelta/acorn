@@ -20,7 +20,7 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Agent tools** | One `luau` tool for hands: Luau code, in a VM of the agent's own that keeps its globals between calls, that reads, writes and edits files and runs commands on your Mac, in a work dir of the agent's own, and searches and fetches the web through DeepSeek's Search and Fetch APIs; agents delegated one task each, in parallel |
 | **Assistants** | Acorn (general assistant), Max (thoughtful expert) and those they create on request, each a person with a name and an about, its own chat, memory and work dir, in a sidebar |
 | **Cut in** | A message sent while an assistant talks or works stops it at once, as a person would stop and listen; it answers you, then goes on only if you say so |
-| **Consult** | Assistants ask each other (`list_assistants`, `search_assistants`, `ask_assistant`), each pair in a thread of its own that never ends |
+| **Consult** | Assistants ask each other (`list_assistants`, `ask_assistant`), each pair in a thread of its own that never ends |
 | **Facts** | `remember` and `forget` keep facts you state, for every assistant or one; each call's system prompt lists them |
 | **Purge** | `purge` erases a message (a pasted key or password) and every summary made from it; `unpurge` takes it back for ten minutes, then it is wiped from the database file |
 | **Import** | Your past Claude Code and Codex sessions on this Mac, and Claude and ChatGPT chats from their websites' exports, read into the chat |
@@ -95,7 +95,7 @@ Ask for what you want in plain words: "stop", "fire Scout", "have three agents c
 | `luau` | assistants, agents | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch` and `json`, on this Mac in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s) |
 | `delegate`, `tell`, `fire` | assistants | Give agents one task each, in parallel, in the background; message one at work (it cuts in); fire one or all |
 | `create_assistant` | with you | Make an assistant: name, about, effort, instructions |
-| `list_assistants`, `search_assistants`, `ask_assistant` | with you | Find another assistant and ask it, in your two's thread; its reply comes back as a message |
+| `list_assistants`, `ask_assistant` | with you | List the other assistants (or those a query matches) and ask one, in your two's thread; its reply comes back as a message |
 | `remember`, `forget`, `purge`, `unpurge` | with you | Keep and drop facts; erase a message, or take that back within ten minutes |
 | `goal`, `usage`, `import`, `export`, `tree` | with you | Set or drop the goal; read costs; import past chats; save the memory as JSON; open the tree as a page |
 

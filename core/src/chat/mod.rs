@@ -59,8 +59,6 @@ For a hard call, Max is in the sidebar.
 
 Every oak was once a nut that held its ground. So: day one. What's on your mind?";
 
-pub const HELLO_LINE: &str = "unii: hello: Acorn, one endless chat; every message kept, old days folded into notes, unfolded when needed; to start: import past Claude and ChatGPT chats, hand it a job (helpers in parallel), tell it facts to keep; Max in the sidebar for hard calls.";
-
 /// A message logged: its pages [id, end).
 #[derive(Clone, Copy, Debug)]
 pub struct Span {

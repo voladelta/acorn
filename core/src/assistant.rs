@@ -41,8 +41,6 @@ The other assistants come to me too, when they're stuck.
 
 Bring me something hard.";
 
-const MAX_HELLO_LINE: &str = "unii: hello: Max, the thoughtful expert for when it matters; weighs the alternatives, checks its reasoning, says how sure it is; the conclusion first; the other assistants ask it too.";
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Assistant {
   pub id: String,
@@ -109,14 +107,9 @@ impl Assistant {
   }
 
   /// What its chat opens with, and the line its memory keeps of it:
-  /// its welcome (one made without one, a plain hello).
+  /// its welcome (one made without one, a plain hello), and that on one
+  /// line, cut short, after its name and about.
   pub fn hello(&self) -> (String, String) {
-    if self.is_acorn() {
-      return (self.welcome.clone(), crate::chat::HELLO_LINE.into());
-    }
-    if self.id == MAX {
-      return (self.welcome.clone(), MAX_HELLO_LINE.into());
-    }
     let name = &self.name;
     let text = match self.welcome.trim() {
       "" => format!(

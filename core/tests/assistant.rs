@@ -62,6 +62,16 @@ fn made_assistants_are_saved_and_listed() {
   );
   let hellos = [Assistant::acorn().hello(), Assistant::max().hello()];
   assert!(hellos[0].0.starts_with("Hello! This is Acorn.") && hellos[1].0.starts_with("Hello! This is Max."));
+  assert!(
+    hellos[0]
+      .1
+      .starts_with("unii: hello: Acorn, General assistant: Hello! This is Acorn. One chat between us")
+      && hellos[1]
+        .1
+        .starts_with("unii: hello: Max, Thoughtful expert: Hello! This is Max."),
+    "their lines made as a made one's are"
+  );
+  assert!(hellos[0].1.chars().count() <= 240 + "unii: hello: Acorn, General assistant: ".len());
   assert_ne!(
     hellos[0].0.replace("Acorn", "Max"),
     hellos[1].0,
