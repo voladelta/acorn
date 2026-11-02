@@ -426,10 +426,14 @@ impl Chat {
     }
     let now = crate::now_ms();
     if let Some(till) = self.mem.held_till().filter(|&t| t > now) {
-      if self.wake != till {
+      // Only on the runtime: the wipe's own thread lets the chat go too,
+      // and the next drop on a runtime's thread sets the timer then.
+      if self.wake != till
+        && let Ok(rt) = tokio::runtime::Handle::try_current()
+      {
         self.wake = till;
         let this = self.this.clone();
-        tokio::spawn(async move {
+        rt.spawn(async move {
           tokio::time::sleep(std::time::Duration::from_millis((till - now) as u64 + 1)).await;
           if let Some(engine) = this.upgrade() {
             drop(engine.lock());
