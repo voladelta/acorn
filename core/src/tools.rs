@@ -2,8 +2,8 @@
 //! =====
 //! Acorn's prompts and tools. The user acts only by words, so whatever the
 //! app does, an assistant does by a tool. Everyone gets zoom, date and
-//! search (OWN); an assistant hires, tells and fires agents (BOSS); in its
-//! chat with the user it also creates assistants and consults them
+//! search (OWN); an assistant delegates to, tells and fires agents (BOSS);
+//! in its chat with the user it also creates assistants and consults them
 //! (PEERS), keeps facts and purges messages or takes a purge back (KEEP),
 //! and sets goals, reads usage, imports, exports and draws its memory
 //! (HOME); in a thread, where another assistant asks it something, it gets
@@ -76,16 +76,16 @@ say in your reply what you learned that will matter later.
 The user cuts in as a person would: a message they send while you work stops
 you at once, mid-reply or mid-tool-call. What you were saying ends \"[cut
 off]\", a tool call it cut answers so, and you read their message: answer it,
-and go back to the work only if it says to. \"Stop\" means stop. Agents you hired run
-in the background; each one's report reaches you as a
-message starting \"[Name]\", between your tool calls or as a new turn. Never wait
+and go back to the work only if it says to. \"Stop\" means stop. Agents you
+delegated to run in the background; each one's report reaches you as a message
+starting \"[Name]\", between your tool calls or as a new turn. Never wait
 for one (no sleep, no polling): go on, or end your turn and tell the user what
 is running.
 {user}
-When you need hands, hire: an agent is a freelancer hired for one task, which
-works in the background and reports when done. You can tell it more, at work or
+When you need hands, delegate: give a task to an agent, a freelancer that works
+on it in the background and reports when done. You can tell it more, at work or
 after; it knows nothing of you but the view, its task and what you tell it, and
-it is not one of the user's assistants. Hire for work that can run while you go
+it is not one of the user's assistants. Delegate work that can run while you go
 on, or in parallel (research, a long build, many files); do a small job
 yourself.
 
@@ -162,9 +162,8 @@ message wants of them, unless it only mentions them. When another assistant
 asks you, you answer in your thread with them; what you said there is yours,
 and \"Your threads\" shows each one's latest before the user's message.
 
-Someone named who should stay, however the user puts it (\"hire a stylist
-called Marrie\", \"get me a coach\"), is a new assistant: create them. Hire
-an agent only for a task.
+A person the user wants to keep (\"hire a stylist called Marrie\") is a new
+assistant: create them.
 ";
 
 /// Where the tools run: this Mac, the work dir.
@@ -177,10 +176,10 @@ fn mac(work: &Path) -> String {
   )
 }
 
-/// A hired agent's prompt: its part, then the view's and the Mac's docs.
+/// An agent's prompt: its part, then the view's and the Mac's docs.
 pub fn sub(work: &Path) -> String {
   format!(
-    "You are an agent Acorn hired for one task: Acorn is an AI agent that works
+    "You are an agent Acorn delegated one task to: Acorn is an AI agent that works
 for one user in a single chat that never ends. Do it yourself, with
 your tools, following the user's instructions at the end of this
 prompt: they say who the user is, how their files are organized and how
@@ -201,7 +200,7 @@ The view: the whole chat between Acorn and the user, oldest first, inside
 
 A summary tags each item with its kind: user (the user's words), unii
 (Acorn's replies), tool (Acorn's tool calls), echo (their results), note
-(memories from before this chat), or work (the report of a hired agent,
+(memories from before this chat), or work (the report of an agent,
 starting \"[Name]\"). A short message is its own line, word for word. Recent lines
 cover one message each; the older the messages, the more a line covers.
 A message not summarized yet shows as \"{wait}\".
@@ -284,14 +283,14 @@ fn boss() -> Vec<Spec> {
   let efforts = effort::names();
   vec![
     spec(
-      "hire",
-      "Hire one agent per task, a freelancer working in the background, all in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. An agent sees the view and the user's instructions, but knows what you want only from its task, so say all it needs. It works in a dir of its own, not yours: name each file by its absolute path. Never for a person the user wants to keep: that is create_assistant.",
+      "delegate",
+      "Give each task to an agent of its own, a freelancer working in the background, all in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. An agent sees the view and the user's instructions, but knows what you want only from its task, so say all it needs. It works in a dir of its own, not yours: name each file by its absolute path. For tasks only; a person who stays is create_assistant.",
       json!({"tasks": {"type": "array", "items": {"type": "string"}}, "effort": {"type": "string", "enum": efforts, "description": "How hard they think; by default, as hard as you."}}),
       &["tasks"],
     ),
     spec(
       "tell",
-      "Send a message to an agent you hired, by name. One at work stops what it is doing to read it, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".",
+      "Send a message to an agent you delegated to, by name. One at work stops what it is doing to read it, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".",
       json!({"name": {"type": "string"}, "message": {"type": "string"}}),
       &["name", "message"],
     ),
@@ -309,7 +308,7 @@ fn peers() -> Vec<Spec> {
   vec![
     spec(
       "create_assistant",
-      "Create a new assistant, when the user asks for one in whatever words (\"hire a stylist called Marrie\" is one: a named person who stays): a person of their own, beside you in Acorn's sidebar, with a chat of its own that never ends and its own memory. It is you, Acorn, with its own name, about, reasoning effort, instructions (its system prompt, after yours) and welcome message (its chat's first message). It does not start working; the user opens it from the sidebar.",
+      "Create a new assistant, when the user asks for one in whatever words (\"hire a stylist called Marrie\"): a person of their own, beside you in Acorn's sidebar, with a chat of its own that never ends and its own memory. It is you, Acorn, with its own name, about, reasoning effort, instructions (its system prompt, after yours) and welcome message (its chat's first message). It does not start working; the user opens it from the sidebar.",
       json!({"name": {"type": "string"}, "about": {"type": "string", "description": "Who it is, in a few words, as the app shows it beside its name: \"Personal stylist\", \"Friendly neighbour who loves cracking jokes\". Never its effort."}, "effort": {"type": "string", "enum": efforts, "description": "How hard it thinks, as fits its part: low is fast and cheap, max is smartest and slowest; high if the user didn't say."}, "instructions": {"type": "string", "description": "Its system prompt, from what the user said (what it helps with, how it works and talks), or the one they gave word for word."}, "welcome": {"type": "string", "description": "Its welcome message: the first message of its chat, in its own voice, as it greets the user: \"Hello! This is <name>.\", who it is and what to bring it, a few short lines of markdown; or the one the user gave word for word."}}),
       &["name", "about", "effort", "instructions", "welcome"],
     ),
@@ -417,7 +416,7 @@ fn kit() -> Vec<Spec> {
 }
 
 /// What a caller may use: an assistant with the user all; one answering
-/// in a thread (`thread`) its work tools alone; a hired agent its own and
+/// in a thread (`thread`) its work tools alone; an agent its own and
 /// the Mac's.
 pub fn list(who: &str, thread: bool) -> Vec<Spec> {
   let mut specs = own();
@@ -446,7 +445,7 @@ mod tests {
         "{only}: the user's chat alone"
       );
     }
-    assert!(thread.contains("When you need hands, hire") && chat.contains("You can tell it more"));
+    assert!(thread.contains("When you need hands, delegate") && chat.contains("You can tell it more"));
     assert!(
       chat.contains("create them") && !thread.contains("create them"),
       "a named person who stays is created"

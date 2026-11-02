@@ -5,7 +5,7 @@
 //! (`look::tool_glyph`), its name in bold and a head, as its tool reads: a
 //! command as itself; a file tool its path, read's lines after it, and
 //! write's content and edit's replacement as a diff; zoom and date the message
-//! (`#6243`, a line `#6243+8`, an agent by name); hire its tasks, tell
+//! (`#6243`, a line `#6243+8`, an agent by name); delegate its tasks, tell
 //! its name and text in a block. Any other call shows its
 //! name and short values as arguments, over a block for each other value,
 //! keyed by its name unless alone. A call still streaming reads as its
@@ -130,7 +130,7 @@ fn shown(name: &str, x: Map<String, Value>) -> (String, Vec<Code>) {
         x: str("code"),
       }],
     ),
-    "hire" | "spawn" => {
+    "delegate" | "hire" | "spawn" => {
       let tasks: Vec<&Value> = x
         .get("tasks")
         .and_then(Value::as_array)

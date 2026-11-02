@@ -567,7 +567,7 @@ impl Chat {
     });
   }
 
-  /// The turn only, with the hires and tells it waits on; agents go on.
+  /// The turn only, with the delegations and tells it waits on; agents go on.
   /// why: the note the turn's end logs, after the reply the stop cut.
   pub(super) fn interrupt(&mut self, why: Option<String>) {
     if !self.halt.is_cancelled() {

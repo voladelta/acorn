@@ -39,7 +39,7 @@ pub struct Config {
   pub pick: Effort,
   /// What every compaction runs on, a chat's and an import's alike.
   pub compactor: Effort,
-  /// What hired agents run on (none: their assistant's effort).
+  /// What agents run on (none: their assistant's effort).
   pub agents: Option<Effort>,
   pub view: usize,
   /// USD every chat's calls may spend together a day, here (none: no cap).

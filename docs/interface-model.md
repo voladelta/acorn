@@ -3,7 +3,7 @@
 Status: built · Last updated: 2026-10-27
 
 **As built, where it differs from the text below:**
-- Consult goes one level deep: an assistant answering in a thread has its work tools only (no `ask_assistant`, facts, goal, import or hiring), so asks can't loop.
+- Consult goes one level deep: an assistant answering in a thread has its work tools only (no `ask_assistant`, facts, goal, import or delegating), so asks can't loop.
 - `usage` sums every chat and thread; the footer's cost is the shown chat's today.
 - No `/goal` alias: slash words are gone. Dropping files on the window adds their paths to the message being written ("import this").
 - Esc goes back to your chat from an agent's page, a thread or the overview.
@@ -11,7 +11,7 @@ Status: built · Last updated: 2026-10-27
 - `@Name` is the one word the box reads itself: alone, it opens your chat with that assistant (no call); in a message, the words go to the one you talk to, whose prompt reads `@Name` as "ask them". The box suggests names as you type `@`: ↑ and ↓ pick one, Return or Tab takes it (Return sends a word already a name), a click takes the one clicked, Esc closes the names for that word.
 - An assistant answering in a thread hears nothing of what only your chat has: no facts, purges, goals, asking or `@Name`.
 - An assistant remembers its threads in its chat with you: each turn sees each thread's latest 8 lines ("Your threads", after the agents at work), and `zoom("Acorn")` gives one whole. Talk to Max the day after he warned Acorn, and he knows.
-- "Hire" a named person who should stay ("hire a stylist called Marrie") makes an assistant; `hire` itself is only for a task.
+- "Hire" a named person who should stay ("hire a stylist called Marrie") makes an assistant; agents get tasks by `delegate`, so the user's word and the tool never collide.
 
 ## The principle
 
@@ -82,7 +82,7 @@ Most structural first. Symptom → cause → fix → on screen.
 
 9. **model: "Acorn" names four things.** Symptom: in Doug's chat, "Acorn is an AI…", "Acorn's turn", "Acorn's memory". Cause: Acorn is the app, the first assistant, every assistant's speaker (`Kind::Acorn`) and every turn's owner (`TURN`). Fix: chat-level text names the assistant shown.
 
-10. **model: effort is a dial nobody turns.** `Command::Pick` is never sent; the `pick` config key and the "Acorn's pick" idea outlive their use. Fix: effort is fixed per assistant at hiring. Drop `Pick` (keep `pick` only as Acorn's default if wanted).
+10. **model: effort is a dial nobody turns.** `Command::Pick` is never sent; the `pick` config key and the "Acorn's pick" idea outlive their use. Fix: effort is fixed per assistant at creation. Drop `Pick` (keep `pick` only as Acorn's default if wanted).
 
 11. **model: the words on screen aren't the words you'd say.** "8x", "line", "compressing", "fold" vs "Fold all". Fix: Block ("8 messages"), Open / Collapse, Overview, Summarizing.
 
@@ -99,7 +99,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Thread | assistant ↔ assistant, lasting | Messages and Blocks, like a Chat | its own page, reached from the consult in either chat |
 | Message | who, date, text, images | in a Chat or Thread | in it |
 | Block | n messages, summary | two halves, down to Messages | in the Chat or Thread |
-| Agent | name, task, at work / done, log | hired by one Chat's assistant, for one task | its page (tab) |
+| Agent | name, task, at work / done, log | delegated one task by one Chat's assistant | its page (tab) |
 | Fact | text, scope (everyone / one) | held by all assistants or one | said back on request |
 | Goal | text | one per Chat | line above the box |
 | Import | sessions, price, progress | into one Chat | progress in the header |
@@ -112,14 +112,14 @@ Most structural first. Symptom → cause → fix → on screen.
 | Barge-in | interrupt like a person | Send while it talks or works: it stops at once, keeps what it said marked "cut off", reads you, answers. |
 | Consult | assistants ask each other | Acorn asks Max; Max answers in their own lasting thread; Acorn tells you what Max said. |
 | Memory tree | remember everything | Old messages merge into Blocks; open one to see what it was made of. |
-| Agent | hands for one task | The assistant hires a freelancer for one task; it works in the background, reports once and is gone. "Fire Scout" ends it early. |
+| Agent | hands for one task | The assistant delegates one task to a freelancer; it works in the background, reports once and is gone. "Fire Scout" ends it early. |
 | Goal | persistence | Name the finish line; it keeps taking turns until a check says it's met or you call it off. |
 | Fact | knowledge across chats | "Remember X" and every assistant (or one) knows X until you say forget it. |
 | Purge | erase a secret | "Purge the message with my token": it and its summaries vanish; "unpurge it" brings it back within ten minutes, then it is wiped from disk. |
 | Create assistant | more people | Ask for someone with a name and an about; they appear in the sidebar and stay. |
 | Mention | name an assistant in the box | `@Max` alone opens your chat with Max; `@Max what do you think?` has the one you talk to ask Max. |
 
-**Ask or hire.** An assistant asks another assistant for judgment (a part, taste, expertise, memory of its own) and hires an agent for labour (research, a long build, many files) that can run while it goes on. Assistants stay; agents are gone after one report. Agents hire no one and ask no one.
+**Ask or delegate.** An assistant asks another assistant for judgment (a part, taste, expertise, memory of its own) and delegates labour to an agent (research, a long build, many files) that can run while it goes on. Assistants stay; agents are gone after one report. Agents delegate to no one and ask no one.
 
 ### Consult
 
@@ -148,7 +148,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Act | Said to the assistant (tool) | By hand (looking only) |
 |---|---|---|
 | Interrupt, redirect, stop the turn | any message (barge-in) | – |
-| Hire / message / fire an agent | `hire`, `tell`, `fire` | – |
+| Delegate to / message / fire an agent | `delegate`, `tell`, `fire` | – |
 | Ask another assistant | `list_assistants`, `search_assistants`, `ask_assistant`; `@Name` in a message | – |
 | Create an assistant | `create_assistant` (name, about, instructions, effort) | – |
 | Set / drop goal | `goal` | – |
@@ -169,9 +169,9 @@ Most structural first. Symptom → cause → fix → on screen.
 | About | the one line saying who an assistant is | role, effort, description (in UI) |
 | Chat | you and one assistant, forever | session, conversation (in UI) |
 | Thread | two assistants, forever | chat (for these) |
-| Ask | one assistant consulting another | delegate, call |
-| Agent | a freelancer an assistant hires for one task; it reports once and is gone | worker, subagent, helper |
-| Hire / Fire | take on / let go an agent | spawn, start, stop, kill (for agents); hire (for assistants: they are created) |
+| Ask | one assistant consulting another | call |
+| Agent | a freelancer an assistant delegates one task to; it reports once and is gone | worker, subagent, helper |
+| Delegate / Fire | give an agent its task / let it go | spawn, start, hire, stop, kill (for agents) |
 | Mention | `@Name` in the box | tag, ping |
 | Block | a summary standing for n messages | line, part, node, nx |
 | Open / Collapse | a block's halves / back to its summary | fold, unfold, zoom |
@@ -188,7 +188,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | A tool act | the assistant says what it did | reversible ones by asking ("undo that": remember↔forget, goal↔drop, purge↔unpurge for ten minutes) |
 | Ask | call row linking the thread; reply framed under the asker's name | "never mind" cuts it |
 | Create assistant | row appears in the sidebar with its about | – |
-| Hire | a tab while it works; its report framed under its name | "fire it" |
+| Delegate | a tab while it works; its report framed under its name | "fire it" |
 | `@Name` alone | that assistant's chat shown | Esc, or the sidebar |
 | Purge | the message vanishes | no confirmation; "unpurge it" brings it back within ten minutes, after which it is wiped for good |
 | Import | sessions and price stated, then asked | your yes; "pause the import" |

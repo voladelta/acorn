@@ -17,7 +17,7 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Memory tree** | Every message kept in `chat.db`; a binary tree of summaries, at most 512 bytes each, built in the background by the compactor |
 | **Bounded view** | The view the model reads stays under 2 MB (about 500k tokens, within DeepSeek's 1M context); past that, the oldest lines merge first |
 | **Zoom** | `zoom(id, n)` opens a line into the two it was made from; `zoom(id, 1)` gives a message whole, with its images |
-| **Agent tools** | One `luau` tool for hands: Luau code, in a VM of the agent's own that keeps its globals between calls, that reads, writes and edits files and runs commands on your Mac, in a work dir of the agent's own, and searches and fetches the web through DeepSeek's Search and Fetch APIs; agents hired for one task, in parallel |
+| **Agent tools** | One `luau` tool for hands: Luau code, in a VM of the agent's own that keeps its globals between calls, that reads, writes and edits files and runs commands on your Mac, in a work dir of the agent's own, and searches and fetches the web through DeepSeek's Search and Fetch APIs; agents delegated one task each, in parallel |
 | **Assistants** | Acorn (general assistant), Max (thoughtful expert) and those they create on request, each a person with a name and an about, its own chat, memory and work dir, in a sidebar |
 | **Cut in** | A message sent while an assistant talks or works stops it at once, as a person would stop and listen; it answers you, then goes on only if you say so |
 | **Consult** | Assistants ask each other (`list_assistants`, `search_assistants`, `ask_assistant`), each pair in a thread of its own that never ends |
@@ -85,16 +85,16 @@ You act by words alone: there are no menus and no stop button. Clicks and keys o
 | Cmd+Shift+F | The overview: the chat in the fewest blocks, and back |
 | Cmd+B | Hide or show the sidebar |
 
-Ask for what you want in plain words: "stop", "fire Scout", "hire three agents to check each crate", "keep going until the build is green", "what did I spend this week?", "bring in my Claude Code chats since June", "export your memory", "show me your memory tree", "remember that I deploy with fly", "forget fact #12", "purge the message with my token", "ask Max what he thinks" (or `@Max what do you think?`; `@Max` alone opens Max's chat), "make me a personal stylist called Marrie".
+Ask for what you want in plain words: "stop", "fire Scout", "have three agents check each crate", "keep going until the build is green", "what did I spend this week?", "bring in my Claude Code chats since June", "export your memory", "show me your memory tree", "remember that I deploy with fly", "forget fact #12", "purge the message with my token", "ask Max what he thinks" (or `@Max what do you think?`; `@Max` alone opens Max's chat), "make me a personal stylist called Marrie".
 
 ### Tools the agent has
 
 | Tool | Who | What |
 |---|---|---|
 | `zoom`, `date`, `search` | everyone | Open a line of the view; a message's date; find the messages whose words match (full text, newest first) |
-| `luau` | assistants, hired agents | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch` and `json`, on this Mac in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s) |
-| `hire`, `tell`, `fire` | assistants | Hire agents for one task each, in parallel, in the background; message one at work (it cuts in); fire one or all |
-| `create_assistant` | with you | Hire an assistant: name, about, effort, instructions |
+| `luau` | assistants, agents | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch` and `json`, on this Mac in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s) |
+| `delegate`, `tell`, `fire` | assistants | Give agents one task each, in parallel, in the background; message one at work (it cuts in); fire one or all |
+| `create_assistant` | with you | Make an assistant: name, about, effort, instructions |
 | `list_assistants`, `search_assistants`, `ask_assistant` | with you | Find another assistant and ask it, in your two's thread; its reply comes back as a message |
 | `remember`, `forget`, `purge`, `unpurge` | with you | Keep and drop facts; erase a message, or take that back within ten minutes |
 | `goal`, `usage`, `import`, `export`, `tree` | with you | Set or drop the goal; read costs; import past chats; save the memory as JSON; open the tree as a page |
@@ -134,7 +134,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `work` | `$ACORN_DIR/work` | Where the agents' tools work |
 | `pick` | `high` | Acorn's effort: `none`, `low`, `high`, `max`, or `deepseek-flash:<effort>` (Max's is max; a created one's is set when created) |
 | `compactor` | `low` | The effort of every summary call |
-| `agents` | their assistant's | The effort of hired agents |
+| `agents` | their assistant's | The effort of agents |
 | `view` | `2000000` | Bytes past which a view merges to half; capped at 2 MB |
 | `budget` | none | USD a day (here) that every chat's calls may spend together; once reached, no request goes till midnight: a turn says why, summaries wait. `0`: none |
 | `rules` | none | A file appended to every system prompt: who you are, how you want work done |

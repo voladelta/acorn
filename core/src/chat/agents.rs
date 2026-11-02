@@ -1,6 +1,6 @@
 //! Agents
 //! ======
-//! An agent (hired for one task) has a name and a log; each
+//! An agent (given one task by `delegate`) has a name and a log; each
 //! call gets its context and its whole log, so a told agent goes on even
 //! after a quit; its replies reach the chat as one "[Name]" message.
 //! Every caller's tools (`Kit`) run here, the assistant's and the agents'.
@@ -149,7 +149,7 @@ impl Engine {
       "load_skill" => {
         crate::skills::load(&crate::skills::roots(&cwd, &str("dir")), &str("name")).map_or_else(Out::fail, Out::ok)
       }
-      "hire" => {
+      "delegate" => {
         let effort = match &input["effort"] {
           Value::Null => None,
           e => match e.as_str().and_then(Effort::parse) {
@@ -163,7 +163,7 @@ impl Engine {
           .flatten()
           .map(|t| t.as_str().map_or_else(|| t.to_string(), str::to_string))
           .collect();
-        Out::ok(self.hire(tasks, effort, &halt).await)
+        Out::ok(self.delegate(tasks, effort, &halt).await)
       }
       "tell" => Out::ok(self.tell_agent(&str("name"), &str("message")).await),
       "fire" => {
@@ -292,7 +292,7 @@ impl Engine {
     Out::ok(said)
   }
 
-  async fn hire(self: &Arc<Self>, tasks: Vec<String>, effort: Option<Effort>, halt: &CancellationToken) -> String {
+  async fn delegate(self: &Arc<Self>, tasks: Vec<String>, effort: Option<Effort>, halt: &CancellationToken) -> String {
     if tasks.is_empty() {
       return "No tasks.".into();
     }
@@ -305,7 +305,7 @@ impl Engine {
       .map(|task| self.lock().start(effort, task, view.clone()))
       .collect();
     format!(
-      "Hired {}. Each one's report will reach you as a message when it finishes.",
+      "Delegated to {}. Each one's report will reach you as a message when it finishes.",
       names.join(", ")
     )
   }
