@@ -105,6 +105,16 @@ fn memory_in_sqlite() {
       .search(memory::CHAT, "\"unclosed", 10)
       .starts_with("Can't read the query")
   );
+  assert!(mem.zoom(4, 4, 0).starts_with("4+2|") && mem.zoom(3, 2, 0).starts_with("No line"));
+  let looks: (i64, i64, i64, i64) = mem
+    .db
+    .query_row(
+      "select sum(tool = 'search'), sum(tool = 'search' and hits > 0), sum(tool = 'zoom'), sum(tool = 'zoom' and hits > 0) from looks",
+      [],
+      |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )
+    .unwrap();
+  assert_eq!(looks, (4, 2, 2, 1), "each search and zoom logged with what it found");
 
   // purged: its text, and every node built from it
   let age = mem.age;

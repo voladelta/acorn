@@ -347,7 +347,7 @@ fn home() -> Vec<Spec> {
     ),
     spec(
       "usage",
-      "What the user's calls cost, by day and kind, every assistant's chats and threads together, the last days (7 by default). Show the user a short table, in dollars.",
+      "What the user's calls cost, by day and kind, every assistant's chats and threads together, the last days (7 by default), then each day's zooms (found or not) and searches (with hits or without). Show the user a short table, in dollars.",
       json!({"days": {"type": "integer"}}),
       &[],
     ),

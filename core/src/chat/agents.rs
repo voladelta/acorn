@@ -120,13 +120,16 @@ impl Engine {
     match name {
       "zoom" => {
         if let Some(lines) = input["id"].as_str().and_then(|name| self.thread_lines(name)) {
+          self.lock().mem.look("zoom", 1);
           return Out::ok(clip::page(&lines, num("at", 0) as usize));
         }
         let mut chat = self.lock();
         let (n, at) = (num("n", 1), num("at", 0) as usize);
         match &input["id"] {
           Value::String(id) if id.starts_with(|c: char| c.is_ascii_alphabetic()) => {
-            Out::ok(clip::page(&chat.mem.agent_show(id), at))
+            let log = chat.mem.agent_show(id);
+            chat.mem.look("zoom", usize::from(!log.starts_with("No agent ")));
+            Out::ok(clip::page(&log, at))
           }
           id => {
             let id = number(id).unwrap_or(u64::MAX);

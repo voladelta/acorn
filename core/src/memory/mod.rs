@@ -24,8 +24,9 @@
 //! Files: chat.db (SQLite, WAL) holds the messages (`msgs`, log ''), each
 //! agent's log (`msgs`, log its name) and effort (`agents`), the nodes by
 //! slot (`nodes`), the views, the chat's goal and what ran (`state`,
-//! written over), and a full-text index of the messages' texts (`search`,
-//! FTS5), kept by triggers on `msgs`, so no write can leave it behind.
+//! written over), a full-text index of the messages' texts (`search`,
+//! FTS5), kept by triggers on `msgs`, so no write can leave it behind, and
+//! what each zoom and search found (`looks`: how many hits, when).
 //! Pages `more` after the last that isn't are not in the chat. Memory
 //! holds only the views' nodes and those built above them; any other row
 //! is read as needed. Images are in docs/images/ by their hash.
@@ -90,6 +91,7 @@ create table if not exists msgs (log text not null, i integer not null, kind tex
 create table if not exists nodes (slot integer primary key, text text not null);
 create table if not exists agents (name text primary key, effort text) without rowid;
 create table if not exists state (id integer primary key check (id = 1), json text not null);
+create table if not exists looks (at integer not null, tool text not null, hits integer not null);
 create virtual table if not exists search using fts5 (log unindexed, i unindexed, text);
 create trigger if not exists search_add after insert on msgs begin
     insert into search (log, i, text) values (new.log, new.i, new.text); end;
@@ -828,6 +830,14 @@ impl Memory {
         self.agents.insert(name.clone(), 0);
         return Ok(name);
       }
+    }
+  }
+
+  /// A zoom or search, logged with what it found (`looks`).
+  pub fn look(&self, tool: &str, hits: usize) {
+    let row = params![crate::now_ms(), tool, hits as i64];
+    if let Err(err) = self.db.execute("insert into looks values (?, ?, ?)", row) {
+      eprintln!("memory: looks: {err}");
     }
   }
 

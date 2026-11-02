@@ -191,12 +191,14 @@ impl Memory {
   /// the first; else the two lines under id+n.
   pub fn zoom(&mut self, id: u64, n: u64, at: usize) -> String {
     let Some(part) = self.part(id, n) else {
+      self.look("zoom", 0);
       let roots: Vec<String> = roots(self.count).into_iter().map(Part::name).collect();
       return format!(
         "No line {id}+{n}: n is a power of 2, id a multiple of n. The tree's roots: {}.",
         roots.join(", ")
       );
     };
+    self.look("zoom", 1);
     match part.halves() {
       None => {
         let mut root = self.message(id).expect("a message of the chat");
@@ -219,7 +221,7 @@ impl Memory {
 
   /// Up to n messages of a log (CHAT, or an agent's) whose text matches
   /// an FTS5 query, newest first, each "id|kind: snippet" around its hit;
-  /// a query FTS5 can't read, why.
+  /// a query FTS5 can't read, why. Logged with its hits (`look`).
   pub fn search(&self, log: &str, query: &str, n: usize) -> String {
     if query.trim().is_empty() {
       return "Give a query: a word or name the message holds.".into();
@@ -239,6 +241,7 @@ impl Memory {
       })?
       .collect::<rusqlite::Result<Vec<String>>>()
     });
+    self.look("search", hits.as_ref().map_or(0, Vec::len));
     match hits {
       Ok(hits) if hits.is_empty() => format!("No message matches {query}."),
       Ok(hits) => hits.join("\n"),

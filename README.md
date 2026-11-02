@@ -97,7 +97,7 @@ Ask for what you want in plain words: "stop", "fire Scout", "have three agents c
 | `create_assistant` | with you | Make an assistant: name, about, effort, instructions |
 | `list_assistants`, `ask_assistant` | with you | List the other assistants (or those a query matches) and ask one, in your two's thread; its reply comes back as a message |
 | `remember`, `forget`, `purge`, `unpurge` | with you | Keep and drop facts; erase a message, or take that back within ten minutes |
-| `goal`, `usage`, `import`, `export`, `tree` | with you | Set or drop the goal; read costs; import past chats; save the memory as JSON; open the tree as a page |
+| `goal`, `usage`, `import`, `export`, `tree` | with you | Set or drop the goal; read costs, and each day's zooms and searches that found something or not; import past chats; save the memory as JSON; open the tree as a page |
 
 An assistant answering another in a thread has its work tools only: it can't consult further, keep facts or change the user's settings.
 
@@ -149,7 +149,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `~/.acorn/facts.db` | Facts, shared by all assistants |
 | `~/.acorn/plugins/` | Luau files that add to or replace `luau`'s globals |
 | `~/.acorn/work/` | The agents' work dirs: `main` for Acorn, `assistants/<id>` for others |
-| `~/.acorn/chats/<id>/chat.db` | A chat: messages and their full-text index, agent logs, the summary tree, the view, usage, and purged messages for their ten minutes (SQLite, WAL) |
+| `~/.acorn/chats/<id>/chat.db` | A chat: messages and their full-text index, agent logs, the summary tree, the view, usage, what each zoom and search found, and purged messages for their ten minutes (SQLite, WAL) |
 | `~/.acorn/chats/<id>/docs/images/` | The chat's images, by hash |
 | `~/.acorn/chats/<id>/chat.db.wipe` | Present while a purge's wipe is owed |
 | `~/.acorn/chats/<id>/with/<asker>/` | The thread where assistant `<asker>` asks `<id>`, kept as a chat is |

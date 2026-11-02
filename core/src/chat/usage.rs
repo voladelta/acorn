@@ -3,7 +3,8 @@
 //! Each request a call of the chat makes is counted as it ends (`ai::Meter`):
 //! kept in chat.db, summed into the running turn's if it serves the turn
 //! (its call, its goal check), and today's total told. A turn ending puts
-//! its sum on its last message. Past the config's `budget`, today's spend
+//! its sum on its last message. What zooms and searches found (`looks`,
+//! the memory's) is told beside, a day a line. Past the config's `budget`, today's spend
 //! of every open chat together, no request goes (`ai::agent`).
 
 use super::{Chat, hub};
@@ -55,17 +56,32 @@ pub(super) struct Usage {
 }
 
 /// Every chat's use, the last `days` days (here), as a model reads it: a
-/// line a day and kind, newest first, then their total.
+/// line a day and kind, newest first, then their total; then a line a day
+/// of what zooms and searches found.
 pub(super) fn told(days: i64) -> String {
   let mut all: std::collections::BTreeMap<(String, String), Spend> = Default::default();
+  let mut looks: std::collections::BTreeMap<String, [i64; 4]> = Default::default();
   for engine in hub::all() {
-    for u in engine.lock().usage(days) {
+    let chat = engine.lock();
+    for u in chat.usage(days) {
       let at = all.entry((u.day, u.kind)).or_default();
       *at = *at + u.spend;
     }
+    for (day, n) in chat.looks(days) {
+      let at = looks.entry(day).or_default();
+      for k in 0..4 {
+        at[k] += n[k];
+      }
+    }
   }
+  let looked = looks.iter().rev().map(|(day, [found, lost, hit, missed])| {
+    format!("{day} memory: {found} zooms found, {lost} not; {hit} searches with hits, {missed} without")
+  });
   if all.is_empty() {
-    return "No usage in these days.".into();
+    return std::iter::once("No usage in these days.".to_string())
+      .chain(looked)
+      .collect::<Vec<_>>()
+      .join("\n");
   }
   let kind = |k: &str| -> String {
     match k {
@@ -94,6 +110,7 @@ pub(super) fn told(days: i64) -> String {
     .map(|((day, k), s)| line(format!("{day} {}", kind(k)), s))
     .collect();
   lines.push(line(format!("All {days} days"), &total));
+  lines.extend(looked);
   lines.join("\n")
 }
 
@@ -209,6 +226,25 @@ impl Chat {
     let midnight = Local::now().date_naive().and_hms_opt(0, 0, 0)?;
     let from = Local.from_local_datetime(&midnight).earliest()?.timestamp_millis();
     self.spend_since(from)
+  }
+
+  /// The last `days` days' zooms and searches, by day (here): zooms that
+  /// found a line or message and that didn't, searches with hits and
+  /// without.
+  pub(super) fn looks(&self, days: i64) -> Vec<(String, [i64; 4])> {
+    let sql = "select date(at / 1000, 'unixepoch', 'localtime') day, sum(tool = 'zoom' and hits > 0), sum(tool = 'zoom' and hits = 0),
+            sum(tool = 'search' and hits > 0), sum(tool = 'search' and hits = 0) from looks where at >= ? group by day";
+    let from = crate::now_ms() - days * 86_400_000;
+    let rows = self.mem.db.prepare(sql).and_then(|mut q| {
+      q.query_map([from], |r| {
+        Ok((r.get(0)?, [r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?]))
+      })?
+      .collect()
+    });
+    rows.unwrap_or_else(|err| {
+      eprintln!("acorn: looks: {err}");
+      Vec::new()
+    })
   }
 
   /// The last `days` days' use, by day (here) and kind, newest first.
