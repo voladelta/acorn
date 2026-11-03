@@ -107,19 +107,22 @@ mod imp {
     Vec::new()
   }
 
-  /// What `/api/hello` answers: the assistants, and the last event's
-  /// number (polling goes on from it).
+  /// What `/api/hello` answers: the assistants, the server's run, and the
+  /// last event's number (polling goes on from it).
   #[derive(Deserialize)]
   struct Hello {
     assistants: Vec<Assistant>,
+    epoch: u64,
     seq: u64,
   }
 
-  /// What `/api/events` answers: the events after the one asked from, the
-  /// last's number, and whether some were lost (the poll came too late:
-  /// the chat shown is told anew).
+  /// What `/api/events` answers: the server's run, the events after the
+  /// one asked from, the last's number, and whether some were lost (the
+  /// poll came too late, or the server started again: the chat shown is
+  /// told anew).
   #[derive(Deserialize)]
   struct Batch {
+    epoch: u64,
     seq: u64,
     lost: bool,
     events: Vec<(String, Event)>,
@@ -131,13 +134,13 @@ mod imp {
   pub fn listen(_first: String) -> Option<Heard> {
     let (tx, heard) = tokio::sync::mpsc::unbounded_channel();
     spawn(async move {
-      let mut seq = loop {
+      let (mut epoch, mut seq) = loop {
         match get::<Hello>("/api/hello".into()).await {
           Ok(hello) => {
             for a in hello.assistants {
               let _ = tx.send((a.id.clone(), Event::Assistant(a)));
             }
-            break hello.seq;
+            break (hello.epoch, hello.seq);
           }
           Err(err) => {
             let _ = tx.send((String::new(), Event::Note(format!("Can't reach the server: {err}"))));
@@ -146,9 +149,9 @@ mod imp {
         }
       };
       loop {
-        match get::<Batch>(format!("/api/events?after={seq}")).await {
+        match get::<Batch>(format!("/api/events?epoch={epoch}&after={seq}")).await {
           Ok(batch) => {
-            seq = batch.seq;
+            (epoch, seq) = (batch.epoch, batch.seq);
             if batch.lost {
               let _ = tx.send((String::new(), Event::Note(LOST.into())));
             }

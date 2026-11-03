@@ -27,19 +27,29 @@ fn thread_head(asks: &str) -> String {
   format!("## With {asks} (there, user is {asks}, who asked, and unii is you)")
 }
 
-/// An agent: its effort (none: the run's), its call at work, what
-/// streams, its tool calls awaiting their results, whether its call was
-/// stopped (its report stays unanswered), the view its calls get, its
+/// An agent: its effort (none: the run's), what it does, what streams,
+/// its tool calls awaiting their results, the view its calls get, its
 /// replies so far.
 pub struct Agent {
   pub name: String,
   effort: Option<Effort>,
-  call: Option<Handle>,
+  doing: Doing,
   pub(super) live: Vec<Live>,
   pub(super) calls: Vec<(String, String)>,
-  stop: bool,
   view: Vec<Block>,
   replies: Vec<String>,
+}
+
+/// What an agent does. Told while idle, it starts (its message in its
+/// log, its call waiting for the chat's view), then calls, each call
+/// after the one before under one lock, till it reports and is idle
+/// again. Starting and calling, it is at work: listed, kept for a
+/// restart, and fired by `fire` or a quit.
+enum Doing {
+  Idle,
+  Starting,
+  /// fired: stopped by `fire` or a quit (its report stays unanswered).
+  Calling { call: Handle, fired: bool },
 }
 
 impl Agent {
@@ -47,10 +57,9 @@ impl Agent {
     Agent {
       name: name.into(),
       effort,
-      call: None,
+      doing: Doing::Idle,
       live: vec![],
       calls: vec![],
-      stop: false,
       view,
       replies: vec![],
     }
@@ -178,6 +187,7 @@ impl Engine {
           .filter(|w| name.as_ref().is_none_or(|n| n == w))
           .collect::<Vec<_>>();
         chat.stop_agents(name.as_deref());
+        chat.change();
         match (at.is_empty(), name) {
           (true, Some(name)) => Out::fail(format!("No agent {name} at work.")),
           (true, None) => Out::ok("No agent was at work."),
@@ -312,16 +322,26 @@ impl Engine {
     )
   }
 
-  /// A message to an agent: one at work stops what it does and reads it;
-  /// an idle one goes on from its chat.
+  /// A message to an agent, logged: one calling stops what it does and
+  /// reads it; one starting reads it as it starts; an idle one starts,
+  /// going on from its chat.
   pub(super) async fn tell_agent(self: &Arc<Self>, name: &str, message: &str) -> String {
-    {
+    let halt = {
       let mut chat = self.lock();
       let Some(agent) = chat.agent(name) else {
         return format!("No agent {name} to tell.");
       };
-      if let Some(call) = agent.call.clone() {
-        chat.push(Some(name), Kind::User, message);
+      let call = match &agent.doing {
+        Doing::Calling { call, .. } => Some(call.clone()),
+        Doing::Idle | Doing::Starting => None,
+      };
+      let idle = matches!(agent.doing, Doing::Idle);
+      if idle {
+        agent.doing = Doing::Starting;
+        agent.replies.clear();
+      }
+      chat.push(Some(name), Kind::User, message);
+      if let Some(call) = call {
         call.send(crate::Say {
           text: message.into(),
           imgs: vec![],
@@ -329,21 +349,31 @@ impl Engine {
         });
         return format!("Sent. {name} stops what it was doing to read it, and its report answers it.");
       }
-    }
-    let halt = self.lock().halt.clone();
+      if !idle {
+        return format!("Sent. {name} reads it as it starts; its reply will reach you as a message.");
+      }
+      chat.change();
+      chat.halt.clone()
+    };
     let view = match self.view(&halt).await {
       Ok(view) => view,
       Err(why) => return why,
     };
     let mut chat = self.lock();
-    chat.push(Some(name), Kind::User, message);
-    if let Some(agent) = chat.agents.get_mut(name) {
-      agent.view = view;
-      agent.replies.clear();
-      agent.stop = false;
+    let Some(agent) = chat.agents.get_mut(name) else {
+      return format!("No agent {name} to tell.");
+    };
+    match agent.doing {
+      Doing::Idle => return format!("{name} was fired before it began; your message stays in its log."),
+      // another tell started it meanwhile, its call reading this message
+      Doing::Calling { .. } => {}
+      Doing::Starting => {
+        agent.view = view;
+        if let Some(call) = chat.call_agent(name) {
+          tokio::spawn(self.clone().run(name.to_string(), call));
+        }
+      }
     }
-    drop(chat);
-    tokio::spawn(self.clone().run(name.to_string()));
     format!("Sent. {name}'s reply will reach you as a message.")
   }
 
@@ -410,46 +440,43 @@ impl Engine {
   }
 
   /// The chat's view, once its summaries are built; else why there is
-  /// none.
+  /// none (work stopped).
   async fn view(&self, halt: &CancellationToken) -> Result<Vec<Block>, String> {
     let count = self.lock().mem.count;
-    if let Some(why) = self.settle(count, halt).await {
-      return Err(why);
+    if !self.settle(count, halt).await {
+      return Err("Stopped.".into());
     }
     let chat = self.lock();
     Ok(chat.mem.view_blocks(chat.mem.count))
   }
 
-  /// An agent's calls while a message waits in its log (told too late for
-  /// the call before); then its report.
-  async fn run(self: Arc<Self>, name: String) {
+  /// An agent's calls, `call` first, while a message waits in its log
+  /// (told too late for the call before); then its report.
+  async fn run(self: Arc<Self>, name: String, mut call: ai::Call) {
     loop {
-      let call = {
-        let mut chat = self.lock();
-        let Some(ask) = chat.agent_ask(&name) else { return };
-        let call = ai::ask(ask, chat.on_events(Some(name.clone())));
-        if let Some(agent) = chat.agents.get_mut(&name) {
-          agent.call = Some(call.handle.clone());
-        }
-        chat.change();
-        call
-      };
       let end = call.end().await;
       let mut chat = self.lock();
       let Some(agent) = chat.agents.get_mut(&name) else {
         return;
       };
-      agent.call = None;
+      let fired = matches!(agent.doing, Doing::Calling { fired: true, .. });
       agent.replies.push(if end.ok {
         end.text
       } else {
         format!("failed: {}", end.text)
       });
-      if !end.ok || end.left.is_empty() {
-        let (text, stopped) = (report_text(&name, &agent.replies.join("\n\n")), agent.stop);
-        chat.report(&name, text, stopped);
+      if fired || !end.ok || end.left.is_empty() {
+        agent.doing = Doing::Idle;
+        let text = report_text(&name, &agent.replies.join("\n\n"));
+        chat.report(&name, text, fired);
         chat.change();
         return;
+      }
+      // the next call starts under the lock this one ended in, so the
+      // agent is never seen idle between them
+      match chat.call_agent(&name) {
+        Some(next) => call = next,
+        None => return,
       }
     }
   }
@@ -477,8 +504,22 @@ impl Chat {
     self.agents.insert(name.clone(), Agent::new(&name, effort, view));
     self.push(Some(&name), Kind::Note, SUB_NOTE);
     self.push(Some(&name), Kind::User, task);
-    tokio::spawn(self.engine().run(name.clone()));
+    if let Some(call) = self.call_agent(&name) {
+      tokio::spawn(self.engine().run(name.clone(), call));
+    }
     name
+  }
+
+  /// An agent's next call, started: it is at work, calling.
+  fn call_agent(&mut self, name: &str) -> Option<ai::Call> {
+    let ask = self.agent_ask(name)?;
+    let call = ai::ask(ask, self.on_events(Some(name.to_string())));
+    self.agents.get_mut(name)?.doing = Doing::Calling {
+      call: call.handle.clone(),
+      fired: false,
+    };
+    self.change();
+    Some(call)
   }
 
   /// An agent; one not met since Acorn started is taken back from its
@@ -517,7 +558,7 @@ impl Chat {
     self
       .agents
       .values()
-      .filter(|a| a.call.is_some())
+      .filter(|a| !matches!(a.doing, Doing::Idle))
       .map(|a| a.name.clone())
       .collect()
   }
@@ -535,16 +576,18 @@ impl Chat {
     Block::new(format!("Agents at work now: {list}\n\n"), false)
   }
 
-  /// Every agent at work (None), or the one named.
+  /// Every agent at work (None), or the one named: one starting goes
+  /// back to idle, one calling is stopped (its report, as it ends, left
+  /// unanswered).
   pub(super) fn stop_agents(&mut self, name: Option<&str>) {
-    for agent in self
-      .agents
-      .values_mut()
-      .filter(|a| a.call.is_some() && name.is_none_or(|n| n == a.name))
-    {
-      agent.stop = true;
-      if let Some(call) = &agent.call {
-        call.stop();
+    for agent in self.agents.values_mut().filter(|a| name.is_none_or(|n| n == a.name)) {
+      match &mut agent.doing {
+        Doing::Idle => {}
+        Doing::Starting => agent.doing = Doing::Idle,
+        Doing::Calling { call, fired } => {
+          *fired = true;
+          call.stop();
+        }
       }
     }
   }

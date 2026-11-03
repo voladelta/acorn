@@ -333,9 +333,9 @@ async fn request(
   if cancel.is_cancelled() {
     return None;
   }
-  let round = pace::fly(MODEL, ask.yields.is_some(), cancel).await?;
+  let seat = pace::fly(MODEL, ask.yields.is_some(), cancel).await?;
   let (status, sent) = send(ask, on, key, body, &mut flight, seen).await;
-  pace::landed(MODEL, round, status == 429 || status == 529);
+  seat.land(status == 429 || status == 529);
   Some(sent)
 }
 

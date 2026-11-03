@@ -28,7 +28,7 @@ impl Memory {
     let mut changed = false;
     let sides: Vec<u64> = [0, 1]
       .into_iter()
-      .filter(|&s| self.hold[s].is_none())
+      .filter(|&s| s == 0 || !self.paused)
       .map(|s| self.first(0, s))
       .collect();
     let count = self.count;

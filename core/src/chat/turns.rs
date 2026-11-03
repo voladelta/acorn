@@ -12,7 +12,7 @@
 //! (every call's, or why there was none) sent to its asker; one that
 //! asked for an import begins it.
 
-use super::{Chat, Engine, Span};
+use super::{Chat, Engine, Phase, Span};
 use crate::ai::{self, Event as AiEvent};
 use crate::memory::{self, IMAGES_ARE, Msg, Part};
 use crate::wire::{Event, Live, live_push};
@@ -61,27 +61,16 @@ impl Engine {
   /// Calls while messages wait; then a thread's reply goes to its asker,
   /// and an import asked for begins.
   async fn turn(self: Arc<Self>) {
-    let mut go = true;
-    while go && !self.lock().wait.is_empty() {
-      go = self.clone().call().await;
-    }
-    let (reply, then) = {
-      let mut chat = self.lock();
-      if chat.halt.is_cancelled()
-        && let Some(why) = chat.halted.take()
+    let (reply, then) = loop {
       {
-        chat.note(why);
+        // whether it ends, and its end, under one lock: a message taken
+        // meanwhile either waits here or begins a turn of its own
+        let mut chat = self.lock();
+        if chat.halt.is_cancelled() || chat.wait.is_empty() {
+          break chat.end_turn();
+        }
       }
-      chat.call = None;
-      chat.sent.clear();
-      chat.wait.clear();
-      chat.busy = false;
-      chat.set_live(None, Vec::new());
-      chat.spent();
-      chat.after();
-      chat.change();
-      let reply = chat.reply.take().filter(|_| !chat.mem.done).zip(chat.with.clone());
-      (reply, chat.then.take())
+      self.clone().call().await;
     };
     if let Some((text, asks)) = reply {
       let name = self.lock().me.name.clone();
@@ -96,12 +85,10 @@ impl Engine {
   }
 
   /// A call of the turn, once the summaries before its messages are
-  /// built; false: the turn ends.
-  async fn call(self: Arc<Self>) -> bool {
+  /// built.
+  async fn call(self: Arc<Self>) {
     let halt = {
       let mut chat = self.lock();
-      chat.halt = CancellationToken::new();
-      chat.halted = None;
       chat.cut_in = false;
       chat.change();
       chat.halt.clone()
@@ -113,13 +100,8 @@ impl Engine {
         break;
       }
       from = Some(now);
-      if let Some(why) = self.settle(now, &halt).await {
-        if !halt.is_cancelled() {
-          let mut chat = self.lock();
-          chat.failed(&why);
-          chat.answer(&format!("(no answer: {why})"));
-        }
-        return false;
+      if !self.settle(now, &halt).await {
+        return;
       }
     }
     let from = from.unwrap();
@@ -148,22 +130,25 @@ impl Engine {
         meter: Some(chat.meter(Served::Chat)),
         ..chat.share()
       };
-      chat.asked = true;
-      chat.open = 0;
       let call = ai::ask(ask, chat.on_events(None));
-      chat.call = Some(call.handle.clone());
+      chat.phase = Phase::Calling {
+        call: call.handle.clone(),
+        asked: true,
+        open: 0,
+      };
       chat.change();
       call
     };
-    self.ended(call, halt).await
+    self.ended(call, halt).await;
   }
 
-  /// The turn's call ends; false: the turn ends.
-  async fn ended(self: Arc<Self>, call: ai::Call, halt: CancellationToken) -> bool {
+  /// The turn's call ends: its goal, if it has one and the call went
+  /// whole, is checked.
+  async fn ended(self: Arc<Self>, call: ai::Call, halt: CancellationToken) {
     let end = call.end().await;
     let check = {
       let mut chat = self.lock();
-      chat.call = None;
+      chat.phase = Phase::Settling;
       chat.unanswered(None);
       chat.set_live(None, Vec::new());
       let left = chat.sent.len().saturating_sub(end.left.len());
@@ -182,40 +167,33 @@ impl Engine {
       if !end.note.is_empty() {
         chat.all(Event::Note(end.note.clone()));
       }
-      match chat.mem.goal.clone() {
+      let check = match chat.mem.goal.clone() {
         Some(goal) if end.ok && !halt.is_cancelled() && chat.wait.is_empty() && !chat.cut_in => {
-          Some((chat.check_goal(&goal), goal))
+          let check = chat.check_goal(&goal);
+          chat.phase = Phase::Checking(check.handle.clone());
+          Some((check, goal))
         }
         _ => None,
-      }
+      };
+      chat.change();
+      check
     };
-    match check {
-      Some((call, goal)) => self.checked(call, goal, halt).await,
-      None => !halt.is_cancelled(),
+    if let Some((check, goal)) = check {
+      self.checked(check, goal, halt).await;
     }
   }
 
   /// A goal check's answer, as the turn's call's is: unmet (any answer
   /// but yes), the user's nudge goes to the turn as their message; met,
-  /// the goal ends. A check that fails, a stop, a message or the goal
-  /// dropped meanwhile end it with no nudge, so the turn ends; false: it
-  /// ends.
-  async fn checked(self: Arc<Self>, call: ai::Call, goal: String, halt: CancellationToken) -> bool {
-    let handle = call.handle.clone();
-    self.lock().check = Some(handle.clone());
-    let mut done = call.done;
-    let end = tokio::select! {
-        end = &mut done => end,
-        _ = halt.cancelled() => {
-            handle.stop();
-            done.await
-        }
-    }
-    .unwrap_or_else(|err| ai::End::failed(err.to_string()));
+  /// the goal ends. A check that fails, a stop, a message (which stops
+  /// the check: its answer would be moot) or the goal dropped meanwhile
+  /// end it with no nudge.
+  async fn checked(self: Arc<Self>, call: ai::Call, goal: String, halt: CancellationToken) {
+    let end = call.end().await;
     let nudge = {
       let mut chat = self.lock();
+      chat.phase = Phase::Settling;
       let on = !halt.is_cancelled() && chat.mem.goal.as_deref() == Some(goal.as_str()) && chat.wait.is_empty();
-      chat.check = None;
       if on && !end.ok {
         chat.note(format!(
           "No goal check: {}. The goal stays till it is dropped.",
@@ -226,6 +204,7 @@ impl Engine {
         chat.save();
         chat.note("Goal met.");
       }
+      chat.change();
       on && end.ok && !says_yes(&end.text)
     };
     if nudge {
@@ -238,7 +217,6 @@ impl Engine {
         })
         .await;
     }
-    !halt.is_cancelled()
   }
 }
 
@@ -253,9 +231,10 @@ impl Chat {
   /// A message logged: to the running call if whole beside its view (the
   /// user's cutting in), else to the next.
   pub(super) fn take(&mut self, msg: Span) {
-    if let Some(call) = self.call.clone()
+    if let Phase::Calling { call, .. } = &self.phase
       && self.mem.whole(msg.id) == msg.id
     {
+      let call = call.clone();
       self.sent.push(msg);
       let cut = self.mem.message(msg.id).is_some_and(|m| m.kind == Kind::User);
       self.cut_in |= cut;
@@ -266,11 +245,33 @@ impl Chat {
       return;
     }
     self.wait.push(msg);
-    if !self.busy {
-      self.busy = true;
-      let engine = self.engine();
-      tokio::spawn(engine.turn());
+    match &self.phase {
+      Phase::Idle => {
+        self.phase = Phase::Settling;
+        tokio::spawn(self.engine().turn());
+      }
+      Phase::Checking(check) => check.stop(),
+      Phase::Settling | Phase::Calling { .. } => {}
     }
+  }
+
+  /// A turn runs.
+  pub(super) fn busy(&self) -> bool {
+    !matches!(self.phase, Phase::Idle)
+  }
+
+  /// The turn ended: its state cleared and told; what it leaves, a
+  /// thread's reply to its asker and an import asked for.
+  fn end_turn(&mut self) -> (Option<(String, crate::assistant::Assistant)>, Option<crate::import::Want>) {
+    self.phase = Phase::Idle;
+    self.sent.clear();
+    self.wait.clear();
+    self.set_live(None, Vec::new());
+    self.spent();
+    self.after();
+    self.change();
+    let reply = self.reply.take().filter(|_| !self.mem.done).zip(self.with.clone());
+    (reply, self.then.take())
   }
 
   /// Where a call's messages go whole from (a message meanwhile may move
@@ -503,19 +504,21 @@ impl Chat {
   /// The model is asked again once handed all it waits for, until its
   /// answer starts.
   fn asks(&mut self, ev: &AiEvent) {
+    let Phase::Calling { asked, open, .. } = &mut self.phase else {
+      return;
+    };
     let kind = match ev {
       AiEvent::Entry { kind, .. } => Some(*kind),
       AiEvent::Delta { .. } => None,
     };
-    self.open = match (ev, kind) {
+    *open = match (ev, kind) {
       (AiEvent::Delta { .. }, _) => 0,
-      (_, Some(Kind::Tool)) => self.open + 1,
-      (_, Some(Kind::Echo)) => self.open.saturating_sub(1),
-      _ => self.open,
+      (_, Some(Kind::Tool)) => *open + 1,
+      (_, Some(Kind::Echo)) => open.saturating_sub(1),
+      _ => *open,
     };
-    let asked = matches!(kind, Some(Kind::Echo | Kind::User)) && self.open == 0;
-    if asked != self.asked {
-      self.asked = asked;
+    let now = matches!(kind, Some(Kind::Echo | Kind::User)) && *open == 0;
+    if std::mem::replace(asked, now) != now {
       self.change();
     }
   }
@@ -567,27 +570,15 @@ impl Chat {
     });
   }
 
-  /// The turn only, with the delegations and tells it waits on; agents go on.
-  /// why: the note the turn's end logs, after the reply the stop cut.
-  pub(super) fn interrupt(&mut self, why: Option<String>) {
-    if !self.halt.is_cancelled() {
-      self.halted = why;
-    }
+  /// All work stopped for good (a quit, or the assistant archived): the
+  /// turn, with the waits on summaries its delegations and tells make,
+  /// its goal's check, its agents.
+  pub(super) fn stop(&mut self) {
     self.halt.cancel();
-    if let Some(call) = &self.call {
+    if let Phase::Calling { call, .. } | Phase::Checking(call) = &self.phase {
       call.stop();
     }
-  }
-
-  /// All work, agents too; its why noted at the turn's end, or at once if
-  /// no turn is left to end.
-  pub(super) fn stop(&mut self, why: Option<String>) {
-    let turn = self.busy && !self.halt.is_cancelled();
-    self.interrupt(if turn { why.clone() } else { None });
     self.stop_agents(None);
-    if !turn && let Some(why) = why {
-      self.note(why);
-    }
   }
 
   /// The goal set, or dropped (None), and told.
@@ -619,7 +610,7 @@ impl Chat {
   /// What runs: the turn, the agents at work.
   pub(super) fn running(&self) -> memory::Work {
     memory::Work {
-      turn: self.busy,
+      turn: self.busy(),
       agents: self.working(),
     }
   }

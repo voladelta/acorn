@@ -75,6 +75,8 @@ pub enum Wait {
   Summaries,
   /// The model's first piece (a request out, no tool running).
   Model,
+  /// The check of the goal the turn works to.
+  Goal,
 }
 
 /// The chat's state: a turn runs; what it waits on; the agents at work;

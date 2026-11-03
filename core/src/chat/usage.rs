@@ -145,7 +145,7 @@ impl Chat {
     if let Err(err) = self.mem.db.execute("insert into uses values (?, ?, ?, ?, ?, ?)", row) {
       eprintln!("acorn: usage: {err}");
     }
-    if kind == Served::Chat && self.busy {
+    if kind == Served::Chat && self.busy() {
       let spend = Spend {
         n: 1,
         input,

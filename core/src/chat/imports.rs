@@ -19,6 +19,9 @@ use std::sync::Arc;
 /// An import running: its batch's file in the chat's dir.
 const BATCH: &str = "import.json";
 
+/// Why an import's summaries wait, as told and kept: the person paused it.
+const PAUSED: &str = "paused";
+
 /// How many messages are logged at once as an import goes in.
 const CHUNK: usize = 1024;
 
@@ -140,7 +143,7 @@ impl Engine {
   pub(super) async fn import(self: Arc<Self>, want: Want) {
     let (picked, a) = {
       let mut chat = self.lock();
-      if chat.busy {
+      if chat.busy() {
         // a turn began meanwhile: its end begins the import
         chat.then = Some(want);
         return;
@@ -160,7 +163,7 @@ impl Engine {
     let me = self.clone();
     self
       .writing(async move || {
-        me.lock().mem.hold[1] = None;
+        me.lock().mem.paused = false;
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<import::Msg>>(4);
         tokio::task::spawn_blocking(move || {
           let mut chunk = Vec::with_capacity(CHUNK);
@@ -306,7 +309,7 @@ impl Chat {
       b: b.b,
       said: b.said,
       spent: b.spent,
-      why: self.mem.hold[1].clone(),
+      why: self.paused(),
     };
     let file = self.mem.dir.join(BATCH);
     let new = self.mem.dir.join(format!("{BATCH}.new"));
@@ -322,8 +325,13 @@ impl Chat {
   /// The import a quit left (BATCH); None: none.
   pub(super) fn resumed(&mut self) -> Option<Batch> {
     let kept: Kept = serde_json::from_slice(&std::fs::read(self.mem.dir.join(BATCH)).ok()?).ok()?;
-    self.mem.hold[1] = (kept.why.as_deref() == Some("paused")).then(|| "paused".into());
+    self.mem.paused = kept.why.as_deref() == Some(PAUSED);
     Some(self.batch_of(kept.a, kept.b, kept.said, kept.spent))
+  }
+
+  /// Why the import's summaries wait, as told and kept (None: they build).
+  fn paused(&self) -> Option<String> {
+    self.mem.paused.then(|| PAUSED.into())
   }
 
   /// An import's progress, as told.
@@ -334,7 +342,7 @@ impl Chat {
       total: b.all,
       spent: b.spent,
       left: b.left / 1e6,
-      why: self.mem.hold[1].clone(),
+      why: self.paused(),
       msgs: b.b - b.a,
       open: b.open.clone(),
     })
@@ -370,10 +378,8 @@ impl Chat {
     if self.batch.is_none() {
       return "No import is running.".into();
     }
-    if on {
-      self.mem.hold[1] = None;
-    } else {
-      self.mem.hold[1] = Some("paused".into());
+    self.mem.paused = !on;
+    if !on {
       for (call, _, kind) in &self.compactions {
         if *kind == crate::Served::Import {
           call.stop();

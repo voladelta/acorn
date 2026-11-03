@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 const WAIT: &str = "summarizing…";
 const SUMS: &str = "summarizing earlier messages…";
+const GOAL: &str = "checking the goal…";
 const FOLD: &str = "Overview: the whole chat in the fewest blocks. Esc goes back.";
 
 /// An import's minutes a micro-USD of its time (the compactor, measured on
@@ -226,6 +227,10 @@ impl Model {
         self.open.insert(seg, false);
       }
       Act::Fold(on) => {
+        // the overview is the chat's: shown, it shows on the chat's tab
+        if on {
+          self.page = None;
+        }
         self.open.clear();
         self.fold = on.then(Vec::new);
         if on {
@@ -328,7 +333,8 @@ impl Model {
     }
     let cap = match wait {
       Wait::Summaries => SUMS.to_string(),
-      _ => format!("waiting for {}…", acorn_core::wire::MODEL),
+      Wait::Goal => GOAL.to_string(),
+      Wait::Model | Wait::None => format!("waiting for {}…", acorn_core::wire::MODEL),
     };
     std::iter::once(Row::Cap(cap)).chain(load).collect()
   }

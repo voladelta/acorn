@@ -65,8 +65,12 @@ impl Log {
   }
 }
 
+/// The server: its events, told as they come; which run of it this is
+/// (`epoch`: its numbers start anew each run, so a window polling with
+/// another run's knows it missed all since); its token.
 #[derive(Clone)]
 struct Server {
+  epoch: u64,
   log: Arc<Mutex<Log>>,
   tick: watch::Receiver<u64>,
   said: Arc<watch::Sender<u64>>,
@@ -107,6 +111,9 @@ async fn serve() {
 
   let (said, tick) = watch::channel(0);
   let server = Server {
+    epoch: std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map_or(0, |d| d.as_nanos() as u64),
     log: Arc::new(Mutex::new(Log {
       first: 1,
       ..Log::default()
@@ -227,21 +234,28 @@ fn same(a: &str, b: &str) -> bool {
 
 async fn hello(State(s): State<Server>) -> Response {
   let seq = s.log.lock().unwrap().last();
-  Json(serde_json::json!({ "assistants": acorn_core::assistant::all(), "seq": seq })).into_response()
+  Json(serde_json::json!({ "assistants": acorn_core::assistant::all(), "epoch": s.epoch, "seq": seq })).into_response()
 }
 
+/// The events after `after`, once there are some (or WAIT passes); a
+/// poll of another run's (its `epoch`) is told at once that it lost them
+/// all, and polls on from now.
 async fn events(State(s): State<Server>, Query(q): Query<HashMap<String, String>>) -> Response {
   let after: u64 = q.get("after").and_then(|a| a.parse().ok()).unwrap_or(0);
-  let mut tick = s.tick.clone();
-  let _ = tokio::time::timeout(WAIT, tick.wait_for(|&last| last > after)).await;
+  let ours = q.get("epoch").and_then(|e| e.parse().ok()) == Some(s.epoch);
+  if ours {
+    let mut tick = s.tick.clone();
+    let _ = tokio::time::timeout(WAIT, tick.wait_for(|&last| last > after)).await;
+  }
   let log = s.log.lock().unwrap();
   let last = log.last();
-  let lost = after + 1 < log.first;
-  let from = (after + 1).max(log.first);
+  let lost = !ours || after + 1 < log.first;
+  let from = if ours { (after + 1).max(log.first) } else { last + 1 };
   let skip = (from - log.first) as usize;
   let events: Vec<&str> = log.events.iter().skip(skip).map(String::as_str).collect();
   let body = format!(
-    "{{\"seq\":{},\"lost\":{lost},\"events\":[{}]}}",
+    "{{\"epoch\":{},\"seq\":{},\"lost\":{lost},\"events\":[{}]}}",
+    s.epoch,
     last,
     events.join(",")
   );

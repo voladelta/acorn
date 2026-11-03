@@ -7,7 +7,7 @@
 //! told once, before a part that shows it; a summary not built yet, once
 //! built.
 
-use super::{Chat, Engine, Eye};
+use super::{Chat, Engine, Eye, Phase};
 use crate::memory::{self, Part, local_time};
 use crate::wire::{Entry, Event, Node, Seg, State, Wait};
 use base64::Engine as _;
@@ -17,15 +17,14 @@ use std::sync::Arc;
 
 impl Chat {
   pub(super) fn state(&mut self) -> State {
-    let wait = if self.call.is_some() {
-      if self.asked { Wait::Model } else { Wait::None }
-    } else if self.busy && !self.wait.is_empty() && self.mem.first(0, 0) < self.from() {
-      Wait::Summaries
-    } else {
-      Wait::None
+    let wait = match &self.phase {
+      Phase::Calling { asked: true, .. } => Wait::Model,
+      Phase::Checking(_) => Wait::Goal,
+      Phase::Settling if !self.wait.is_empty() && self.mem.first(0, 0) < self.from() => Wait::Summaries,
+      Phase::Idle | Phase::Settling | Phase::Calling { .. } => Wait::None,
     };
     State {
-      busy: self.busy,
+      busy: self.busy(),
       wait,
       agents: self.working(),
       goal: self.mem.goal.clone(),

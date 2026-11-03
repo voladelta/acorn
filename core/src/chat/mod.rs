@@ -27,7 +27,7 @@ use crate::ai::{self, Handle, Used};
 use crate::assistant::Assistant;
 use crate::compactor;
 use crate::import;
-use crate::memory::{self, Memory, Msg, Part, Work};
+use crate::memory::{self, Memory, Msg, Part, Wipe, Work};
 use crate::wire::{Command, Event, Live, Seg};
 use crate::{Kind, Served, Spend};
 use anyhow::Result;
@@ -91,17 +91,31 @@ pub struct Engine {
   after: tokio::sync::Mutex<()>,
 }
 
-/// The chat. busy: a turn runs; call: the turn's call (its model asked:
-/// `asked`; tool calls without results: `open`); check: the turn's goal
-/// check; sent, wait: messages given and waiting; halt: what stops the
-/// turn (and why: `halted`); live: what streams; calls: tool calls
-/// awaiting their results, in order; spend: what the running turn's
-/// requests used; held: steps held while a post logs (None: none);
-/// seen: the parts the app was told of; compactions: the summaries'
-/// calls; found: the sessions a look found to import, and the import
-/// the turn asked for (`then`), begun as it ends; reply: what a thread's
-/// turn answers its asker; cut_in: the user cut in on the turn's call
-/// (its goal waits for them).
+/// Where the chat's turn is. A turn runs from its first message taken
+/// till no message waits: it settles (waits for the summaries before its
+/// messages), calls, and, its goal unmet, checks it, then settles again.
+pub(super) enum Phase {
+  /// No turn runs.
+  Idle,
+  /// Between calls: the summaries before its messages awaited, or its
+  /// next step decided.
+  Settling,
+  /// Its call runs: whether its model is asked (handed all it waits for,
+  /// its answer not begun), its tool calls without results.
+  Calling { call: Handle, asked: bool, open: usize },
+  /// Its goal is checked.
+  Checking(Handle),
+}
+
+/// The chat. phase: where its turn is; halt: what stops the turn (a quit);
+/// sent, wait: messages given and waiting; live: what streams; calls: tool
+/// calls awaiting their results, in order; spend: what the running turn's
+/// requests used; held: steps held while a post logs (None: none); seen:
+/// the parts the app was told of; compactions: the summaries' calls;
+/// found: the sessions a look found to import, and the import the turn
+/// asked for (`then`), begun as it ends; reply: what a thread's turn
+/// answers its asker; cut_in: the user cut in on the turn's call (its
+/// goal waits for them).
 pub struct Chat {
   this: Weak<Engine>,
   pub id: String,
@@ -112,15 +126,10 @@ pub struct Chat {
   spend: Spend,
   pub mem: Memory,
   agents: std::collections::BTreeMap<String, Agent>,
-  busy: bool,
-  call: Option<Handle>,
-  check: Option<Handle>,
-  asked: bool,
-  open: usize,
+  phase: Phase,
   sent: Vec<Span>,
   wait: Vec<Span>,
   halt: CancellationToken,
-  halted: Option<String>,
   live: Vec<Live>,
   calls: Vec<(String, String)>,
   eye: Eye,
@@ -176,15 +185,10 @@ impl Engine {
         spend: Spend::default(),
         mem,
         agents: Default::default(),
-        busy: false,
-        call: None,
-        check: None,
-        asked: false,
-        open: 0,
+        phase: Phase::Idle,
         sent: Vec::new(),
         wait: Vec::new(),
         halt: CancellationToken::new(),
-        halted: None,
         live: Vec::new(),
         calls: Vec::new(),
         eye: Eye::default(),
@@ -268,7 +272,7 @@ impl Engine {
   /// Its work stopped: its turn, its agents, its summaries.
   pub fn close(&self) {
     let mut chat = self.lock();
-    chat.stop(None);
+    chat.stop();
     chat.mem.done = true;
     for (call, _, _) in &chat.compactions {
       call.stop();
@@ -276,24 +280,16 @@ impl Engine {
   }
 
   /// Once the chat's messages before `end` are built (not an import's):
-  /// None; else why they won't be ("Stopped.": halt), so no turn or agent
-  /// waits on summaries no call is building.
-  pub async fn settle(&self, end: u64, halt: &CancellationToken) -> Option<String> {
+  /// true; false if `halt` stops the wait first. The chat's own summaries
+  /// are never held, so nothing else keeps them from being built.
+  pub async fn settle(&self, end: u64, halt: &CancellationToken) -> bool {
     let mut fitted = self.fitted.subscribe();
     loop {
-      {
-        let chat = self.lock();
-        let built = chat.mem.first(0, 0) >= end;
-        let why = if halt.is_cancelled() {
-          Some("Stopped.".to_string())
-        } else if built {
-          None
-        } else {
-          chat.mem.hold[0].clone()
-        };
-        if built || why.is_some() {
-          return why;
-        }
+      if halt.is_cancelled() {
+        return false;
+      }
+      if self.lock().mem.first(0, 0) >= end {
+        return true;
       }
       tokio::select! {
           _ = fitted.changed() => {}
@@ -421,7 +417,7 @@ impl Chat {
   /// owed, till Acorn starts again.
   fn wipe(&mut self) {
     let mem = &self.mem;
-    if mem.wiping || mem.wiped == mem.purged || self.busy || !mem.busy.is_empty() || !self.working().is_empty() {
+    if mem.wipe != Wipe::Idle || mem.wiped == mem.purged || self.busy() || !mem.busy.is_empty() || !self.working().is_empty() {
       return;
     }
     let now = crate::now_ms();
@@ -442,7 +438,7 @@ impl Chat {
       }
       return;
     }
-    self.mem.wiping = true;
+    self.mem.wipe = Wipe::Running;
     let (this, dir, upto) = (self.this.clone(), self.mem.dir.clone(), self.mem.purged);
     std::thread::spawn(move || {
       let done = memory::wipe(&dir, now - memory::GRACE);
@@ -450,12 +446,12 @@ impl Chat {
       let mut chat = engine.lock();
       match done {
         Ok(()) => {
-          chat.mem.wiping = false;
+          chat.mem.wipe = Wipe::Idle;
           chat.mem.wiped(upto);
           chat.all(Event::Note("Purge finished: erased from Acorn's files.".into()));
         }
         Err(err) => {
-          chat.mem.stuck = true;
+          chat.mem.wipe = Wipe::Stuck;
           eprintln!("acorn: wipe: {err}");
           chat.all(Event::Note(format!(
             "A purged message's old bytes are still in chat.db ({err}); Acorn wipes them when it starts again."

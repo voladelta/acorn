@@ -335,12 +335,12 @@ struct Saved {
 /// agents: their logs' lengths; ready: the nodes not built whose halves
 /// are, by side and level, in order; busy: nodes building, by slot, with
 /// their side; sides: the side by the last message of nodes not built;
-/// hold: why each side is held (None: it builds); made: nodes built since
+/// paused: the import's side is held (paused, or no import has gone on
+/// since Acorn started; the chat's side always builds); made: nodes built since
 /// last drained; fitted: the views were fit since last drained; age: the
 /// chat's purges so far (a node a call began before one is not stored);
 /// purged, wiped: the purges so far, those a wipe has erased from the file
-/// (owed: purged > wiped); wiping: a wipe runs, or failed (it runs again
-/// when Acorn starts: `stuck`).
+/// (owed: purged > wiped); wipe: where the wipe of those owed is.
 pub struct Memory {
   pub dir: PathBuf,
   pub db: Connection,
@@ -355,15 +355,23 @@ pub struct Memory {
   ready: [Vec<Vec<u64>>; 2],
   pub busy: HashMap<u64, usize>,
   sides: HashMap<u64, usize>,
-  pub hold: [Option<String>; 2],
+  pub paused: bool,
   pub done: bool,
   pub made: Vec<Part>,
   pub fitted: bool,
   pub age: u64,
   pub purged: u64,
   pub wiped: u64,
-  pub wiping: bool,
-  pub stuck: bool,
+  pub wipe: Wipe,
+}
+
+/// A wipe of chat.db's purged bytes: none running, one running, or one
+/// that failed (none runs again till Acorn starts).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wipe {
+  Idle,
+  Running,
+  Stuck,
 }
 
 // Memory
@@ -410,15 +418,14 @@ impl Memory {
       ready: [Vec::new(), Vec::new()],
       busy: HashMap::new(),
       sides: HashMap::new(),
-      hold: [None, Some("paused".into())],
+      paused: true,
       done: false,
       made: Vec::new(),
       fitted: false,
       age: 0,
       purged: u64::from(dir.join(WIPE).exists()),
       wiped: 0,
-      wiping: false,
-      stuck: false,
+      wipe: Wipe::Idle,
     };
     if let Some(s) = &saved {
       mem.goal.clone_from(&s.goal);
@@ -690,7 +697,7 @@ impl Memory {
   pub fn starts(&mut self) -> (Vec<Built>, Vec<Built>) {
     let (mut free, mut jobs) = (Vec::new(), Vec::new());
     for side in [0, 1] {
-      if self.hold[side].is_some() {
+      if side == 1 && self.paused {
         continue;
       }
       let end = self.first(JOBS - 1, side);

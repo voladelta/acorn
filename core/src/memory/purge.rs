@@ -83,7 +83,7 @@ impl Memory {
     };
     self.purged += 1;
     said += " unpurge takes it back for ten minutes; then";
-    said += if self.stuck {
+    said += if self.wipe == super::Wipe::Stuck {
       " its old bytes are wiped from Acorn's files when Acorn starts again."
     } else {
       " its old bytes are wiped from Acorn's files once the chat is idle."
