@@ -1,6 +1,6 @@
 # Acorn
 
-A native macOS app for one chat with an AI agent that never ends: every message is kept and summarized into a memory tree the agent can zoom back into, so the chat outgrows the model's context window without losing anything.
+One chat with an AI agent that never ends, as a desktop app on macOS and Linux or a page in your browser: every message is kept and summarized into a memory tree the agent can zoom back into, so the chat outgrows the model's context window without losing anything.
 
 ```bash
 DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
@@ -17,13 +17,13 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Memory tree** | Every message kept in `chat.db`; a binary tree of summaries, at most 512 bytes each, built in the background by the compactor |
 | **Bounded view** | The view the model reads stays under 2 MB (about 500k tokens, within DeepSeek's 1M context); past that, the oldest lines merge first |
 | **Zoom** | `zoom(id, n)` opens a line into the two it was made from; `zoom(id, 1)` gives a message whole, with its images |
-| **Agent tools** | One `luau` tool for hands: Luau code, in a VM of the agent's own that keeps its globals between calls, that reads, writes and edits files and runs commands on your Mac, in a work dir of the agent's own, and searches and fetches the web through DeepSeek's Search and Fetch APIs; agents delegated one task each, in parallel |
+| **Agent tools** | One `luau` tool for hands: Luau code, in a VM of the agent's own that keeps its globals between calls, that reads, writes and edits files and runs commands on your machine, in a work dir of the agent's own, and searches and fetches the web through DeepSeek's Search and Fetch APIs; agents delegated one task each, in parallel |
 | **Assistants** | Acorn (general assistant), Max (thoughtful expert) and those they create on request, each a person with a name and an about, its own chat, memory and work dir, in a sidebar |
 | **Cut in** | A message sent while an assistant talks or works stops it at once, as a person would stop and listen; it answers you, then goes on only if you say so |
 | **Consult** | Assistants ask each other (`list_assistants`, `ask_assistant`), each pair in a thread of its own that never ends |
 | **Facts** | `remember` and `forget` keep facts you state, for every assistant or one; each call's system prompt lists them |
 | **Purge** | `purge` erases a message (a pasted key or password) and every summary made from it; `unpurge` takes it back for ten minutes, then it is wiped from the database file |
-| **Import** | Your past Claude Code and Codex sessions on this Mac, and Claude and ChatGPT chats from their websites' exports, read into the chat |
+| **Import** | Your past Claude Code and Codex sessions on this machine, and Claude and ChatGPT chats from their websites' exports, read into the chat |
 | **Goals** | Name a finish line ("keep at it until the tests pass") and the assistant works until a check says it is met; the goal shows above the message box |
 
 ## How it works
@@ -42,13 +42,28 @@ Each line is named `id+n`: the `n` messages from `id` on. A message short enough
 
 The model is told to find the latest mention of anything it needs in the view and zoom until it has it whole, before it acts, guesses or asks. When no line mentions it, `search` finds the messages holding a word or name (a full-text index of `chat.db`), and it zooms the ids found.
 
+## Platforms
+
+Acorn's window is one [nsh](https://nsh.dev) app, built for each target below. The engines (memory, DeepSeek loop, the agent's tools) are Unix-only, so they run natively on macOS or Linux; in a browser they run in `acorn-server` on such a machine.
+
+| Target | Build | Window | Engines |
+|---|---|---|---|
+| macOS | `cargo build --release -p acorn` | AppKit, `nsh-platform-macos` | In the app's process |
+| Linux | `cargo build --release -p acorn` | GTK 4, `nsh-platform-linux` | In the app's process |
+| Web | `./web/build.sh` (`wasm32-unknown-unknown`) | HTML and CSS, `nsh-platform-web` | `acorn-server`, on macOS or Linux |
+
+Windows is not a target: `main.rs` stops with a compile error there.
+
 ## Install
 
-Acorn builds from source and runs on macOS only (`main.rs` stops with a compile error elsewhere). It needs a Rust toolchain with the 2024 edition and a DeepSeek API key.
+Acorn builds from source. Every target needs a Rust toolchain with the 2024 edition and a DeepSeek API key.
 
+- **macOS:** nothing more.
+- **Linux:** GTK 4.14 or later and clang to build (`libgtk-4-dev clang` on Debian and Ubuntu 24.04+, `gtk4 clang` on Arch, `gtk4-devel clang` on Fedora); `xdg-open` for `tree`.
+- **Web:** the `wasm32-unknown-unknown` target (`build.sh` adds it); `wasm-opt` is used if installed.
 
 ```bash
-git clone https://github.com/coderotator/acorn
+git clone https://github.com/voladelta/acorn
 cd acorn
 cargo build --release -p acorn
 ```
@@ -57,7 +72,7 @@ cargo build --release -p acorn
 
 ## Quick start
 
-1. Give Acorn your DeepSeek key, either in the environment or in `~/.acorn/config.json` (an app opened from the Finder has no shell variables):
+1. Give Acorn your DeepSeek key, either in the environment or in `~/.acorn/config.json` (an app opened from the Finder or a desktop launcher has no shell variables):
 
    ```json
    { "deepseek_api_key": "sk-..." }
@@ -73,7 +88,7 @@ cargo build --release -p acorn
 
 ## In a browser
 
-The same window runs in a browser, built for WebAssembly on nsh's web runtime. The engines stay native: `acorn-server` runs them on a Mac or Linux machine and serves the window and its API, so the agent's tools act on that machine.
+The same window runs in a browser, built for WebAssembly on nsh's web runtime. The engines stay native: `acorn-server` runs them on a macOS or Linux machine and serves the window and its API, so the agent's tools act on that machine.
 
 ```bash
 ./web/build.sh                                   # the window into web/dist (needs the wasm32-unknown-unknown target)
@@ -96,8 +111,8 @@ You act by words alone: there are no menus and no stop button. Clicks and keys o
 | A name in a report | Open that agent's work, or the thread where that assistant answered |
 | Esc | Back to your chat from an agent's page, a thread or the overview |
 | Ctrl+Tab | Next tab (the chat, each agent at work) |
-| Cmd+Shift+F | The overview: the chat in the fewest blocks, and back |
-| Cmd+B | Hide or show the sidebar |
+| Cmd+Shift+F (Ctrl+Shift+F off macOS) | The overview: the chat in the fewest blocks, and back |
+| Cmd+B (Ctrl+B off macOS) | Hide or show the sidebar |
 
 Ask for what you want in plain words: "stop", "fire Scout", "have three agents check each crate", "keep going until the build is green", "what did I spend this week?", "bring in my Claude Code chats since June", "export your memory", "show me your memory tree", "remember that I deploy with fly", "forget fact #12", "purge the message with my token", "ask Max what he thinks" (or `@Max what do you think?`; `@Max` alone opens Max's chat), "make me a personal stylist called Marrie".
 
@@ -107,7 +122,7 @@ Ask for what you want in plain words: "stop", "fire Scout", "have three agents c
 |---|---|---|
 | `zoom`, `date`, `search` | everyone | Open a line of the view; a message's date; find the messages whose words match (full text, newest first) |
 | `list_skills`, `load_skill` | everyone | The user's skills (how-tos for kinds of task), and one's steps |
-| `luau` | everyone | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch` and `json`, on this Mac in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s) |
+| `luau` | everyone | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch` and `json`, on the engines' machine in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s) |
 | `delegate`, `tell`, `fire` | assistants | Give agents one task each, in parallel, in the background; message one at work (it cuts in); fire one or all |
 | `create_assistant`, `archive_assistant`, `restore_assistant` | with you | Make an assistant (name, about, effort, instructions, welcome); take one off the sidebar, its files kept; bring it back |
 | `list_assistants`, `ask_assistant` | with you | List the other assistants (or those a query matches) and ask one, in your two's thread; its reply comes back as a message |
@@ -169,7 +184,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `~/.acorn/chats/<id>/chat.db.wipe` | Present while a purge's wipe is owed |
 | `~/.acorn/chats/<id>/with/<asker>/` | The thread where assistant `<asker>` asks `<id>`, kept as a chat is |
 
-`export` writes the whole memory as JSON to `~/Downloads/acorn-memory-<date-time>.json`; `tree` writes the tree as an HTML page to the temp dir and opens it.
+`export` writes the whole memory as JSON to `~/Downloads/acorn-memory-<date-time>.json`; `tree` writes the tree as an HTML page to the temp dir and opens it (`open` on macOS, `xdg-open` on Linux).
 
 ## Privacy
 
@@ -177,11 +192,11 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 - A search or fetch goes to DeepSeek, or to the service of a plugin that replaces it, as does whatever else a plugin sends.
 - `purge` erases a message at once from everything a call or the app can see. It is held in `chat.db` for ten minutes, so `unpurge` can take it back; its text and old bytes stay in the file until a wipe deletes it and rewrites the file, which runs once the chat is idle (no turn, agent or summary at work) and no purge is still in its ten minutes, and is retried at the next launch if it fails or Acorn quits first.
 - Summaries written while a purged message's summary was in the compactor's context may still echo it.
-- Copies the disk itself keeps, such as APFS snapshots and Time Machine backups, are beyond Acorn's reach; FileVault protects them.
+- Copies the disk itself keeps, such as APFS or Btrfs snapshots and Time Machine or other backups, are beyond Acorn's reach; disk encryption (FileVault, LUKS) protects them.
 
 ## Limitations
 
-- macOS only; no CLI and no web interface.
+- No Windows build and no CLI. The web window needs `acorn-server` on a macOS or Linux machine; it can't run the engines in the browser.
 - One model: DeepSeek Flash, at four efforts.
 - Chats kept by UniiChat (JSONL day files) are not read; Acorn starts them anew.
 - The view loses detail with age by design: an old line covers many messages, and what its summary left out is found only by zooming.
@@ -197,7 +212,7 @@ cargo test
 cargo clippy --all-targets
 ```
 
-The workspace has two crates: `core` (`acorn-core`: the memory tree, compactor, DeepSeek loop, tools, import, facts) and `app` (`acorn`: the window, on nsh). One test in `app/tests/live.rs` calls the real API and is ignored by default.
+The workspace has four crates: `core` (`acorn-core`: the memory tree, compactor, DeepSeek loop, tools, import, facts), `app` (`acorn`: the window, on nsh, and the macOS and Linux binary), `web` (`acorn-web`: the window as WebAssembly) and `server` (`acorn-server`: the engines and API for the web window). One test in `app/tests/live.rs` calls the real API and is ignored by default.
 
 ## License
 

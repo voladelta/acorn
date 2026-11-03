@@ -287,7 +287,10 @@ impl Engine {
     let file = made
       .map_err(|err| err.to_string())?
       .map_err(|err| format!("No tree page: {err}."))?;
-    let _ = tokio::process::Command::new("open").arg(&file).status().await;
+    let _ = tokio::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" })
+      .arg(&file)
+      .status()
+      .await;
     Ok(file)
   }
 

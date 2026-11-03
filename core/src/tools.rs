@@ -170,7 +170,7 @@ assistant: create them.
 fn mac(work: &Path) -> String {
   let work = work.display();
   format!(
-    "Your hands on the user's Mac and on the web are your luau tool, and only\nit: its code reads, writes and edits files, runs commands and searches\nand fetches the web, in your work dir, {work}/<you> (Acorn's:\n{work}/main), where relative paths start.\n\n{luau}\n\n{plugins}",
+    "Your hands on the user's machine and on the web are your luau tool, and only\nit: its code reads, writes and edits files, runs commands and searches\nand fetches the web, in your work dir, {work}/<you> (Acorn's:\n{work}/main), where relative paths start.\n\n{luau}\n\n{plugins}",
     luau = luau::GUIDE,
     plugins = plugins::note(),
   )
@@ -353,7 +353,7 @@ fn home() -> Vec<Spec> {
     ),
     spec(
       "import",
-      "Bring the user's past AI chats into this chat's memory. find: look for them (Claude Code's and Codex's on this Mac, and the Claude or ChatGPT website exports at files, zips the user dropped or named), listing each session (id, app, day, messages, where) and the price of importing; tell the user. start: import what find found, from day since (YYYY-MM-DD), with tool calls or not, leaving out skip (session ids), once the user agrees to the price; it begins when your turn ends and runs a while. pause, resume: the import running.",
+      "Bring the user's past AI chats into this chat's memory. find: look for them (Claude Code's and Codex's on this machine, and the Claude or ChatGPT website exports at files, zips the user dropped or named), listing each session (id, app, day, messages, where) and the price of importing; tell the user. start: import what find found, from day since (YYYY-MM-DD), with tool calls or not, leaving out skip (session ids), once the user agrees to the price; it begins when your turn ends and runs a while. pause, resume: the import running.",
       json!({"do": {"type": "string", "enum": ["find", "start", "pause", "resume"]}, "files": {"type": "array", "items": {"type": "string"}}, "since": {"type": "string"}, "tools": {"type": "boolean"}, "skip": {"type": "array", "items": {"type": "string"}}}),
       &["do"],
     ),
