@@ -262,7 +262,12 @@ impl Chat {
 
   /// The turn ended: its state cleared and told; what it leaves, a
   /// thread's reply to its asker and an import asked for.
-  fn end_turn(&mut self) -> (Option<(String, crate::assistant::Assistant)>, Option<crate::import::Want>) {
+  fn end_turn(
+    &mut self,
+  ) -> (
+    Option<(String, crate::assistant::Assistant)>,
+    Option<crate::import::Want>,
+  ) {
     self.phase = Phase::Idle;
     self.sent.clear();
     self.wait.clear();

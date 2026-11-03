@@ -319,7 +319,8 @@ fn offset(at: chrono::DateTime<chrono::Utc>) -> chrono::FixedOffset {
   }
   // SAFETY: a pure function of the page's.
   let east = unsafe { local_offset(at.timestamp_millis() as f64) };
-  chrono::FixedOffset::east_opt(if east.is_finite() { east as i32 } else { 0 }).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap())
+  chrono::FixedOffset::east_opt(if east.is_finite() { east as i32 } else { 0 })
+    .unwrap_or(chrono::FixedOffset::east_opt(0).unwrap())
 }
 
 fn clock_full(at: i64) -> String {

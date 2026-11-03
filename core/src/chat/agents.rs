@@ -49,7 +49,10 @@ enum Doing {
   Idle,
   Starting,
   /// fired: stopped by `fire` or a quit (its report stays unanswered).
-  Calling { call: Handle, fired: bool },
+  Calling {
+    call: Handle,
+    fired: bool,
+  },
 }
 
 impl Agent {

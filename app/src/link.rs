@@ -1,6 +1,6 @@
 //! Link
 //! ====
-//! How the window reaches the assistants' engines. On a Mac the engines
+//! How the window reaches the assistants' engines. On the desktop (macOS, Linux) the engines
 //! run in the same process, on the runtime's threads (`hub`); in a
 //! browser they run in `acorn-server`, and the window reaches them over
 //! HTTP: a command is a POST, the events come by long polling. Either

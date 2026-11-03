@@ -82,7 +82,9 @@ fn row(ui: Ui, a: Assistant) -> impl IntoElement {
     let id = id.clone();
     move || ui.working.with(|w| w.iter().any(|chat| crate::link::whose(chat) == id))
   };
-  let acorn = ui.assistants.with_untracked(|all| all.first().is_some_and(|f| f.id == a.id));
+  let acorn = ui
+    .assistants
+    .with_untracked(|all| all.first().is_some_and(|f| f.id == a.id));
   let mark = if acorn {
     text("🌰").text_size(px(15.0)).into_element()
   } else {

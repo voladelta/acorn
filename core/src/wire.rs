@@ -175,7 +175,11 @@ mod base64s {
   use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
   pub fn serialize<S: Serializer>(images: &[Vec<u8>], s: S) -> Result<S::Ok, S::Error> {
-    images.iter().map(|i| STANDARD.encode(i)).collect::<Vec<_>>().serialize(s)
+    images
+      .iter()
+      .map(|i| STANDARD.encode(i))
+      .collect::<Vec<_>>()
+      .serialize(s)
   }
 
   pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<u8>>, D::Error> {

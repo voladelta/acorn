@@ -417,7 +417,12 @@ impl Chat {
   /// owed, till Acorn starts again.
   fn wipe(&mut self) {
     let mem = &self.mem;
-    if mem.wipe != Wipe::Idle || mem.wiped == mem.purged || self.busy() || !mem.busy.is_empty() || !self.working().is_empty() {
+    if mem.wipe != Wipe::Idle
+      || mem.wiped == mem.purged
+      || self.busy()
+      || !mem.busy.is_empty()
+      || !self.working().is_empty()
+    {
       return;
     }
     let now = crate::now_ms();

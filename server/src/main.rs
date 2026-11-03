@@ -79,7 +79,9 @@ struct Server {
 
 impl Server {
   fn tell(&self, chat: &str, ev: &Event) {
-    let Ok(json) = serde_json::to_string(&(chat, ev)) else { return };
+    let Ok(json) = serde_json::to_string(&(chat, ev)) else {
+      return;
+    };
     let seq = self.log.lock().unwrap().push(json);
     self.said.send_replace(seq);
   }
@@ -93,7 +95,9 @@ fn main() {
 async fn serve() {
   let mut args = std::env::args().skip(1);
   let mut addr = std::env::var("ACORN_ADDR").unwrap_or_else(|_| "127.0.0.1:8484".into());
-  let mut web = std::env::var("ACORN_WEB").map(PathBuf::from).unwrap_or_else(|_| "web/dist".into());
+  let mut web = std::env::var("ACORN_WEB")
+    .map(PathBuf::from)
+    .unwrap_or_else(|_| "web/dist".into());
   while let Some(arg) = args.next() {
     match arg.as_str() {
       "--addr" => addr = args.next().expect("--addr HOST:PORT"),
@@ -163,8 +167,14 @@ async fn serve() {
 /// `.env` in the working dir, if there: each KEY=value not already set
 /// joins the environment (DEEPSEEK_API_KEY; see .env.example).
 fn dotenv() {
-  let Ok(text) = std::fs::read_to_string(".env") else { return };
-  for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+  let Ok(text) = std::fs::read_to_string(".env") else {
+    return;
+  };
+  for line in text
+    .lines()
+    .map(str::trim)
+    .filter(|l| !l.is_empty() && !l.starts_with('#'))
+  {
     if let Some((k, v)) = line.split_once('=') {
       let (k, v) = (k.trim(), v.trim().trim_matches('"'));
       if std::env::var_os(k).is_none() {
@@ -206,7 +216,10 @@ async fn guard(State(s): State<Server>, req: Request, next: Next) -> Response {
   let query = req.uri().query().unwrap_or("");
   if let Some(t) = query.split('&').find_map(|kv| kv.strip_prefix("token=")) {
     if same(t, &s.token) {
-      let cookie = format!("{COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000", s.token);
+      let cookie = format!(
+        "{COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000",
+        s.token
+      );
       let mut res = Redirect::to(req.uri().path()).into_response();
       res.headers_mut().insert(header::SET_COOKIE, cookie.parse().unwrap());
       return res;
@@ -280,12 +293,14 @@ async fn cmd(State(s): State<Server>, Query(q): Query<HashMap<String, String>>, 
         .into_iter()
         .find(|a| a.id == hub::whose(chat))
         .map_or_else(|| chat.clone(), |a| a.name);
-      s.tell(chat, &Event::Note(format!("{name}'s chat is still opening: send again in a moment.")));
+      s.tell(
+        chat,
+        &Event::Note(format!("{name}'s chat is still opening: send again in a moment.")),
+      );
       StatusCode::ACCEPTED.into_response()
     }
   }
 }
-
 
 async fn image(Query(q): Query<HashMap<String, String>>, _: HeaderMap) -> Response {
   let (Some(chat), Some(name)) = (q.get("chat"), q.get("name")) else {
@@ -299,7 +314,13 @@ async fn image(Query(q): Query<HashMap<String, String>>, _: HeaderMap) -> Respon
   let Ok(bytes) = tokio::fs::read(&path).await else {
     return StatusCode::NOT_FOUND.into_response();
   };
-  let mime = match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+  let mime = match path
+    .extension()
+    .and_then(|e| e.to_str())
+    .unwrap_or("")
+    .to_ascii_lowercase()
+    .as_str()
+  {
     "png" => "image/png",
     "jpg" | "jpeg" => "image/jpeg",
     "gif" => "image/gif",
