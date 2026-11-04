@@ -390,7 +390,7 @@ fn pictures(ui: Ui, names: &[String]) -> View {
         image(url)
           .h(px(120.0))
           .w(px(160.0))
-          .resize_mode(ResizeMode::Cover)
+          .object_fit(ResizeMode::Cover)
           .rounded(px(8.0))
           .border_1()
           .border_color(hair())

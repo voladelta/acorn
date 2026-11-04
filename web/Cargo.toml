@@ -12,6 +12,6 @@ crate-type = ["cdylib"]
 # Empty off WebAssembly.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 acorn = { path = "../app" }
-nsh-base = "0.3.0"
-nsh-core = "0.3.0"
-nsh-platform-web = { version = "0.3.0", default-features = false }
+nsh-base = "0.4.0"
+nsh-core = "0.4.0"
+nsh-platform-web = { version = "0.4.0", default-features = false }
