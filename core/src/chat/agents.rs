@@ -271,6 +271,9 @@ impl Engine {
       }
       "purge" | "unpurge" => {
         let (mut chat, back) = (self.lock(), name == "unpurge");
+        if let (false, Some(text)) = (back, input["text"].as_str()) {
+          return Out::ok(chat.purge_text(text));
+        }
         match &input["id"] {
           Value::String(name) if name.starts_with(|c: char| c.is_ascii_alphabetic()) => match input["n"].as_u64() {
             Some(n) => Out::ok(chat.purge(Some(name), n, back)),

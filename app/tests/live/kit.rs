@@ -106,6 +106,24 @@ impl Live {
     self.since(id, from)
   }
 
+  /// Words that hire agents, waited out till `n` reports are in and the
+  /// turn after the last has ended: what the turns did.
+  pub fn say_till_reports(&mut self, who: &str, id: &str, text: &str, n: usize) -> Turn {
+    let from = self.send(who, id, text);
+    self.until(&format!("{n} reports in, and {who}'s turn after them"), |live| {
+      let chat = live.chat(id);
+      let work: Vec<i64> = rows(
+        &chat,
+        &format!("select i from msgs where log = '' and kind = 'work' and i > {from}"),
+      )
+      .iter()
+      .filter_map(|i| i.parse().ok())
+      .collect();
+      work.len() >= n && work.iter().max().is_some_and(|&last| turned(&chat) > last)
+    });
+    self.since(id, from)
+  }
+
   /// Words sent, not waited on: the user's message's index.
   pub fn send(&mut self, who: &str, id: &str, text: &str) -> i64 {
     let from = count(&self.chat(id));
@@ -118,9 +136,14 @@ impl Live {
 
   /// Waited, the window running, till `done` holds (at most `TURN`).
   pub fn until(&mut self, what: &str, done: impl Fn(&Live) -> bool) {
+    self.until_within(TURN, what, done);
+  }
+
+  /// Waited, the window running, till `done` holds (at most `limit`).
+  pub fn until_within(&mut self, limit: Duration, what: &str, done: impl Fn(&Live) -> bool) {
     let started = Instant::now();
     while !done(self) {
-      assert!(started.elapsed() < TURN, "never: {what}");
+      assert!(started.elapsed() < limit, "never: {what}");
       self.app.wait(POLL).unwrap();
     }
     let secs = started.elapsed().as_secs();

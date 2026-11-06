@@ -41,6 +41,9 @@ pub use agents::Agent;
 pub(crate) use imports::Batch;
 pub use usage::over_budget;
 
+/// The shortest text a secret is purged by: shorter, it would erase too much.
+const SECRET: usize = 8;
+
 /// The first message: a new chat opens with it, its node written with it,
 /// so no compactor call summarizes it.
 pub const HELLO: &str = "Hello! This is Acorn.
@@ -143,6 +146,9 @@ pub struct Chat {
   cut_in: bool,
   /// When a wipe waiting on a held purge is woken (ms; 0: none).
   wake: i64,
+  /// Secrets purged by their text: written `[purged]` in whatever is
+  /// logged after (`push`). Kept in memory only, never on disk.
+  secrets: Vec<String>,
 }
 
 /// The chat, held: as it is let go, what its changes set off runs.
@@ -201,6 +207,7 @@ impl Engine {
         reply: None,
         cut_in: false,
         wake: 0,
+        secrets: Vec::new(),
       }),
       events,
       fitted: watch::channel(0).0,
@@ -385,6 +392,54 @@ impl Chat {
       self.pump();
     }
     said
+  }
+
+  /// Every message holding `text` purged, the chat's and the agents',
+  /// and from now on `text` written `[purged]` in whatever is logged: a
+  /// search's results, this very call, a reply. Answers what it erased.
+  pub(super) fn purge_text(&mut self, text: &str) -> String {
+    let text = text.trim();
+    if text.chars().count() < SECRET {
+      return format!("Give text of {SECRET} characters at least: the secret itself.");
+    }
+    if !self.secrets.iter().any(|s| s == text) {
+      self.secrets.push(text.to_string());
+    }
+    for (call, _, _) in &self.compactions {
+      call.stop();
+    }
+    let (mut erased, mut last) = (Vec::new(), None);
+    while let Some(at) = self.mem.holding(text) {
+      if last.as_ref() == Some(&at) {
+        break; // not erased: never again
+      }
+      match self.mem.purge(at.0.as_deref(), at.1) {
+        Ok(_) => erased.push(match &at.0 {
+          Some(name) => format!("{name}'s {}", at.1),
+          None => at.1.to_string(),
+        }),
+        Err(err) => return format!("The purge failed: {err}"),
+      }
+      last = Some(at);
+    }
+    self.seen.clear();
+    self.show();
+    self.pump();
+    let what = match erased.len() {
+      0 => "No message held it".to_string(),
+      _ => format!("Purged the messages holding it ({})", erased.join(", ")),
+    };
+    format!(
+      "{what}; from now on it is written [purged] wherever a message would hold it, this call too. unpurge takes a message back by its id for ten minutes; then its old bytes are wiped from Acorn's files once the chat is idle."
+    )
+  }
+
+  /// A text as logged: each secret purged by its text, `[purged]`.
+  fn redact(&self, text: &str) -> String {
+    self
+      .secrets
+      .iter()
+      .fold(text.to_string(), |t, s| t.replace(s.as_str(), "[purged]"))
   }
 
   /// An event to the app.

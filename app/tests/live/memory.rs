@@ -114,7 +114,9 @@ pub fn purge() {
     t = l.say("Acorn", "default", "Yes, I'm sure. Erase it.");
   }
   assert!(!kept(&chat), "no message or summary holds the key: {}", t.reply);
-  l.until("the key's bytes wiped from the chat's files", |l| {
+  // held ten minutes to be taken back (memory::GRACE), then wiped once idle
+  let grace = std::time::Duration::from_secs(12 * 60);
+  l.until_within(grace, "the key's bytes wiped from the chat's files", |l| {
     !held(&l.chat("default"), KEY)
   });
   let t = l.say(

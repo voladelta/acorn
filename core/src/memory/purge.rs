@@ -183,6 +183,22 @@ impl Memory {
 
   /// The pages [a, b] of message id: the chat's (all of its), or an
   /// agent's (one); None: no such message.
+  /// The first page holding `text`: the chat's (None), else an agent's
+  /// log's, by name; and its index.
+  pub fn holding(&self, text: &str) -> Option<(Option<String>, u64)> {
+    self
+      .db
+      .query_row(
+        "select log, i from msgs where instr(text, ?1) > 0 order by log <> ?2, log, i limit 1",
+        params![text, CHAT],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?)),
+      )
+      .optional()
+      .ok()
+      .flatten()
+      .map(|(log, i)| ((log != CHAT).then_some(log), i))
+  }
+
   fn pages_of(&self, agent: Option<&str>, id: u64) -> Option<(u64, u64)> {
     let (mut a, mut b) = (id, id);
     match agent {
@@ -330,4 +346,35 @@ pub fn wipe(dir: &Path, expired: i64) -> Result<()> {
   }
   db.execute("insert into search (search) values ('optimize')", [])?;
   erase(&db)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// Every page holding a text is found, the chat's first, then the
+  /// agents'; purged, none holds it, and the rest stay as they were.
+  #[test]
+  fn what_holds_a_secret_is_found_till_none_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut mem = Memory::load(dir.path()).unwrap();
+    let key = "sk-test-ABCD1234";
+    mem.push(vec![Msg::new(Kind::User, "hello")]).unwrap();
+    mem.push(vec![Msg::new(Kind::User, format!("my key: {key}"))]).unwrap();
+    mem
+      .agent_push("Scout", Kind::Echo, &format!("found {key} in config"))
+      .unwrap();
+    mem
+      .push(vec![Msg::new(Kind::Echo, format!("1|user: my key: {key}"))])
+      .unwrap();
+    assert_eq!(mem.holding(key), Some((None, 1)), "the chat's first");
+    let mut purged = Vec::new();
+    while let Some(at) = mem.holding(key) {
+      assert!(!purged.contains(&at), "{at:?} purged twice");
+      mem.purge(at.0.as_deref(), at.1).unwrap();
+      purged.push(at);
+    }
+    assert_eq!(purged, [(None, 1), (None, 2), (Some("Scout".into()), 0)]);
+    assert_eq!(mem.holding("hello"), Some((None, 0)), "the rest kept");
+  }
 }

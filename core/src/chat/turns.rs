@@ -341,6 +341,7 @@ impl Chat {
 
   /// To the chat (in pages), or an agent's log; each told to the app.
   pub(super) fn push(&mut self, agent: Option<&str>, kind: Kind, text: &str) -> Span {
+    let text = &self.redact(text);
     match agent {
       Some(name) => {
         let id = self.mem.agent_push(name, kind, text).unwrap_or_else(|err| {
@@ -365,7 +366,8 @@ impl Chat {
     }
   }
 
-  pub(super) fn push_msg(&mut self, msg: Msg) -> Span {
+  pub(super) fn push_msg(&mut self, mut msg: Msg) -> Span {
+    msg.text = self.redact(&msg.text);
     let roots = match self.mem.push(vec![msg]) {
       Ok(roots) => roots,
       Err(err) => {

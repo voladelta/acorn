@@ -149,7 +149,11 @@ pub fn kinds() {
   });
   let user = l.dirs().home().join("skills");
 
-  let t = l.say("Acorn", "default", "Give me a stamped report on the build: all green.");
+  let t = l.say(
+    "Acorn",
+    "default",
+    "Give me a stamped report saying the build is all green. There is nothing to check: just write the report.",
+  );
   assert!(t.replies.contains("STAMP-42-OWL"), "the script's line: {}", t.replies);
 
   let t = l.say(
@@ -225,20 +229,22 @@ pub fn agents() {
     )
   };
 
-  let t = l.say(
+  let t = l.say_till_reports(
     "Acorn",
     "default",
     &hire("Write the release notes for v4: faster startup, a fixed crash."),
+    1,
   );
   assert!(t.replies.contains("KESTREL"), "{}", t.replies);
   assert_eq!(loads_by_agents(&l), "1", "the agent loaded the skill itself");
 
-  let t = l.say(
+  let t = l.say_till_reports(
     "Acorn",
     "default",
     &hire(&format!(
       "Work in the project folder {p} and write a data report: sales up 5%, returns down 2%."
     )),
+    1,
   );
   assert!(t.replies.contains("OSPREY"), "{}", t.replies);
   assert_eq!(

@@ -220,23 +220,12 @@ West,Gizmo,1,30.00
 /// in, the answers right; the totals saved after.
 pub fn delegate() {
   let mut l = Live::start("delegate", &[], |d| write(&d.work().join("sales.csv"), SALES));
-  let from = l.send(
+  let t = l.say_till_reports(
     "Acorn",
     "default",
     "sales.csv is in your work dir. Hire two agents in parallel: one totals revenue (units × price) by region, the other finds the product with the most total revenue. Tell me both answers once they've both reported.",
+    2,
   );
-  l.until("both agents reported, and Acorn's turn after them", |l| {
-    let chat = l.chat("default");
-    let work: Vec<i64> = rows(
-      &chat,
-      &format!("select i from msgs where log = '' and kind = 'work' and i > {from}"),
-    )
-    .iter()
-    .filter_map(|i| i.parse().ok())
-    .collect();
-    work.len() >= 2 && turned(&chat) > *work.iter().max().unwrap()
-  });
-  let t = l.since("default", from);
   let hired: Vec<&String> = t.calls.iter().filter(|c| c.starts_with("delegate {")).collect();
   assert!(!hired.is_empty(), "agents hired: {:?}", t.calls);
   assert!(
