@@ -51,7 +51,7 @@ On the desktop, Acorn's window is an [nsh](https://nsh.dev) app; in a browser, i
 |---|---|---|---|
 | macOS | `cargo build --release -p acorn` | AppKit, `nsh-platform-macos` | In the app's process |
 | Linux | `cargo build --release -p acorn` | GTK 4, `nsh-platform-linux` | In the app's process |
-| Web | `cd web && npm ci && npm run build` | Octane, Base UI and shadcn (Tailwind 4), built by Vite | `acorn-server`, on macOS or Linux |
+| Web | `cd web && bun install && bun run build` | Octane, Base UI and shadcn (Tailwind 4), built by Vite | `acorn-server`, on macOS or Linux |
 
 Windows is not a target: `main.rs` stops with a compile error there.
 
@@ -61,7 +61,7 @@ Acorn builds from source. Every target needs a Rust toolchain with the 2024 edit
 
 - **macOS:** nothing more.
 - **Linux:** GTK 4.14 or later and clang to build (`libgtk-4-dev clang` on Debian and Ubuntu 24.04+, `gtk4 clang` on Arch, `gtk4-devel clang` on Fedora); `xdg-open` for `tree`.
-- **Web:** Node 22 or later and npm, for the page (a few seconds to build).
+- **Web:** Bun, for the page (a few seconds to build).
 
 ```bash
 git clone https://github.com/voladelta/acorn
@@ -92,7 +92,7 @@ cargo build --release -p acorn
 The window runs in a browser as an Octane page (`web/`: Vite, Base UI and shadcn, the same chat, blocks, tabs and `@Name` box as the desktop's). The engines stay native: `acorn-server` runs them on a macOS or Linux machine and serves the page and its API, so the agent's tools act on that machine.
 
 ```bash
-(cd web && npm ci && npm run build)  # the page into web/dist
+(cd web && bun install && bun run build)  # the page into web/dist
 cargo run --release -p acorn-server
 ```
 
@@ -100,7 +100,7 @@ Open the link it prints (`http://127.0.0.1:8484/?token=...`): the token becomes 
 
 The server and the desktop app both hear every chat, so don't run both on the same `$ACORN_DIR` at once.
 
-To work on the page, build it once (the server wants `web/dist`), run the server, open its link once (the cookie is the host's, whatever the port), then `cd web && npm run dev`: Vite serves the page with hot reload on `http://127.0.0.1:5173` and sends `/api` on to the server (`ACORN_ADDR` if it listens elsewhere). Open the dev page on the same host name the server's link used (`127.0.0.1`, not `localhost`), or the cookie won't go with it. `npm test` runs the page's own tests.
+To work on the page, build it once (the server wants `web/dist`), run the server, open its link once (the cookie is the host's, whatever the port), then `cd web && bun run dev`: Vite serves the page with hot reload on `http://127.0.0.1:5173` and sends `/api` on to the server (`ACORN_ADDR` if it listens elsewhere). Open the dev page on the same host name the server's link used (`127.0.0.1`, not `localhost`), or the cookie won't go with it. `bun run test` runs the page's own tests.
 
 ## Using it
 
@@ -219,7 +219,7 @@ cargo test
 cargo clippy --all-targets
 ```
 
-The workspace has three crates: `core` (`acorn-core`: the memory tree, compactor, DeepSeek loop, tools, import, facts), `app` (`acorn`: the window, on nsh, and the macOS and Linux binary), and `server` (`acorn-server`: the engines and API for the web window); the web window itself is the npm package in `web/`. One test in `app/tests/live.rs` calls the real API and is ignored by default.
+The workspace has three crates: `core` (`acorn-core`: the memory tree, compactor, DeepSeek loop, tools, import, facts), `app` (`acorn`: the window, on nsh, and the macOS and Linux binary), and `server` (`acorn-server`: the engines and API for the web window); the web window itself is the Bun package in `web/`. One test in `app/tests/live.rs` calls the real API and is ignored by default.
 
 ## License
 
