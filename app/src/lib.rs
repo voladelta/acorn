@@ -10,9 +10,15 @@
 //! to the model (`model::Model::act`), the shown chat's events too
 //! (`hear`), and both answer what to send it. The page: the sidebar
 //! (`side`: the assistants), a header (the sidebar's button, the
-//! assistant's name and who it is, an import's progress), the chat, and a
-//! footer (a note, the goal, today's cost, the images waiting, the message
-//! box, the tabs while agents work).
+//! assistant's name and who it is, an import's progress, the server not
+//! reached), the chat, and a footer (a note, the goal, today's cost, the
+//! images waiting, the message box, the tabs while agents work).
+//!
+//! The chat shown is in step with its engine, or stale: events were lost,
+//! or a command asking for what it shows didn't get there. Stale, it asks
+//! for it all anew (`Model::resync`): at once if events were lost, else
+//! once the server is reached again. A message that didn't get there comes
+//! back to the box.
 
 mod call;
 mod link;
@@ -24,17 +30,20 @@ mod text;
 
 use acorn_core::assistant::Assistant;
 use acorn_core::wire::{Command, Event};
+use link::Told;
 use look::*;
 use model::{Act, Model, Then};
 use nsh_base::input;
 use nsh_core::prelude::*;
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::time::Duration;
 
 /// What every part of the window shares: the model (of the chat shown),
 /// the assistants, the one you talk to, the chat shown (its chat with
-/// you, or a thread it asked in), the chats at work, whether the sidebar
-/// shows, the note shown, the message being written and its field, the
+/// you, or a thread it asked in) and whether it is stale, the chats at
+/// work, whether the sidebar shows, why the server can't be reached, the
+/// note shown, the message being written, its images and its field, the
 /// clock times read.
 #[derive(Clone, Copy)]
 pub struct Ui {
@@ -42,21 +51,54 @@ pub struct Ui {
   pub assistants: Signal<Vec<Assistant>>,
   pub talk: Signal<String>,
   pub shown: Signal<String>,
+  pub stale: Signal<bool>,
   pub working: Signal<HashSet<String>>,
   pub side: Signal<bool>,
+  pub down: Signal<Option<String>>,
   pub toast: Signal<Option<String>>,
   pub draft: Signal<String>,
+  pub images: Signal<Vec<Vec<u8>>>,
   pub field: ElementRef,
   pub list: ElementRef,
   pub now: Signal<i64>,
 }
 
+thread_local! {
+  /// The notes shown so far: a note's time is up only if none came since.
+  static NOTES: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Whether a chat's assistants (a thread's two) are all among those.
+fn listed(chat: &str, among: &[Assistant]) -> bool {
+  chat.split('/').all(|id| among.iter().any(|a| a.id == id))
+}
+
 impl Ui {
   /// A person's act, done.
   pub fn act(self, act: Act) {
+    self.change(|m| m.act(act));
+  }
+
+  /// The model changed, and what it leads to: the commands sent, the last
+  /// note shown, and a page looked at anew (another tab, the overview)
+  /// shown from its end.
+  fn change(self, f: impl FnOnce(&mut Model) -> Then) {
     let mut then = Then::default();
-    self.model.update(|m| then = m.act(act));
-    self.then(then);
+    let mut moved = false;
+    self.model.update(|m| {
+      let before = m.looking();
+      then = f(m);
+      moved = m.looking() != before;
+    });
+    if moved {
+      self.list.scroll_to_end(false);
+    }
+    for cmd in then.cmds {
+      self.send(cmd);
+    }
+    if let Some(note) = then.notes.into_iter().last() {
+      self.note(note);
+    }
   }
 
   /// A command to the shown chat's engine.
@@ -98,16 +140,29 @@ impl Ui {
 
   /// A chat shown, from scratch: its engine tells it all anew, from the
   /// list's top (the last chat's offset would miss a shorter one's rows).
-  /// The one shown again: back to its end.
+  /// The one shown again: back to its chat, from its agents' pages and
+  /// overview. None (""): nothing.
   pub fn show(self, id: String) {
     if self.shown.get_untracked() == id {
-      self.act(Act::Goto(None));
+      self.act(Act::Home);
       return;
     }
+    self.stale.set(false);
     self.model.set(self.fresh(&id));
     self.list.scroll_to_offset(px(0.0), false);
+    let some = !id.is_empty();
     self.shown.set(id);
-    self.send(Command::Attach);
+    if some {
+      self.send(Command::Attach);
+    }
+  }
+
+  /// The chat shown, asked for anew.
+  fn resync(self) {
+    self.stale.set(false);
+    if !self.shown.with_untracked(String::is_empty) {
+      self.change(Model::resync);
+    }
   }
 
   /// An assistant to talk to: its chat with you shown.
@@ -119,20 +174,16 @@ impl Ui {
   /// Back to your chat with the assistant, from whatever you look at: a
   /// thread, an agent's page, the overview.
   pub fn back(self) {
-    let talk = self.talk.get_untracked();
-    if self.shown.get_untracked() != talk {
-      self.show(talk);
-    } else {
-      self.act(Act::Goto(None));
-      self.act(Act::Fold(false));
-    }
+    self.show(self.talk.get_untracked());
   }
 
   /// Your words, to the assistant you talk to, its chat shown: sent while
   /// it works, they cut in; `@Name` alone, that assistant's chat shown
-  /// instead. Whether they went (not while its chat still opens).
+  /// instead. Whether they went (not with nothing to say, or no one to
+  /// say it to).
   pub fn say(self, text: String, images: Vec<Vec<u8>>) -> bool {
-    if text.trim().is_empty() && images.is_empty() {
+    let talk = self.talk.get_untracked();
+    if (text.trim().is_empty() && images.is_empty()) || talk.is_empty() {
       return false;
     }
     if images.is_empty()
@@ -145,14 +196,6 @@ impl Ui {
     {
       self.talk_to(id);
       return true;
-    }
-    let talk = self.talk.get_untracked();
-    if link::opening(&talk) {
-      self.note(format!(
-        "{}'s chat is still opening: send again in a moment.",
-        self.named(&talk)
-      ));
-      return false;
     }
     if self.shown.get_untracked() != talk {
       self.show(talk);
@@ -173,24 +216,106 @@ impl Ui {
     }
   }
 
-  fn then(self, then: Then) {
-    for cmd in then.cmds {
-      self.send(cmd);
-    }
-    if let Some(note) = then.notes.into_iter().last() {
-      self.note(note);
-    }
-  }
-
-  /// A note, shown a while.
-  pub fn note(self, text: String) {
-    self.toast.set(Some(text.clone()));
+  /// A note, shown a while; None: none.
+  pub fn note(self, text: impl Into<Option<String>>) {
+    let k = NOTES.with(|n| {
+      n.set(n.get() + 1);
+      n.get()
+    });
+    self.toast.set(text.into());
     let toast = self.toast;
     set_timeout(Duration::from_secs(6), move || {
-      if toast.get_untracked().as_deref() == Some(text.as_str()) {
+      if NOTES.with(Cell::get) == k {
         toast.set(None);
       }
     });
+  }
+
+  /// The assistants anew: the chats of those gone no longer at work, and
+  /// if the one you talk to is gone (or none was yet), the first talked
+  /// to; a thread shown with one gone, your chat shown instead.
+  fn roster(self, assistants: Vec<Assistant>) {
+    self.working.update(|w| w.retain(|chat| listed(chat, &assistants)));
+    let first = assistants.first().map(|a| a.id.clone()).unwrap_or_default();
+    let (talks, shows) = (
+      listed(&self.talk.get_untracked(), &assistants),
+      listed(&self.shown.get_untracked(), &assistants),
+    );
+    self.assistants.set(assistants);
+    if !talks {
+      self.talk_to(first);
+    } else if !shows {
+      self.back();
+    }
+  }
+
+  /// A command that may not have got there: a message, back in the box
+  /// (before what was written since); any other, of the chat shown,
+  /// leaves it stale.
+  fn unsent(self, chat: String, cmd: Command) {
+    match cmd {
+      Command::Say { text, images } => {
+        self
+          .draft
+          .update(|d| *d = if d.is_empty() { text } else { format!("{text}\n\n{d}") });
+        self.images.update(|i| {
+          let mut back = images;
+          back.append(i);
+          *i = back;
+        });
+        self.note("Your message may not have got there: it's back in the box.".to_string());
+      }
+      _ if self.shown.with_untracked(|s| *s == chat) => self.stale.set(true),
+      _ => {}
+    }
+  }
+
+  /// A chat's event: whether it works, an assistant created or restored
+  /// (listed, or told anew) or archived (dropped), a hidden chat's notes
+  /// (named), always; the rest, of the chat shown.
+  fn heard(self, id: String, ev: Event) {
+    if let Event::State(s) = &ev {
+      let works = (s.busy || !s.agents.is_empty()) && self.assistants.with_untracked(|all| listed(&id, all));
+      if works != self.working.with_untracked(|w| w.contains(&id)) {
+        self.working.update(|w| {
+          let _ = if works { w.insert(id.clone()) } else { w.remove(&id) };
+        });
+      }
+    }
+    match ev {
+      Event::Assistant(it) => {
+        let mut all = self.assistants.get_untracked();
+        match all.iter_mut().find(|a| a.id == it.id) {
+          Some(known) => *known = it,
+          None => all.push(it),
+        }
+        self.roster(all);
+      }
+      Event::Gone(gone) => {
+        let mut all = self.assistants.get_untracked();
+        all.retain(|a| a.id != gone);
+        self.roster(all);
+      }
+      Event::Note(text) if self.shown.with_untracked(|s| *s != id) => {
+        let who = match id.split_once('/') {
+          Some((answers, asks)) => format!("{} (asked by {})", self.named(answers), self.named(asks)),
+          None => self.named(&id),
+        };
+        self.note(format!("{who}: {text}"));
+      }
+      ev if self.shown.with_untracked(|s| *s == id) => self.change(|m| m.hear(ev)),
+      _ => {}
+    }
+  }
+
+  /// The server reached again (None), or why not: a stale chat asked for
+  /// anew once it is.
+  fn reach(self, down: Option<String>) {
+    let back = down.is_none();
+    self.down.set(down);
+    if back && self.stale.get_untracked() {
+      self.resync();
+    }
   }
 }
 
@@ -202,19 +327,22 @@ pub fn App() -> impl IntoElement {
   let ui = Ui {
     model: signal_with(Model::default(), SignalEquals::Never),
     assistants: signal(assistants),
-    talk: signal(first.clone()),
-    shown: signal(first),
+    talk: signal(String::new()),
+    shown: signal(String::new()),
+    stale: signal(false),
     working: signal(HashSet::new()),
     side: signal(true),
+    down: signal(None),
     toast: signal(None),
     draft: signal(String::new()),
+    images: signal(Vec::new()),
     field: element_ref(),
     list: element_ref(),
     now: signal(text::now_ms()),
   };
   provide_context(ui);
-  ui.model.set(ui.fresh(&ui.shown.get_untracked()));
   hear(ui);
+  ui.talk_to(first);
   set_interval(Duration::from_secs(60), move || ui.now.set(text::now_ms()));
   keys(ui);
   view()
@@ -233,68 +361,20 @@ pub fn App() -> impl IntoElement {
     )
 }
 
-/// Every chat opened, its events heard as long as the window: whether each
-/// works, an assistant created or restored (listed) or archived (dropped, and the one
-/// you talk to Acorn, if it was), a hidden chat's notes (named),
-/// always; the rest, of the chat shown.
+/// All the link tells, heard as long as the window.
 fn hear(ui: Ui) {
-  let Some(mut heard) = link::listen(ui.shown.get_untracked()) else {
+  let Some(mut heard) = link::listen() else {
     return;
   };
   spawn(async move {
-    while let Some((id, ev)) = heard.recv().await {
-      if let Event::State(s) = &ev {
-        let works = s.busy || !s.agents.is_empty();
-        if works != ui.working.with_untracked(|w| w.contains(&id)) {
-          ui.working.update(|w| {
-            let _ = if works { w.insert(id.clone()) } else { w.remove(&id) };
-          });
-        }
+    while let Some(told) = heard.recv().await {
+      match told {
+        Told::Roster(all) => ui.roster(all),
+        Told::Heard(id, ev) => ui.heard(id, ev),
+        Told::Lost => ui.resync(),
+        Told::Reach(down) => ui.reach(down),
+        Told::Unsent(chat, cmd) => ui.unsent(chat, cmd),
       }
-      if let Event::Assistant(made) = ev {
-        let first = ui.talk.get_untracked().is_empty().then(|| made.id.clone());
-        if !ui.assistants.with_untracked(|all| all.iter().any(|a| a.id == made.id)) {
-          ui.assistants.update(|all| all.push(made));
-        }
-        if let Some(id) = first {
-          ui.talk_to(id);
-        }
-        continue;
-      }
-      if id.is_empty() {
-        // The link's own notes: events lost, the chat shown told anew.
-        if let Event::Note(text) = ev {
-          if text == link::LOST {
-            ui.send(Command::Attach);
-          } else {
-            ui.note(text);
-          }
-        }
-        continue;
-      }
-      if let Event::Gone(gone) = ev {
-        ui.assistants.update(|all| all.retain(|a| a.id != gone));
-        ui.working
-          .update(|w| w.retain(|chat| link::whose(chat) != gone && !chat.ends_with(&format!("/{gone}"))));
-        let shown = ui.shown.get_untracked();
-        if ui.talk.get_untracked() == gone || link::whose(&shown) == gone || shown.ends_with(&format!("/{gone}")) {
-          ui.talk_to(ui.assistants.with_untracked(|all| all[0].id.clone()));
-        }
-        continue;
-      }
-      if ui.shown.get_untracked() != id {
-        if let Event::Note(text) = ev {
-          let who = match id.split_once('/') {
-            Some((answers, asks)) => format!("{} (asked by {})", ui.named(answers), ui.named(asks)),
-            None => ui.named(&id),
-          };
-          ui.note(format!("{who}: {text}"));
-        }
-        continue;
-      }
-      let mut then = Then::default();
-      ui.model.update(|m| then = m.hear(ev));
-      ui.then(then);
     }
   });
 }
@@ -340,7 +420,7 @@ fn dropped(ui: Ui, e: &FileDropEvent) {
 
 /// The sidebar's button (while the sidebar is hidden; shown, it has its
 /// own), the assistant's name (back to its chat) and who it is, an
-/// import's progress.
+/// import's progress, whether the server can't be reached.
 fn header(ui: Ui) -> impl IntoElement {
   let importing = move || ui.model.with(|m| m.state.as_ref().and_then(|s| s.importing.clone()));
   view()
@@ -381,6 +461,17 @@ fn header(ui: Ui) -> impl IntoElement {
           .tooltip(hint("Your past chats going into memory. Ask to pause or resume it."))
       },
     ))
+    .child(when(
+      move || ui.down.with(Option::is_some),
+      move || {
+        chip(|| "Can't reach the server".to_string()).tooltip(hint(move || {
+          format!(
+            "{}\nTrying again; what you send meanwhile comes back to the box.",
+            ui.down.get().unwrap_or_default()
+          )
+        }))
+      },
+    ))
 }
 
 /// A hint shown as the pointer rests on what it explains.
@@ -417,7 +508,6 @@ fn chip(label: impl Fn() -> String + 'static) -> View {
 /// The note shown, the goal, today's cost, the images waiting, the
 /// message box, the tabs.
 fn footer(ui: Ui) -> impl IntoElement {
-  let images = signal(Vec::<Vec<u8>>::new());
   view().px_5().pt_2().pb_3().items_center().child(
     view()
       .w_full()
@@ -432,7 +522,7 @@ fn footer(ui: Ui) -> impl IntoElement {
             .py_2()
             .rounded(px(12.0))
             .bg(ink())
-            .on_press(move || ui.toast.set(None))
+            .on_press(move || ui.note(None))
             .child(
               text(move || ui.toast.get().unwrap_or_default())
                 .text_color(paper())
@@ -441,8 +531,8 @@ fn footer(ui: Ui) -> impl IntoElement {
         },
       ))
       .child(status_row(ui))
-      .child(rows::pending(images))
-      .child(composer(ui, images))
+      .child(rows::pending(ui.images))
+      .child(composer(ui))
       .child(tabs(ui)),
   )
 }
@@ -510,9 +600,10 @@ fn status_row(ui: Ui) -> impl IntoElement {
 /// message cuts in. An `@` word being typed shows the other assistants
 /// it may name, over the caret (`names_menu`): ↑ and ↓ pick one, Return
 /// or Tab takes it (Return sends a word already a name), a click takes
-/// the one clicked, Esc closes it for that word.
-fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
-  let field = ui.field;
+/// the one clicked, Esc closes it for that word: till the caret is out of
+/// it (moved off, the word gone, the message sent).
+fn composer(ui: Ui) -> impl IntoElement {
+  let (field, images) = (ui.field, ui.images);
   let caret = signal(0u32);
   let at = signal(None::<Bounds<Points>>);
   let pick = signal(0usize);
@@ -530,6 +621,15 @@ fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
       let whole = found.iter().any(|n| n.eq_ignore_ascii_case(word));
       (!found.is_empty() && hushed.get() != Some(start)).then_some((start, found, whole))
     })
+  });
+  // a word closed, once the caret is out of it, is closed no more
+  effect(move || {
+    let start = ui
+      .draft
+      .with(|d| text::mention_at(d, caret.get()).map(|(start, _)| start));
+    if hushed.get().is_some_and(|h| Some(h) != start) {
+      hushed.set(None);
+    }
   });
   let take = move |name: String| {
     let Some((start, ..)) = naming.get_untracked() else {
@@ -587,13 +687,6 @@ fn composer(ui: Ui, images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
         .on_change(move |t: &str| {
           ui.draft.set(t.to_string());
           pick.set(0);
-          // the word closed is gone with its `@`
-          if hushed
-            .get_untracked()
-            .is_some_and(|start| t.get(start..start + 1) != Some("@"))
-          {
-            hushed.set(None);
-          }
         })
         .on_selection_change(move |s: &Selection| caret.set(s.end))
         .on_caret_move(move |e: &CaretEvent| at.set(Some(e.page_bounds)))

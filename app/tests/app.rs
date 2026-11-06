@@ -80,7 +80,13 @@ fn each_assistant_opens_its_own_chat() {
   app
     .wait_until("the names closed", wait, |s| s.texts().iter().all(|t| *t != "@Acorn"))
     .unwrap();
-  app.type_text("label:Message Max", "").unwrap();
+  // Closed for that word alone: once it is sent, the next `@` names them again.
+  app.press_key("backspace").unwrap();
+  app.type_text("label:Message Max", "Pip").unwrap();
+  app.submit("label:Message Max").unwrap();
+  app.wait_for_within("text:Pip  ·  Personal stylist", wait).unwrap();
+  app.type_text("label:Message Pip", "@a").unwrap();
+  app.wait_for_within("text:@Max", wait).unwrap();
 
   for id in ["default", "max", "pip"] {
     assert!(dir.path().join("chats").join(id).is_dir(), "{id}'s chat on disk");

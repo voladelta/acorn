@@ -7,7 +7,8 @@
 //! - `GET /api/hello`: the assistants, and the last event's number;
 //! - `GET /api/events?after=N`: the events after N, waiting up to 25 s
 //!   for one (`lost`: some were dropped, too old);
-//! - `POST /api/cmd?chat=ID`: a `Command` (JSON) to a chat;
+//! - `POST /api/cmd?chat=ID`: a `Command` (JSON) to a chat, once it is open
+//!   (404: no such chat);
 //! - `GET /api/image?chat=ID&name=F`: an image of a chat's.
 //!
 //! The agent runs commands on this machine, so every request needs the
@@ -109,7 +110,10 @@ async fn serve() {
     }
   }
   if !web.join("index.html").exists() {
-    eprintln!("acorn-server: no web window in {} (cd web && npm ci && npm run build)", web.display());
+    eprintln!(
+      "acorn-server: no web window in {} (cd web && npm ci && npm run build)",
+      web.display()
+    );
     std::process::exit(1);
   }
 
@@ -275,30 +279,26 @@ async fn events(State(s): State<Server>, Query(q): Query<HashMap<String, String>
   ([(header::CONTENT_TYPE, "application/json")], body).into_response()
 }
 
-async fn cmd(State(s): State<Server>, Query(q): Query<HashMap<String, String>>, body: Bytes) -> Response {
-  let Some(chat) = q.get("chat") else {
+async fn cmd(Query(q): Query<HashMap<String, String>>, body: Bytes) -> Response {
+  let Some(chat) = q.get("chat").cloned() else {
     return (StatusCode::BAD_REQUEST, "no chat").into_response();
   };
   let cmd: Command = match serde_json::from_slice(&body) {
     Ok(cmd) => cmd,
     Err(err) => return (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
   };
-  match hub::get(chat) {
+  // a chat still opening is waited for: its commands go once it is open
+  let id = chat.clone();
+  match tokio::task::spawn_blocking(move || hub::ready(&id))
+    .await
+    .ok()
+    .flatten()
+  {
     Some(engine) => {
       engine.command(cmd);
       StatusCode::NO_CONTENT.into_response()
     }
-    None => {
-      let name = acorn_core::assistant::all()
-        .into_iter()
-        .find(|a| a.id == hub::whose(chat))
-        .map_or_else(|| chat.clone(), |a| a.name);
-      s.tell(
-        chat,
-        &Event::Note(format!("{name}'s chat is still opening: send again in a moment.")),
-      );
-      StatusCode::ACCEPTED.into_response()
-    }
+    None => (StatusCode::NOT_FOUND, format!("No chat {chat}.")).into_response(),
   }
 }
 

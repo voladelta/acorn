@@ -118,9 +118,10 @@ export function send(chat: string, cmd: Command): Promise<boolean> {
         body: JSON.stringify(cmd),
         signal: AbortSignal.timeout(SEND_WAIT),
       });
-      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`.trim());
-      reach(null);
-      return true;
+      // answered, it is reached; failing on its side (5xx), not
+      const why = res.ok ? null : `${res.status} ${await res.text()}`.trim();
+      reach(res.status >= 500 ? why : null);
+      return res.ok;
     } catch (err) {
       reach(why(err));
       return false;

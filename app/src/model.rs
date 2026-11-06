@@ -18,6 +18,7 @@ const WAIT: &str = "summarizing…";
 const SUMS: &str = "summarizing earlier messages…";
 const GOAL: &str = "checking the goal…";
 const FOLD: &str = "Overview: the whole chat in the fewest blocks. Esc goes back.";
+const FOLDING: &str = "finding the fewest blocks…";
 
 /// An import's minutes a micro-USD of its time (the compactor, measured on
 /// a real import: 990 s for 162,900).
@@ -30,9 +31,16 @@ pub struct Page {
   pub live: Vec<Live>,
 }
 
+/// The overview: asked for, or its tops.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Fold {
+  Asked,
+  Tops(Vec<Seg>),
+}
+
 /// The chat as the window knows it. head: what it opens with (a thread's
-/// caption; None: nothing);
-/// fold: the tops shown (None: not folded); nodes and whole: the
+/// caption; None: nothing); fold: the overview (None: not shown); nodes
+/// and whole: the
 /// summaries and messages known; open: the blocks opened (true) or shut
 /// by hand; minds: the thoughts after each message; pages: the agents'
 /// asked for; page: the one shown (None: the chat).
@@ -42,7 +50,7 @@ pub struct Model {
   pub state: Option<State>,
   pub parts: Vec<Seg>,
   pub turn: u64,
-  pub fold: Option<Vec<Seg>>,
+  pub fold: Option<Fold>,
   pub nodes: HashMap<Seg, Node>,
   pub whole: HashMap<u64, Entry>,
   pub open: HashMap<Seg, bool>,
@@ -106,6 +114,8 @@ pub enum Act {
   Fold(bool),
   /// A tab, a name, the logo (None: Acorn).
   Goto(Option<String>),
+  /// Back to the chat: off the agent's page, out of the overview.
+  Home,
 }
 
 /// What an act or an event leads to: commands to the engine, notes to
@@ -134,7 +144,7 @@ impl Model {
       Event::Zoom { .. } => {}
       Event::Root { parts } => {
         if self.fold.is_some() {
-          self.fold = Some(parts);
+          self.fold = Some(Fold::Tops(parts));
         }
       }
       Event::Entry {
@@ -232,7 +242,7 @@ impl Model {
           self.page = None;
         }
         self.open.clear();
-        self.fold = on.then(Vec::new);
+        self.fold = on.then_some(Fold::Asked);
         if on {
           then.cmds.push(Command::Root);
         }
@@ -245,8 +255,45 @@ impl Model {
         }
         self.page = Some(name);
       }
+      Act::Home => {
+        self.page = None;
+        if self.fold.take().is_some() {
+          self.open.clear();
+        }
+      }
     }
     then
+  }
+
+  /// All the chat shown asks its engine anew, as events were lost or asks
+  /// failed: the view, the overview, the blocks opened, the agent's page
+  /// shown (the rest are dropped, asked for once shown). What is known
+  /// stays till the replies tell it anew.
+  pub fn resync(&mut self) -> Then {
+    let mut then = Then::default();
+    then.cmds.push(Command::Attach);
+    if self.fold.is_some() {
+      then.cmds.push(Command::Root);
+    }
+    let mut opened: Vec<Seg> = self
+      .open
+      .iter()
+      .filter(|&(seg, &on)| on && seg.1 > 1)
+      .map(|(&seg, _)| seg)
+      .collect();
+    opened.sort_unstable();
+    then.cmds.extend(opened.into_iter().map(Command::Zoom));
+    let page = self.page.clone();
+    self.pages.retain(|name, _| Some(name) == page.as_ref());
+    if let Some(name) = page.filter(|name| self.pages.contains_key(name)) {
+      then.cmds.push(Command::Agent(name));
+    }
+    then
+  }
+
+  /// What is looked at: the agent's page, or the chat; whether the overview.
+  pub fn looking(&self) -> (Option<String>, bool) {
+    (self.page.clone(), self.fold.is_some())
   }
 
   fn live_of(&mut self, agent: Option<&str>) -> Option<&mut Vec<Live>> {
@@ -303,9 +350,14 @@ impl Model {
         .filter(|rows| !rows.is_empty())
         .collect();
     }
-    if let Some(tops) = &self.fold {
-      let rows = tops.iter().map(|&(id, n)| self.part_rows(id, n, u64::MAX, false));
-      return std::iter::once(vec![Row::Cap(FOLD.into())]).chain(rows).collect();
+    if let Some(fold) = &self.fold {
+      let cap = std::iter::once(vec![Row::Cap(FOLD.into())]);
+      return match fold {
+        Fold::Asked => cap.chain(std::iter::once(vec![Row::Cap(FOLDING.into())])).collect(),
+        Fold::Tops(tops) => cap
+          .chain(tops.iter().map(|&(id, n)| self.part_rows(id, n, u64::MAX, false)))
+          .collect(),
+      };
     }
     let head = self.head.iter().map(|h| vec![Row::Cap(h.clone())]);
     head
@@ -526,6 +578,53 @@ mod tests {
         [Command::Say { .. }]
       ),
       "no slash words: words"
+    );
+  }
+
+  /// The overview says it is asked for till its tops come, a late one
+  /// unasked stays unshown, and Home leaves a page and the overview at
+  /// once (at home, nothing changes).
+  #[test]
+  fn the_overview_waits_and_home_leaves_it() {
+    let mut m = Model::default();
+    m.act(Act::Goto(Some("FireAnt".into())));
+    let on = m.act(Act::Fold(true));
+    assert!(matches!(on.cmds[..], [Command::Root]));
+    assert_eq!((m.page.as_deref(), m.fold.clone()), (None, Some(Fold::Asked)));
+    assert_eq!(m.body()[1], vec![Row::Cap(FOLDING.into())], "asked for, not empty");
+    m.hear(Event::Root { parts: vec![(0, 2)] });
+    assert_eq!(m.fold, Some(Fold::Tops(vec![(0, 2)])));
+    let mut late = Model::default();
+    late.hear(Event::Root { parts: vec![(0, 2)] });
+    assert_eq!(late.fold, None);
+    m.act(Act::Open((0, 2)));
+    m.act(Act::Goto(Some("FireAnt".into())));
+    m.act(Act::Home);
+    assert_eq!((m.looking(), m.open.len()), ((None, false), 0));
+    assert!(m.act(Act::Home).cmds.is_empty());
+  }
+
+  /// Resynced, a chat asks for all it shows; the pages not shown go.
+  #[test]
+  fn a_chat_resynced_asks_for_all_it_shows() {
+    let mut m = Model::default();
+    m.act(Act::Open((4, 1)));
+    m.act(Act::Open((8, 4)));
+    m.act(Act::Open((0, 4)));
+    m.act(Act::Shut((12, 2)));
+    m.act(Act::Goto(Some("RedAnt".into())));
+    m.hear(Event::Agent {
+      name: "RedAnt".into(),
+      log: Some(vec![entry(Kind::Work, "hi")]),
+    });
+    m.act(Act::Goto(Some("BlueOwl".into())));
+    let cmds: Vec<String> = m.resync().cmds.iter().map(|c| format!("{c:?}")).collect();
+    assert_eq!(cmds, ["Attach", "Zoom((0, 4))", "Zoom((8, 4))", "Agent(\"BlueOwl\")"]);
+    assert_eq!(m.pages.keys().collect::<Vec<_>>(), ["BlueOwl"]);
+    m.act(Act::Fold(true));
+    assert!(
+      matches!(m.resync().cmds[..], [Command::Attach, Command::Root]),
+      "folding shut the blocks"
     );
   }
 }

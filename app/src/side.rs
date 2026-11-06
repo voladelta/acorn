@@ -117,13 +117,7 @@ fn row(ui: Ui, a: Assistant) -> impl IntoElement {
     .hover(|s| s.bg(hover()))
     .cursor_pointer()
     .tooltip(crate::hint(tip))
-    .on_press(move || {
-      if ui.talk.get_untracked() == id {
-        ui.back()
-      } else {
-        ui.talk_to(id.clone())
-      }
-    })
+    .on_press(move || ui.talk_to(id.clone()))
     .child(
       view()
         .absolute()

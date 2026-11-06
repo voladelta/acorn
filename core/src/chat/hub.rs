@@ -5,8 +5,8 @@
 //! who asked it something (`<answers>/<asks>`, kept in the answerer's dir
 //! under `with/`). Each opens once, as it is first needed, or at the
 //! start if on disk, in a slot of its own: one opening holds up no other
-//! chat, and a chat still opening is not there yet (`get`). Their events
-//! go to one listener, the app, named by chat.
+//! chat, and a chat still opening is not there yet (`get`), or is waited
+//! for (`ready`). Their events go to one listener, the app, named by chat.
 
 use super::Engine;
 use crate::assistant::{self, Assistant};
@@ -66,6 +66,19 @@ pub fn thread(answers: &Assistant, asks: &Assistant) -> Result<Arc<Engine>, Stri
 pub fn get(id: &str) -> Option<Arc<Engine>> {
   let slot = OPEN.lock().get(id)?.clone();
   slot.try_lock()?.clone()
+}
+
+/// A chat to command, once open: an assistant's opened if it isn't yet,
+/// a thread waited for while it opens (None: archived, or a thread never
+/// opened). It may wait, so not on the window's thread.
+pub fn ready(id: &str) -> Option<Arc<Engine>> {
+  if !id.contains('/')
+    && let Some(me) = assistant::all().into_iter().find(|a| a.id == id)
+  {
+    return chat(&me).ok();
+  }
+  let slot = OPEN.lock().get(id)?.clone();
+  slot.lock().clone()
 }
 
 /// Every chat open.

@@ -1,24 +1,45 @@
 //! Link
 //! ====
-//! How the window reaches the assistants' engines. On the desktop (macOS, Linux) the engines
-//! run in the same process, on the runtime's threads (`hub`); in a
-//! browser they run in `acorn-server`, and the window reaches them over
-//! HTTP: a command is a POST, the events come by long polling. Either
-//! way the window hears `(chat, Event)`s on one channel and sends
-//! `Command`s to a chat by its id.
+//! How the window reaches the assistants' engines. On the desktop (macOS,
+//! Linux) the engines run in the same process, on the runtime's threads
+//! (`hub`); in a browser they run in `acorn-server`, and the window
+//! reaches them over HTTP: a command is a POST, the events come by long
+//! polling. Either way the window is told everything on one channel
+//! (`Told`), and sends `Command`s to a chat by its id: each chat's in
+//! order, each once its chat is open; one that doesn't get there comes
+//! back (`Told::Unsent`).
+//!
+//! In a browser the server is reached, or not since a request failed
+//! (why), till one gets through; events lost (too old, or another run of
+//! the server's) are told after the assistants anew, as what was lost of
+//! them a roster replaces.
 
 use acorn_core::assistant::Assistant;
 use acorn_core::wire::{Command, Event};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 pub use imp::*;
 
-/// What every chat says, named by chat.
-pub type Heard = UnboundedReceiver<(String, Event)>;
+/// What the window is told.
+pub enum Told {
+  /// The assistants, all: in a browser, at first and anew once events
+  /// were lost.
+  #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "told in a browser alone"))]
+  Roster(Vec<Assistant>),
+  /// A chat's event.
+  Heard(String, Event),
+  /// Events were lost: the chat shown is to be told anew.
+  #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "told in a browser alone"))]
+  Lost,
+  /// Why the server can't be reached; None: it is again.
+  #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "told in a browser alone"))]
+  Reach(Option<String>),
+  /// A command that may not have got to its chat.
+  Unsent(String, Command),
+}
 
-/// Said (as a note to no chat) when events were lost: the window shows
-/// its chat anew.
-pub const LOST: &str = "\u{0}lost";
+/// Everything the window is told.
+pub type Heard = UnboundedReceiver<Told>;
 
 /// The assistant a chat is with (a thread's: its answerer).
 pub fn whose(chat: &str) -> &str {
@@ -42,7 +63,8 @@ pub fn nobody(id: &str) -> Assistant {
 mod imp {
   use super::*;
   use acorn_core::chat::hub;
-  use std::sync::LazyLock;
+  use std::collections::HashMap;
+  use std::sync::{LazyLock, Mutex, OnceLock};
 
   /// The engines' threads: their calls, tools and files never hold the
   /// window's.
@@ -54,38 +76,74 @@ mod imp {
       .expect("the engine's runtime")
   });
 
+  /// Where the window is told.
+  static TOLD: OnceLock<UnboundedSender<Told>> = OnceLock::new();
+
+  /// Each chat's commands, waiting their turn.
+  static QUEUES: LazyLock<Mutex<HashMap<String, UnboundedSender<Command>>>> = LazyLock::new(Default::default);
+
   /// The assistants known at the start.
   pub fn assistants() -> Vec<Assistant> {
     acorn_core::assistant::all()
   }
 
-  /// Every chat opened, the first shown told all, and their events from
-  /// now on (None: someone already hears them).
-  pub fn listen(first: String) -> Option<Heard> {
-    let (tx, heard) = tokio::sync::mpsc::unbounded_channel();
+  /// Every chat opened, and all told from now on (None: someone already
+  /// hears them).
+  pub fn listen() -> Option<Heard> {
+    let (tx, mut chats) = unbounded_channel();
     if !hub::listen(tx) {
       return None;
     }
+    let (told, heard) = unbounded_channel();
+    let _ = TOLD.set(told.clone());
     RUNTIME.spawn(async move {
-      hub::open_all();
-      if let Some(engine) = hub::get(&first) {
-        engine.attach();
+      while let Some((chat, ev)) = chats.recv().await {
+        if told.send(Told::Heard(chat, ev)).is_err() {
+          return;
+        }
       }
     });
+    RUNTIME.spawn(async { hub::open_all() });
     Some(heard)
   }
 
-  /// A command to a chat's engine, if it is open.
+  /// A command to a chat's engine, after those sent it before, once it
+  /// is open.
   pub fn send(chat: &str, cmd: Command) {
-    if let Some(engine) = hub::get(chat) {
-      let _in = RUNTIME.enter();
-      engine.command(cmd);
-    }
+    let mut queues = QUEUES.lock().unwrap();
+    let queue = queues
+      .entry(chat.to_string())
+      .or_insert_with(|| commands(chat.to_string()));
+    let _ = queue.send(cmd);
   }
 
-  /// Whether a chat is still opening (its engine not there yet).
-  pub fn opening(chat: &str) -> bool {
-    hub::get(chat).is_none()
+  /// A chat's queue: each command to its engine, waited for while it
+  /// opens; with no engine (archived, or a thread never opened), back.
+  fn commands(chat: String) -> UnboundedSender<Command> {
+    let (tx, mut rx) = unbounded_channel::<Command>();
+    RUNTIME.spawn(async move {
+      while let Some(cmd) = rx.recv().await {
+        let engine = match hub::get(&chat) {
+          Some(engine) => Some(engine),
+          None => {
+            let id = chat.clone();
+            tokio::task::spawn_blocking(move || hub::ready(&id))
+              .await
+              .ok()
+              .flatten()
+          }
+        };
+        match engine {
+          Some(engine) => engine.command(cmd),
+          None => {
+            if let Some(told) = TOLD.get() {
+              let _ = told.send(Told::Unsent(chat.clone(), cmd));
+            }
+          }
+        }
+      }
+    });
+    tx
   }
 
   /// Where a chat's image is shown from.
@@ -100,7 +158,20 @@ mod imp {
   use nsh_core::platform::HttpRequest;
   use nsh_core::prelude::{fetch, spawn, timer};
   use serde::Deserialize;
+  use std::cell::RefCell;
   use std::time::Duration;
+
+  /// How long after a failed request the next.
+  const RETRY: Duration = Duration::from_secs(2);
+
+  thread_local! {
+    /// Where the window is told.
+    static TOLD: RefCell<Option<UnboundedSender<Told>>> = const { RefCell::new(None) };
+    /// Why the server can't be reached (None: it can).
+    static DOWN: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// The commands, waiting their turn, each with its chat.
+    static QUEUE: RefCell<Option<UnboundedSender<(String, Command)>>> = const { RefCell::new(None) };
+  }
 
   /// None at the start: the server lists them (`listen`).
   pub fn assistants() -> Vec<Assistant> {
@@ -118,8 +189,7 @@ mod imp {
 
   /// What `/api/events` answers: the server's run, the events after the
   /// one asked from, the last's number, and whether some were lost (the
-  /// poll came too late, or the server started again: the chat shown is
-  /// told anew).
+  /// poll came too late, or the server started again).
   #[derive(Deserialize)]
   struct Batch {
     epoch: u64,
@@ -128,40 +198,58 @@ mod imp {
     events: Vec<(String, Event)>,
   }
 
-  /// The server's assistants (each heard as `Event::Assistant`, the first
-  /// the one talked to), then every chat's events, polled. `first` is
-  /// unknown here: the window shows the first assistant listed.
-  pub fn listen(_first: String) -> Option<Heard> {
-    let (tx, heard) = tokio::sync::mpsc::unbounded_channel();
+  fn tell(told: Told) {
+    TOLD.with(|t| {
+      if let Some(t) = &*t.borrow() {
+        let _ = t.send(told);
+      }
+    });
+  }
+
+  /// The server reached (None), or why not: told as it changes.
+  fn reach(why: Option<String>) {
+    let changed = DOWN.with(|d| d.replace(why.clone()) != why);
+    if changed {
+      tell(Told::Reach(why));
+    }
+  }
+
+  /// The server's assistants, then every chat's events, polled. Lost
+  /// events are polled on from where the batch ends, after the assistants
+  /// anew: those told twice are told the same.
+  pub fn listen() -> Option<Heard> {
+    let (told, heard) = unbounded_channel();
+    TOLD.with(|t| *t.borrow_mut() = Some(told));
+    let (queue, commands) = unbounded_channel();
+    QUEUE.with(|q| *q.borrow_mut() = Some(queue));
+    spawn(posts(commands));
     spawn(async move {
-      let (mut epoch, mut seq) = loop {
-        match get::<Hello>("/api/hello".into()).await {
-          Ok(hello) => {
-            for a in hello.assistants {
-              let _ = tx.send((a.id.clone(), Event::Assistant(a)));
-            }
-            break (hello.epoch, hello.seq);
-          }
-          Err(err) => {
-            let _ = tx.send((String::new(), Event::Note(format!("Can't reach the server: {err}"))));
-            timer(Duration::from_secs(3)).await;
-          }
-        }
-      };
+      let mut at: Option<(u64, u64)> = None;
+      let mut lost = false;
       loop {
-        match get::<Batch>(format!("/api/events?epoch={epoch}&after={seq}")).await {
-          Ok(batch) => {
-            (epoch, seq) = (batch.epoch, batch.seq);
-            if batch.lost {
-              let _ = tx.send((String::new(), Event::Note(LOST.into())));
-            }
-            for ev in batch.events {
-              if tx.send(ev).is_err() {
-                return;
+        let got = match at {
+          Some((epoch, seq)) if !lost => get::<Batch>(format!("/api/events?epoch={epoch}&after={seq}"))
+            .await
+            .map(|batch| {
+              at = Some((batch.epoch, batch.seq));
+              reach(None);
+              for (chat, ev) in batch.events {
+                tell(Told::Heard(chat, ev));
               }
+              lost = batch.lost;
+            }),
+          _ => get::<Hello>("/api/hello".into()).await.map(|hello| {
+            at.get_or_insert((hello.epoch, hello.seq));
+            reach(None);
+            tell(Told::Roster(hello.assistants));
+            if std::mem::take(&mut lost) {
+              tell(Told::Lost);
             }
-          }
-          Err(_) => timer(Duration::from_secs(2)).await,
+          }),
+        };
+        if let Err(why) = got {
+          reach(Some(why));
+          timer(RETRY).await;
         }
       }
     });
@@ -171,24 +259,54 @@ mod imp {
   async fn get<T: for<'de> Deserialize<'de>>(url: String) -> Result<T, String> {
     let res = fetch(HttpRequest::get(url)).await?;
     if !res.ok() {
-      return Err(format!("{} {}", res.status(), String::from_utf8_lossy(&res.body)));
+      return Err(
+        format!("{} {}", res.status(), String::from_utf8_lossy(&res.body))
+          .trim()
+          .to_string(),
+      );
     }
     serde_json::from_slice(&res.body).map_err(|e| e.to_string())
   }
 
-  /// A command to a chat's engine, on the server.
+  /// A command to a chat's engine, on the server, after those sent before
+  /// it.
   pub fn send(chat: &str, cmd: Command) {
-    let Ok(body) = serde_json::to_vec(&cmd) else { return };
-    let url = format!("/api/cmd?chat={}", escaped(chat));
-    spawn(async move {
-      let req = HttpRequest::post(url, body).header("content-type", "application/json");
-      let _ = fetch(req).await;
+    let unsent = QUEUE.with(|q| match &*q.borrow() {
+      Some(queue) => queue.send((chat.to_string(), cmd)).err().map(|e| e.0),
+      None => Some((chat.to_string(), cmd)),
     });
+    if let Some((chat, cmd)) = unsent {
+      tell(Told::Unsent(chat, cmd));
+    }
   }
 
-  /// The server tells a chat still opening itself (a note).
-  pub fn opening(_chat: &str) -> bool {
-    false
+  /// The commands posted, one at a time; one that fails, back.
+  async fn posts(mut commands: UnboundedReceiver<(String, Command)>) {
+    while let Some((chat, cmd)) = commands.recv().await {
+      let (got, down) = post(&chat, &cmd).await;
+      reach(down);
+      if !got {
+        tell(Told::Unsent(chat, cmd));
+      }
+    }
+  }
+
+  /// Whether a command got there, and why the server can't be reached:
+  /// answered, it is; failing on its side (5xx), not.
+  async fn post(chat: &str, cmd: &Command) -> (bool, Option<String>) {
+    let Ok(body) = serde_json::to_vec(cmd) else {
+      return (false, None);
+    };
+    let url = format!("/api/cmd?chat={}", escaped(chat));
+    let req = HttpRequest::post(url, body).header("content-type", "application/json");
+    match fetch(req).await {
+      Ok(res) if res.ok() => (true, None),
+      Ok(res) => {
+        let why = format!("{} {}", res.status(), String::from_utf8_lossy(&res.body));
+        (false, (res.status() >= 500).then(|| why.trim().to_string()))
+      }
+      Err(why) => (false, Some(why)),
+    }
   }
 
   /// Where a chat's image is shown from: the server.
