@@ -120,14 +120,11 @@ pub fn kinds() {
     let user = d.home().join("skills");
     skill(
       &user,
-      "stamp-report",
-      "Use when asked for a stamped report",
-      "Run `sh scripts/stamp.sh` from this skill's folder and put its output line last in your reply.",
+      "release-tag",
+      "Use when asked for a release tag line",
+      "Run `sh scripts/tag.sh` from this skill's folder and put its output line last in your reply.",
     );
-    write(
-      &user.join("stamp-report/scripts/stamp.sh"),
-      "echo \"STAMP-$((6*7))-OWL\"\n",
-    );
+    write(&user.join("release-tag/scripts/tag.sh"), "echo \"TAG-$((6*7))-OWL\"\n");
     skill(
       &user,
       "apology-email",
@@ -149,12 +146,8 @@ pub fn kinds() {
   });
   let user = l.dirs().home().join("skills");
 
-  let t = l.say(
-    "Acorn",
-    "default",
-    "Give me a stamped report saying the build is all green. There is nothing to check: just write the report.",
-  );
-  assert!(t.replies.contains("STAMP-42-OWL"), "the script's line: {}", t.replies);
+  let t = l.say("Acorn", "default", "Give me today's release tag line.");
+  assert!(t.replies.contains("TAG-42-OWL"), "the script's line: {}", t.replies);
 
   let t = l.say(
     "Acorn",
