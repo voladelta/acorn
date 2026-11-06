@@ -1,7 +1,7 @@
 //! Acorn on this machine (macOS or Linux): the root in a window of its
 //! own. As the window closes, every process the agent started dies with
 //! it. The engines are Unix-only, so there is no Windows build; in a
-//! browser, the window is `acorn-web` and the engines `acorn-server`.
+//! browser, the window is the page in web/ and the engines `acorn-server`.
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -38,4 +38,4 @@ fn main() -> impl std::process::Termination {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-compile_error!("Acorn's desktop app runs on macOS and Linux; in a browser, build acorn-web and run acorn-server.");
+compile_error!("Acorn's desktop app runs on macOS and Linux; in a browser, build web/ and run acorn-server.");

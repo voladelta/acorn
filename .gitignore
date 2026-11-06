@@ -2,3 +2,4 @@ target/
 .nsh/
 web/dist/
 .env
+node_modules/

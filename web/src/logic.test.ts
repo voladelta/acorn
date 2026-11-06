@@ -1,0 +1,78 @@
+// The window's reading, as app/src's tests check it.
+
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { parse, reportRead } from './call.ts';
+import { act, body, empty, hear, type Model } from './model.ts';
+import { flat, linkNames, mentionAlone, mentionAt, mentionDone, namesFor, output, tokensShow, usdShow } from './text.ts';
+import type { Entry, Kind } from './wire.ts';
+
+const entry = (kind: Kind, text: string): Entry => ({ kind, text, date: '2026-10-26T10:00:00.000Z', images: [], spend: null });
+
+test('calls read as their tools', () => {
+  let c = parse('zoom {"id":6243,"n":8}');
+  assert.deepEqual([c.name, c.head], ['zoom', '#6243+8']);
+  assert.equal(parse('bash {"description":"List files","command":"ls -la"}').head, 'ls -la');
+  c = parse('bash {"description":"Run tests","command":"cargo te');
+  assert.deepEqual([c.name, c.head], ['bash', 'cargo te']);
+  assert.equal(parse('read {"file_path":"a.rs","offset":4,"limit":2}').head, 'a.rs:4-5');
+  c = parse('edit {"file_path":"a.rs","old_string":"x\\ny","new_string":"z"}');
+  assert.equal(c.head, 'a.rs');
+  assert.equal(c.blocks[0].x, '--- a.rs\n+++ a.rs\n@@ -1,2 +1,1 @@\n-x\n-y\n+z');
+  assert.equal(parse('lookup {"q":"bend","deep":{"a":1}}').head, '"bend" {"a":1}');
+  assert.equal(parse('web_search {"query":"acorn site:github.com","count":3}').head, 'acorn site:github.com');
+  c = parse('luau {"description":"Count rows","code":"print(#rows)"}');
+  assert.deepEqual([c.head, c.blocks[0].x], ['Count rows', 'print(#rows)']);
+  assert.equal(parse('no call').name, '');
+  assert.deepEqual(reportRead('[RedAnt]\ndone\n\nFull chat: zoom("RedAnt")'), ['RedAnt', 'done']);
+});
+
+test('results read as files', () => {
+  const read = output(
+    '<path>/a/f</path>\n<type>file</type>\n<content>\n4: a\n5: b: c\n\n(Showing lines 4-5 of 9. Use offset=6 to continue.)\n</content>',
+  );
+  assert.deepEqual(read, [{ file: true, k: 'Showing lines 4-5 of 9. Use offset=6 to continue.', n: 4, x: ['a', 'b: c'] }]);
+  const none = output('<path>/a/f</path>\n<type>file</type>\n<content>\n(End of file - total 0 lines)\n</content>');
+  assert.ok(none[0].file && none[0].x.length === 0);
+  const diff = output('--- f\n+++ f\n@@ -1,2 +1,2 @@\n a\n-b\n+B');
+  assert.ok(!diff[0].file && diff[0].k === 'f' && diff[0].x[0].length === 3);
+  assert.equal(output('ok\n[exit code: 1]').length, 1);
+  assert.equal(flat('**bold** and `code` [x](http://y)'), 'bold and code x');
+  assert.equal(linkNames('ask [RedAnt] and [x](y)'), 'ask [RedAnt](agent:RedAnt) and [x](y)');
+  assert.equal(tokensShow(18_200), '18k');
+  assert.equal(usdShow(0.0031), '$0.0031');
+});
+
+test('an @ word names an assistant', () => {
+  const names = ['Acorn', 'Max', 'Marrie'];
+  assert.deepEqual(mentionAt('ask @Ma', 7), [4, 'Ma']);
+  assert.equal(mentionAt('ask @Ma now', 11), null);
+  assert.equal(mentionAt('mail a@b', 8), null);
+  assert.deepEqual(mentionAt('é @', 3), [2, '']);
+  assert.deepEqual(namesFor('ma', names), ['Max', 'Marrie']);
+  assert.deepEqual(namesFor('rr', names), ['Marrie']);
+  assert.deepEqual(mentionDone('ask @ma', 4, 7, 'Max'), ['ask @Max ', 9]);
+  assert.deepEqual(mentionDone('ask @ma why', 4, 7, 'Max'), ['ask @Max why', 9]);
+  assert.equal(mentionAlone(' @max ', names), 'Max');
+  assert.equal(mentionAlone('@Max why', names), null);
+});
+
+test('the chat shows blocks, then the turn whole', () => {
+  let m: Model = empty();
+  m = hear(m, { Know: { whole: [[0, entry('user', 'hi')], [1, entry('tool', 'bash {"command":"ls"}')]], nodes: [] } }).m;
+  m = hear(m, { View: { parts: [[0, 1], [1, 1]], turn: 1 } }).m;
+  const items = body(m);
+  assert.equal(items[0].rows[0].t, 'box', "a user's message before the turn opens");
+  const r = items[1].rows[0];
+  assert.ok(r.t === 'msg' && r.call?.name === 'bash');
+});
+
+test('a message is the only act', () => {
+  let m = hear(empty(), { State: { busy: true, wait: 'None', agents: ['FireAnt'], goal: 'tests pass', importing: null, today: null } }).m;
+  assert.equal(act(m, { t: 'send', text: ' ', images: [] }).cmds.length, 0, 'an empty Enter stops nothing');
+  m = act(m, { t: 'goto', name: 'FireAnt' }).m;
+  m = act(m, { t: 'fold', on: true }).m;
+  const sent = act(m, { t: 'send', text: 'stop', images: [] });
+  assert.ok(typeof sent.cmds[0] === 'object' && 'Say' in sent.cmds[0]);
+  assert.deepEqual([sent.m.page, sent.m.fold], [null, null], 'back to the chat, where the reply comes');
+});

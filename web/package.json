@@ -1,0 +1,28 @@
+{
+  "name": "acorn-web",
+  "private": true,
+  "description": "Acorn's window in a browser: Octane, Base UI and shadcn, served by acorn-server",
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "node --test --experimental-strip-types src/*.test.ts"
+  },
+  "dependencies": {
+    "@octanejs/base-ui": "^0.1.70",
+    "@octanejs/lucide": "^0.1.62",
+    "@octanejs/markdown": "^0.0.33",
+    "@octanejs/shadcn": "^0.0.59",
+    "@tsrx/oxc": "^0.23.0",
+    "octane": "^0.16.7",
+    "remark-gfm": "^4.0.1",
+    "tw-animate-css": "^1.4.0"
+  },
+  "devDependencies": {
+    "@octanejs/vite-plugin": "^0.5.0",
+    "@tailwindcss/vite": "^4.3.4",
+    "tailwindcss": "^4.3.4",
+    "vite": "^8.3.6"
+  }
+}

@@ -59,16 +59,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "acorn-web"
-version = "0.1.0"
-dependencies = [
- "acorn",
- "nsh-base",
- "nsh-core",
- "nsh-platform-web",
-]
-
-[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3154,23 +3144,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nsh-platform-web"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "173b9735a7a0a24a10f4e88c6538456e5122468b772fb129c0952b67d5cf2d79"
-dependencies = [
- "log",
- "nsh-base",
- "nsh-core",
- "nsh-engine",
- "rustc-hash 2.1.3",
- "serde_json",
- "ttf-parser",
- "unicode-bidi",
- "unicode-properties",
-]
-
-[[package]]
 name = "nsh-testing"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5510,12 +5483,6 @@ name = "unicase"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
-
-[[package]]
-name = "unicode-bidi"
-version = "0.3.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
 
 [[package]]
 name = "unicode-id"

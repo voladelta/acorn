@@ -44,13 +44,13 @@ The model is told to find the latest mention of anything it needs in the view an
 
 ## Platforms
 
-Acorn's window is one [nsh](https://nsh.dev) app, built for each target below. The engines (memory, DeepSeek loop, the agent's tools) are Unix-only, so they run natively on macOS or Linux; in a browser they run in `acorn-server` on such a machine.
+On the desktop, Acorn's window is an [nsh](https://nsh.dev) app; in a browser, it is an [Octane](https://octanejs.dev) page built with Base UI and shadcn. The engines (memory, DeepSeek loop, the agent's tools) are Unix-only, so they run natively on macOS or Linux; in a browser they run in `acorn-server` on such a machine.
 
 | Target | Build | Window | Engines |
 |---|---|---|---|
 | macOS | `cargo build --release -p acorn` | AppKit, `nsh-platform-macos` | In the app's process |
 | Linux | `cargo build --release -p acorn` | GTK 4, `nsh-platform-linux` | In the app's process |
-| Web | `./web/build.sh` (`wasm32-unknown-unknown`) | HTML and CSS, `nsh-platform-web` | `acorn-server`, on macOS or Linux |
+| Web | `cd web && npm ci && npm run build` | Octane, Base UI and shadcn (Tailwind 4), built by Vite | `acorn-server`, on macOS or Linux |
 
 Windows is not a target: `main.rs` stops with a compile error there.
 
@@ -60,7 +60,7 @@ Acorn builds from source. Every target needs a Rust toolchain with the 2024 edit
 
 - **macOS:** nothing more.
 - **Linux:** GTK 4.14 or later and clang to build (`libgtk-4-dev clang` on Debian and Ubuntu 24.04+, `gtk4 clang` on Arch, `gtk4-devel clang` on Fedora); `xdg-open` for `tree`.
-- **Web:** the `wasm32-unknown-unknown` target (`build.sh` adds it); `wasm-opt` is used if installed.
+- **Web:** Node 22 or later and npm, for the page (a few seconds to build).
 
 ```bash
 git clone https://github.com/voladelta/acorn
@@ -88,10 +88,10 @@ cargo build --release -p acorn
 
 ## In a browser
 
-The same window runs in a browser, built for WebAssembly on nsh's web runtime. The engines stay native: `acorn-server` runs them on a macOS or Linux machine and serves the window and its API, so the agent's tools act on that machine.
+The window runs in a browser as an Octane page (`web/`: Vite, Base UI and shadcn, the same chat, blocks, tabs and `@Name` box as the desktop's). The engines stay native: `acorn-server` runs them on a macOS or Linux machine and serves the page and its API, so the agent's tools act on that machine.
 
 ```bash
-./web/build.sh                                   # the window into web/dist (needs the wasm32-unknown-unknown target)
+(cd web && npm ci && npm run build)               # the page into web/dist
 cp .env.example .env                             # then put your DeepSeek key in it
 cargo run --release -p acorn-server
 ```
@@ -100,17 +100,19 @@ Open the link it prints (`http://127.0.0.1:8484/?token=...`): the token becomes 
 
 The server and the desktop app both hear every chat, so don't run both on the same `$ACORN_DIR` at once.
 
+To work on the page, build it once (the server wants `web/dist`), run the server, open its link once (the cookie is the host's, whatever the port), then `cd web && npm run dev`: Vite serves the page with hot reload on `http://127.0.0.1:5173` and sends `/api` on to the server (`ACORN_ADDR` if it listens elsewhere). Open the dev page on the same host name the server's link used (`127.0.0.1`, not `localhost`), or the cookie won't go with it. `npm test` runs the page's own tests.
+
 ## Using it
 
 You act by words alone: there are no menus and no stop button. Clicks and keys only look.
 
 | Input | Effect |
 |---|---|
-| Message box | Talk to the assistant you picked; images can be attached, files dropped on the window add their paths. Sent while it works, a message cuts in |
+| Message box | Talk to the assistant you picked; images can be attached, files dropped on the window add their paths (in a browser, images dropped are attached). Sent while it works, a message cuts in |
 | Sidebar | Pick an assistant (who it is shows beside its name) |
 | A name in a report | Open that agent's work, or the thread where that assistant answered |
 | Esc | Back to your chat from an agent's page, a thread or the overview |
-| Ctrl+Tab | Next tab (the chat, each agent at work) |
+| Ctrl+Tab | Next tab (the chat, each agent at work); most browsers keep this key for their own tabs, so click a tab there |
 | Cmd+Shift+F (Ctrl+Shift+F off macOS) | The overview: the chat in the fewest blocks, and back |
 | Cmd+B (Ctrl+B off macOS) | Hide or show the sidebar |
 
@@ -212,7 +214,7 @@ cargo test
 cargo clippy --all-targets
 ```
 
-The workspace has four crates: `core` (`acorn-core`: the memory tree, compactor, DeepSeek loop, tools, import, facts), `app` (`acorn`: the window, on nsh, and the macOS and Linux binary), `web` (`acorn-web`: the window as WebAssembly) and `server` (`acorn-server`: the engines and API for the web window). One test in `app/tests/live.rs` calls the real API and is ignored by default.
+The workspace has three crates: `core` (`acorn-core`: the memory tree, compactor, DeepSeek loop, tools, import, facts), `app` (`acorn`: the window, on nsh, and the macOS and Linux binary), and `server` (`acorn-server`: the engines and API for the web window); the web window itself is the npm package in `web/`. One test in `app/tests/live.rs` calls the real API and is ignored by default.
 
 ## License
 

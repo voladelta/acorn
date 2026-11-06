@@ -2,7 +2,7 @@
 //! ============
 //! Acorn's engines on this machine, its window in a browser. It opens
 //! every chat (`hub`), keeps what they say as numbered events, and serves
-//! the web window (web/dist, `web/build.sh`) and its API:
+//! the web window (web/dist: `cd web && npm run build`) and its API:
 //!
 //! - `GET /api/hello`: the assistants, and the last event's number;
 //! - `GET /api/events?after=N`: the events after N, waiting up to 25 s
@@ -109,7 +109,7 @@ async fn serve() {
     }
   }
   if !web.join("index.html").exists() {
-    eprintln!("acorn-server: no web window in {} (run web/build.sh)", web.display());
+    eprintln!("acorn-server: no web window in {} (cd web && npm ci && npm run build)", web.display());
     std::process::exit(1);
   }
 
