@@ -3,12 +3,12 @@
 // =====
 // The window around the assistants' chats, in a browser (app/src/lib.rs):
 // the sidebar (the assistants), a header (the sidebar's button, the
-// assistant's name and who it is, an import's progress), the chat, and a
-// footer (a note, the goal, today's cost, the images waiting, the message
-// box, the tabs while agents work). You act by words alone; hands only
-// look. The keys, all for looking: Esc goes back to your chat; Ctrl+Tab to
-// the next tab; ⌘⇧F shows the overview, and again the chat; ⌘B hides the
-// sidebar, and again shows it.
+// assistant's name and who it is, an import's progress, the server not
+// reached), the chat, and a footer (a note, the goal, today's cost, the
+// images waiting, the message box, the tabs while agents work). You act
+// by words alone; hands only look. The keys, all for looking: Esc goes
+// back to your chat; Ctrl+Tab to the next tab; ⌘⇧F shows the overview,
+// and again the chat; ⌘B hides the sidebar, and again shows it.
 
 import { cn } from '@octanejs/shadcn/cn';
 import { TooltipProvider } from '@octanejs/shadcn/base-ui/Tooltip';
@@ -64,7 +64,8 @@ export function App() {
 }
 
 /** The sidebar's button (while the sidebar is hidden), the assistant's
- * name (back to its chat) and who it is, an import's progress. */
+ * name (back to its chat) and who it is, an import's progress, whether
+ * the server can't be reached. */
 function Header() {
   const ui = store.useUi();
   const me = store.me(ui);
@@ -80,6 +81,13 @@ function Header() {
       {importing ? (
         <Tip tip="Your past chats going into memory. Ask to pause or resume it." side="bottom">
           <span class="flex h-8 items-center rounded-lg bg-muted px-3 text-[13.5px] font-medium">{progressShow(importing)}</span>
+        </Tip>
+      ) : null}
+      {ui.down ? (
+        <Tip tip={`${ui.down}\nTrying again; what you send meanwhile comes back to the box.`} side="bottom">
+          <span class="flex h-8 shrink-0 items-center rounded-lg bg-foreground px-3 text-[13.5px] font-medium text-background">
+            Can't reach the server
+          </span>
         </Tip>
       ) : null}
     </header>
@@ -100,7 +108,7 @@ function Footer() {
           <button
             type="button"
             class="cursor-pointer self-center rounded-xl bg-foreground px-4 py-2 text-[13.5px] text-background"
-            onClick={() => store.set({ toast: null })}
+            onClick={() => store.note(null)}
           >
             {ui.toast}
           </button>

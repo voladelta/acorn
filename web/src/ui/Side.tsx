@@ -70,9 +70,8 @@ function Person(props: { a: Assistant; acorn: boolean; on: boolean; works: boole
           on && 'bg-sidebar-accent',
         )}
         onClick={() => {
-          if (store.get().talk === a.id) store.back();
-          else store.talkTo(a.id);
-          if (window.matchMedia('(max-width: 767px)').matches) store.set({ side: false });
+          store.talkTo(a.id);
+          if (store.narrow()) store.set({ side: false });
         }}
       >
         <span class={cn('absolute top-[9px] left-0 h-[18px] w-[3px] rounded-sm bg-foreground', !on && 'opacity-0')} />

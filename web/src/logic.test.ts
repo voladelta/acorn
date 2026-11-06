@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parse, reportRead } from './call.ts';
-import { act, body, empty, hear, type Model } from './model.ts';
+import { act, body, empty, hear, type Model, resync } from './model.ts';
 import { flat, linkNames, mentionAlone, mentionAt, mentionDone, namesFor, output, tokensShow, usdShow } from './text.ts';
 import type { Entry, Kind } from './wire.ts';
 
@@ -75,4 +75,35 @@ test('a message is the only act', () => {
   const sent = act(m, { t: 'send', text: 'stop', images: [] });
   assert.ok(typeof sent.cmds[0] === 'object' && 'Say' in sent.cmds[0]);
   assert.deepEqual([sent.m.page, sent.m.fold], [null, null], 'back to the chat, where the reply comes');
+});
+
+test('the overview waits for its tops, and home leaves it', () => {
+  let m = act(empty(), { t: 'goto', name: 'FireAnt' }).m;
+  const on = act(m, { t: 'fold', on: true });
+  assert.deepEqual([on.m.page, on.m.fold, on.cmds], [null, { parts: null }, ['Root']]);
+  assert.equal(body(on.m)[1].rows[0].t, 'cap', 'an overview asked for says so, not empty');
+  m = hear(on.m, { Root: { parts: [[0, 2]] } }).m;
+  assert.deepEqual(m.fold, { parts: [[0, 2]] });
+  assert.equal(hear(empty(), { Root: { parts: [[0, 2]] } }).m.fold, null, 'a late overview, unasked, stays unshown');
+  m = act(act(m, { t: 'open', seg: [0, 2] }).m, { t: 'goto', name: 'FireAnt' }).m;
+  const home = act(m, { t: 'home' }).m;
+  assert.deepEqual([home.page, home.fold, home.open.size], [null, null, 0], 'one act, out of both');
+  const still = empty();
+  assert.equal(act(still, { t: 'home' }).m, still, 'home at home changes nothing');
+});
+
+test('a chat resynced asks for all it shows', () => {
+  let m = act(empty(), { t: 'open', seg: [0, 4] }).m;
+  m = act(m, { t: 'open', seg: [4, 1] }).m;
+  m = act(m, { t: 'shut', seg: [8, 2] }).m;
+  m = act(m, { t: 'goto', name: 'RedAnt' }).m;
+  m = hear(m, { Agent: { name: 'RedAnt', log: [entry('work', 'hi')] } }).m;
+  m = act(m, { t: 'goto', name: 'BlueOwl' }).m;
+  m = act(m, { t: 'fold', on: true }).m;
+  m = act(m, { t: 'goto', name: 'BlueOwl' }).m;
+  const { m: n, cmds } = resync(m);
+  assert.deepEqual(cmds, ['Attach', 'Root', { Agent: 'BlueOwl' }]);
+  assert.deepEqual([...n.pages.keys()], ['BlueOwl'], 'pages not shown are asked for once shown');
+  const zoomed = resync(act(empty(), { t: 'open', seg: [0, 4] }).m).cmds;
+  assert.deepEqual(zoomed, ['Attach', { Zoom: [0, 4] }], 'an open block of many, its halves asked anew');
 });

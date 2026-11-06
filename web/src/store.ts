@@ -3,9 +3,15 @@
 // What every part of the window shares (app/src/lib.rs's `Ui`): the model
 // of the chat shown, the assistants, the one you talk to, the chat shown
 // (its chat with you, or a thread it asked in), the chats at work,
-// whether the sidebar shows, the note shown, the message being written
-// and the images waiting, the clock. One state, never changed in place;
-// components read it with `useUi`, and the acts below make it anew.
+// whether the sidebar shows, why the server can't be reached, the note
+// shown, the message being written and the images waiting, the clock.
+// One state, never changed in place; components read it with `useUi`,
+// and the acts below make it anew.
+//
+// The chat shown is in step with its engine, or stale: events were lost,
+// or a command asking for what it shows failed. Stale, it asks for it all
+// anew (`model.resync`): at once if events were lost, else once the
+// server is reached again.
 
 import { useSyncExternalStore } from 'octane';
 import * as link from './link.ts';
@@ -27,11 +33,18 @@ export interface Ui {
   shown: string;
   working: Set<string>;
   side: boolean;
+  down: string | null;
   toast: string | null;
   draft: string;
   pics: Pic[];
   now: number;
 }
+
+/** Wide enough for the sidebar beside the chat. */
+const WIDE = '(min-width: 768px)';
+
+/** Whether the sidebar floats over the chat. */
+export const narrow = () => typeof window !== 'undefined' && !window.matchMedia(WIDE).matches;
 
 let ui: Ui = {
   model: model.empty(),
@@ -39,7 +52,8 @@ let ui: Ui = {
   talk: '',
   shown: '',
   working: new Set(),
-  side: typeof window === 'undefined' || window.matchMedia('(min-width: 768px)').matches,
+  side: !narrow(),
+  down: null,
   toast: null,
   draft: '',
   pics: [],
@@ -63,10 +77,6 @@ export function set(next: Partial<Ui>) {
 /** The window's state, read in a component. */
 export const useUi = () => useSyncExternalStore(subscribe, get, get);
 
-/** Something to do when a chat is shown from scratch (the list scrolls
- * to its top). */
-export const shownHooks = new Set<() => void>();
-
 /** The assistant you talk to. */
 export function me(u: Ui = ui): Assistant {
   return (
@@ -78,18 +88,37 @@ export function me(u: Ui = ui): Assistant {
 /** An assistant's name, by id. */
 export const named = (id: string) => ui.assistants.find((a) => a.id === id)?.name ?? id;
 
-/** A person's act, done. */
-export function act(a: Act) {
-  then(model.act(ui.model, a));
+/** Whether a chat's assistants (a thread's two) are all listed. */
+const listed = (chat: string, among: Assistant[] = ui.assistants) =>
+  chat.split('/').every((id) => among.some((a) => a.id === id));
+
+/** A person's act, done: whether what it sent got there. */
+export const act = (a: Act) => then(model.act(ui.model, a));
+
+let stale = false;
+
+/** A command to the shown chat's engine: whether it got there. One that
+ * asks for what is shown, failing, leaves the chat stale. */
+export function send(cmd: Command): Promise<boolean> {
+  const sent = link.send(ui.shown, cmd);
+  if (typeof cmd !== 'object' || !('Say' in cmd)) {
+    void sent.then((ok) => {
+      if (!ok) stale = true;
+    });
+  }
+  return sent;
 }
 
-/** A command to the shown chat's engine. */
-export const send = (cmd: Command) => link.send(ui.shown, cmd);
-
-function then({ m, cmds, notes }: model.Then) {
+function then({ m, cmds, notes }: model.Then): Promise<boolean> {
   if (m !== ui.model) set({ model: m });
-  for (const c of cmds) send(c);
   if (notes.length) note(notes[notes.length - 1]);
+  return Promise.all(cmds.map(send)).then((oks) => oks.every(Boolean));
+}
+
+/** The chat shown, asked for anew. */
+function resync() {
+  stale = false;
+  if (ui.shown) void then(model.resync(ui.model));
 }
 
 /** A chat's model, empty: a thread's opens with who asks and who answers
@@ -102,15 +131,16 @@ function fresh(id: string): Model {
 }
 
 /** A chat shown, from scratch: its engine tells it all anew. The one
- * shown again: back to its end. */
+ * shown again: back to its chat, from its agents' pages and overview.
+ * None (""): nothing. */
 export function show(id: string) {
   if (ui.shown === id) {
-    act({ t: 'goto', name: null });
+    void act({ t: 'home' });
     return;
   }
+  stale = false;
   set({ model: fresh(id), shown: id });
-  for (const f of shownHooks) f();
-  send('Attach');
+  if (id) void send('Attach');
 }
 
 /** An assistant to talk to: its chat with you shown. */
@@ -121,20 +151,14 @@ export function talkTo(id: string) {
 
 /** Back to your chat with the assistant, from whatever you look at: a
  * thread, an agent's page, the overview. */
-export function back() {
-  if (ui.shown !== ui.talk) {
-    show(ui.talk);
-  } else {
-    act({ t: 'goto', name: null });
-    act({ t: 'fold', on: false });
-  }
-}
+export const back = () => show(ui.talk);
 
 /** Your words, to the assistant you talk to, its chat shown: sent while
  * it works, they cut in; `@Name` alone, that assistant's chat shown
- * instead. Whether they went. */
-export function say(text: string, images: string[]): boolean {
-  if (!text.trim() && !images.length) return false;
+ * instead. Null: nothing to say, or no one to say it to; else whether
+ * they got there. */
+export function say(text: string, images: string[]): Promise<boolean> | null {
+  if ((!text.trim() && !images.length) || !ui.talk) return null;
   if (!images.length) {
     const name = mentionAlone(
       text,
@@ -143,12 +167,11 @@ export function say(text: string, images: string[]): boolean {
     const a = name && ui.assistants.find((x) => x.name === name);
     if (a) {
       talkTo(a.id);
-      return true;
+      return Promise.resolve(true);
     }
   }
   if (ui.shown !== ui.talk) show(ui.talk);
-  act({ t: 'send', text, images });
-  return true;
+  return act({ t: 'send', text, images });
 }
 
 /** A name in the chat, opened: an assistant's, its thread with the one
@@ -156,26 +179,34 @@ export function say(text: string, images: string[]): boolean {
 export function openName(name: string) {
   const a = ui.assistants.find((x) => x.name === name);
   if (a) show(`${a.id}/${ui.talk}`);
-  else act({ t: 'goto', name });
+  else void act({ t: 'goto', name });
 }
 
 let noteTimer: ReturnType<typeof setTimeout> | undefined;
 
-/** A note, shown a while. */
-export function note(text: string) {
+/** A note, shown a while; null: none. */
+export function note(text: string | null) {
   set({ toast: text });
   clearTimeout(noteTimer);
-  noteTimer = setTimeout(() => {
-    if (ui.toast === text) set({ toast: null });
-  }, 6000);
+  if (text !== null) noteTimer = setTimeout(() => set({ toast: null }), 6000);
+}
+
+/** The assistants anew: the chats of those gone no longer at work, and
+ * if the one you talk to is gone (or none was yet), the first talked to;
+ * a thread shown with one gone, your chat shown instead. */
+function roster(assistants: Assistant[]) {
+  set({ assistants, working: new Set([...ui.working].filter((c) => listed(c, assistants))) });
+  if (!listed(ui.talk, assistants)) talkTo(assistants[0]?.id ?? '');
+  else if (!listed(ui.shown, assistants)) show(ui.talk);
 }
 
 /** Every chat's events, heard as long as the window: whether each works,
- * an assistant created or restored (listed) or archived (dropped), a
- * hidden chat's notes (named), always; the rest, of the chat shown. */
-export function hear(id: string, ev: Event) {
+ * an assistant created or restored (listed, or told anew) or archived
+ * (dropped), a hidden chat's notes (named), always; the rest, of the
+ * chat shown. */
+function hear(id: string, ev: Event) {
   if ('State' in ev) {
-    const works = ev.State.busy || ev.State.agents.length > 0;
+    const works = (ev.State.busy || ev.State.agents.length > 0) && listed(id);
     if (works !== ui.working.has(id)) {
       const working = new Set(ui.working);
       if (works) working.add(id);
@@ -184,28 +215,13 @@ export function hear(id: string, ev: Event) {
     }
   }
   if ('Assistant' in ev) {
-    const made = ev.Assistant;
-    const first = !ui.talk;
-    if (!ui.assistants.some((a) => a.id === made.id)) set({ assistants: [...ui.assistants, made] });
-    if (first) talkTo(made.id);
-    return;
-  }
-  if (!id) {
-    // the link's own notes: events lost, the chat shown told anew
-    if ('Note' in ev) {
-      if (ev.Note === link.LOST) send('Attach');
-      else note(ev.Note);
-    }
+    const it = ev.Assistant;
+    const known = ui.assistants.some((a) => a.id === it.id);
+    roster(known ? ui.assistants.map((a) => (a.id === it.id ? it : a)) : [...ui.assistants, it]);
     return;
   }
   if ('Gone' in ev) {
-    const gone = ev.Gone;
-    const of = (chat: string) => link.whose(chat) === gone || chat.endsWith(`/${gone}`);
-    set({
-      assistants: ui.assistants.filter((a) => a.id !== gone),
-      working: new Set([...ui.working].filter((c) => !of(c))),
-    });
-    if (ui.talk === gone || of(ui.shown)) talkTo(ui.assistants[0]?.id ?? '');
+    roster(ui.assistants.filter((a) => a.id !== ev.Gone));
     return;
   }
   if (ui.shown !== id) {
@@ -216,7 +232,14 @@ export function hear(id: string, ev: Event) {
     }
     return;
   }
-  then(model.hear(ui.model, ev));
+  void then(model.hear(ui.model, ev));
+}
+
+/** The server reached again (null), or why not: a stale chat asked for
+ * anew once it is. */
+function reach(down: string | null) {
+  set({ down });
+  if (down === null && stale) resync();
 }
 
 /** Images join those waiting: files read as base64. */
@@ -240,28 +263,41 @@ export function dropPic(k: number) {
   set({ pics: ui.pics.filter((_, i) => i !== k) });
 }
 
-/** The draft and the images waiting, said: gone once sent. */
-export function submit() {
-  if (say(ui.draft, ui.pics.map((p) => p.b64))) {
-    for (const p of ui.pics) URL.revokeObjectURL(p.url);
-    set({ draft: '', pics: [] });
+/** The draft and the images waiting, said: gone from the box once sent,
+ * back in it (before what was written since) if they may not have got
+ * there. */
+export async function submit() {
+  const { draft, pics } = ui;
+  const sent = say(draft, pics.map((p) => p.b64));
+  if (!sent) return;
+  set({ draft: '', pics: [] });
+  if (await sent) {
+    for (const p of pics) URL.revokeObjectURL(p.url);
+    return;
   }
+  set({ draft: ui.draft ? `${draft}\n\n${ui.draft}` : draft, pics: [...pics, ...ui.pics] });
+  note("Your message may not have got there: it's back in the box.");
 }
 
 /** The tabs, the next one shown (Ctrl+Tab). */
 export function nextTab() {
   const tabs = model.tabs(ui.model);
   const at = tabs.indexOf(ui.model.page);
-  act({ t: 'goto', name: tabs[(at + 1) % tabs.length] });
+  void act({ t: 'goto', name: tabs[(at + 1) % tabs.length] });
 }
 
-/** Start: hear the server, tick the clock. */
+/** Start: hear the server, tick the clock, the sidebar as wide as the
+ * window lets it be. */
 export function start(): () => void {
   const stop = new AbortController();
-  void link.listen(hear, stop.signal);
+  void link.listen({ roster, hear, lost: resync, reach }, stop.signal);
   const tick = setInterval(() => set({ now: Date.now() }), 60_000);
+  const wide = window.matchMedia(WIDE);
+  const fit = () => set({ side: wide.matches });
+  wide.addEventListener('change', fit);
   return () => {
     stop.abort();
     clearInterval(tick);
+    wide.removeEventListener('change', fit);
   };
 }

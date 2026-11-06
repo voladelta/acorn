@@ -19,6 +19,7 @@ const WAIT = 'summarizing…';
 const SUMS = 'summarizing earlier messages…';
 const GOAL = 'checking the goal…';
 const FOLD = 'Overview: the whole chat in the fewest blocks. Esc goes back.';
+const FOLDING = 'finding the fewest blocks…';
 
 /** A Seg as a map's key. */
 export const key = ([id, n]: Seg) => `${id}+${n}`;
@@ -29,8 +30,13 @@ export interface Page {
   live: Live[];
 }
 
+/** The overview: its tops (null till they come). */
+export interface Fold {
+  parts: Seg[] | null;
+}
+
 /** The chat as the window knows it. head: what it opens with (a thread's
- * caption); fold: the tops shown (null: not folded); nodes and whole: the
+ * caption); fold: the overview (null: not shown); nodes and whole: the
  * summaries and messages known; open: the blocks opened (true) or shut by
  * hand; minds: the thoughts after each message; pages: the agents' asked
  * for; page: the one shown (null: the chat). */
@@ -39,7 +45,7 @@ export interface Model {
   state: State | null;
   parts: Seg[];
   turn: number;
-  fold: Seg[] | null;
+  fold: Fold | null;
   nodes: Map<string, Node>;
   whole: Map<number, Entry>;
   open: Map<string, boolean>;
@@ -85,7 +91,9 @@ export type Act =
   | { t: 'open'; seg: Seg }
   | { t: 'shut'; seg: Seg }
   | { t: 'fold'; on: boolean }
-  | { t: 'goto'; name: string | null };
+  | { t: 'goto'; name: string | null }
+  /** Back to the chat: off the agent's page, out of the overview. */
+  | { t: 'home' };
 
 /** The model anew, and what it leads to: commands, notes to show. */
 export interface Then {
@@ -108,7 +116,7 @@ export function hear(m: Model, ev: Event): Then {
     n = { ...m, parts: ev.View.parts, turn: ev.View.turn };
     if (m.fold) cmds.push('Root');
   } else if ('Root' in ev) {
-    if (m.fold) n = { ...m, fold: ev.Root.parts };
+    if (m.fold) n = { ...m, fold: { parts: ev.Root.parts } };
   } else if ('Entry' in ev) {
     const { agent, id, entry } = ev.Entry;
     if (agent !== null) {
@@ -169,7 +177,7 @@ export function act(m: Model, a: Act): Then {
       break;
     case 'fold':
       // the overview is the chat's: shown, it shows on the chat's tab
-      n = { ...m, page: a.on ? null : m.page, open: new Map(), fold: a.on ? [] : null };
+      n = { ...m, page: a.on ? null : m.page, open: new Map(), fold: a.on ? { parts: null } : null };
       if (a.on) cmds.push('Root');
       break;
     case 'goto':
@@ -181,8 +189,31 @@ export function act(m: Model, a: Act): Then {
         n = { ...m, pages, page: a.name };
       }
       break;
+    case 'home':
+      n = m.fold ? { ...m, page: null, open: new Map(), fold: null } : m.page === null ? m : { ...m, page: null };
+      break;
   }
   return { m: n, cmds, notes: [] };
+}
+
+/** All the chat shown asks its engine anew, as events were lost or asks
+ * failed: the view, the overview, the blocks opened, the agent's page
+ * shown (the rest are dropped, asked for once shown). What is known
+ * stays till the replies tell it anew. */
+export function resync(m: Model): Then {
+  const cmds: Command[] = ['Attach'];
+  if (m.fold) cmds.push('Root');
+  for (const [k, on] of m.open) {
+    const [id, n] = k.split('+').map(Number);
+    if (on && n > 1) cmds.push({ Zoom: [id, n] });
+  }
+  const pages = new Map<string, Page>();
+  const page = m.page === null ? undefined : m.pages.get(m.page);
+  if (m.page !== null && page) {
+    pages.set(m.page, page);
+    cmds.push({ Agent: m.page });
+  }
+  return { m: { ...m, pages }, cmds, notes: [] };
 }
 
 function withLive(m: Model, agent: string | null, f: (live: Live[]) => Live[]): Model {
@@ -205,6 +236,9 @@ export function tabs(m: Model): (string | null)[] {
 // Rows
 // ----
 
+/** An item of a line about the page. */
+const capItem = (key: string, text: string) => ({ key, rows: [{ t: 'cap', text } as Row] });
+
 /** The page shown, as items (each a part's rows, or an agent's entry),
  * each with a key that stays while it does. */
 export function body(m: Model): { key: string; rows: Row[] }[] {
@@ -213,17 +247,16 @@ export function body(m: Model): { key: string; rows: Row[] }[] {
     const at = agents(m).includes(name) ? 'at work' : 'done';
     const log = m.pages.get(name)?.log ?? [];
     return [
-      { key: 'cap', rows: [{ t: 'cap', text: `${name} · ${at}` }] },
+      capItem('cap', `${name} · ${at}`),
       ...log.map((e, k) => ({ key: `e${k}`, rows: entryRows(e.kind, e.text, e.images) })),
     ].filter((it) => it.rows.length);
   }
   if (m.fold) {
-    return [
-      { key: 'cap', rows: [{ t: 'cap', text: FOLD }] },
-      ...m.fold.map(([id, n]) => ({ key: key([id, n]), rows: partRows(m, id, n, Infinity, false) })),
-    ];
+    const cap = capItem('cap', FOLD);
+    if (!m.fold.parts) return [cap, capItem('folding', FOLDING)];
+    return [cap, ...m.fold.parts.map(([id, n]) => ({ key: key([id, n]), rows: partRows(m, id, n, Infinity, false) }))];
   }
-  const head = m.head === null ? [] : [{ key: 'cap', rows: [{ t: 'cap', text: m.head } as Row] }];
+  const head = m.head === null ? [] : [capItem('cap', m.head)];
   return [...head, ...m.parts.map(([id, n]) => ({ key: key([id, n]), rows: partRows(m, id, n, m.turn, true) }))];
 }
 

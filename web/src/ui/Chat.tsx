@@ -1,10 +1,10 @@
 /** @jsxImportSource octane */
 // The page shown: its items (a part's rows each, or an agent's entry),
 // then what streams, in a list that keeps to its end as it grows while
-// it is at its end (within 120px). A chat shown from scratch starts at
-// its end.
+// it is at its end (within 120px). A page shown anew (another chat, tab
+// or the overview) starts at its end.
 
-import { createResizeObserver, memo, useEffect, useLayoutEffect, useMemo, useRef } from 'octane';
+import { createResizeObserver, memo, useLayoutEffect, useMemo, useRef } from 'octane';
 import * as model from '../model.ts';
 import type { Row } from '../model.ts';
 import * as store from '../store.ts';
@@ -24,22 +24,14 @@ export function Chat() {
   const box = useRef<HTMLDivElement | null>(null);
   const inner = useRef<HTMLDivElement | null>(null);
   const atEnd = useRef(true);
+  // the page shown: one shown anew starts at its end
+  const view = `${ui.shown}\n${m.page ?? ''}\n${m.fold ? 'fold' : ''}`;
+  const viewed = useRef(view);
 
   const stick = () => {
     const el = box.current;
     if (el && atEnd.current) el.scrollTop = el.scrollHeight;
   };
-
-  // a chat shown anew starts at its end
-  useEffect(() => {
-    const f = () => {
-      atEnd.current = true;
-    };
-    store.shownHooks.add(f);
-    return () => {
-      store.shownHooks.delete(f);
-    };
-  }, []);
 
   // what grows (rows, images loading) keeps the end in view
   useLayoutEffect(() => {
@@ -51,7 +43,13 @@ export function Chat() {
     return () => observer.disconnect();
   }, []);
 
-  useLayoutEffect(stick);
+  useLayoutEffect(() => {
+    if (viewed.current !== view) {
+      viewed.current = view;
+      atEnd.current = true;
+    }
+    stick();
+  });
 
   return (
     <div

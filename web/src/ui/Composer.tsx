@@ -4,7 +4,8 @@
 // while the assistant works, a message cuts in. An `@` word being typed
 // shows the other assistants it may name, over the box: ↑ and ↓ pick one,
 // Return or Tab takes it (Return sends a word already a name), a click
-// takes the one clicked, Esc closes it for that word.
+// takes the one clicked, Esc closes it for that word: till the caret is
+// out of it (moved off, the word gone, the message sent).
 
 import ArrowUp from '@octanejs/lucide/icons/arrow-up';
 import Plus from '@octanejs/lucide/icons/plus';
@@ -38,6 +39,12 @@ export function Composer() {
   const naming = at && found.length && hushed !== at[0] ? { start: at[0], found, whole: found.some((n) => n.toLowerCase() === at[1].toLowerCase()) } : null;
   const picked = naming ? Math.min(pick, naming.found.length - 1) : 0;
 
+  // a word closed, once the caret is out of it, is closed no more
+  const atStart = at?.[0] ?? null;
+  useEffect(() => {
+    if (hushed !== null && hushed !== atStart) setHushed(null);
+  }, [hushed, atStart]);
+
   useEffect(() => {
     field.current = ref.current;
     ref.current?.focus();
@@ -64,7 +71,7 @@ export function Composer() {
       take(naming.found[picked]);
       return;
     }
-    store.submit();
+    void store.submit();
     setCaret(0);
   };
 
@@ -151,8 +158,6 @@ export function Composer() {
             store.set({ draft: t.value });
             setCaret(t.selectionEnd);
             setPick(0);
-            // the word closed is gone with its `@`
-            if (hushed !== null && t.value[hushed] !== '@') setHushed(null);
           }}
           onSelect={(e: Event) => setCaret((e.currentTarget as HTMLTextAreaElement).selectionEnd)}
           onKeyDown={onKeyDown}
