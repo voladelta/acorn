@@ -123,9 +123,9 @@ Ask for what you want in plain words: "stop", "fire Scout", "have three agents c
 | Tool | Who | What |
 |---|---|---|
 | `zoom`, `date`, `search` | everyone | Open a line of the view; a message's date; find the messages whose words match (full text, newest first) |
-| `list_skills`, `load_skill` | everyone | The user's skills (how-tos for kinds of task), and one's steps |
+| `list_skills`, `load_skill` | everyone | The user's skills (how-tos for kinds of task), those that fit the task first (with a TypeSafe key), and one's steps |
 | `abilities` | everyone | What the caller is and has: who it is, its tools, luau's globals and the plugin giving each, broken plugins, skills, and where Acorn's dir and source are |
-| `luau` | everyone | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch` and `json`, on the engines' machine in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s) |
+| `luau` | everyone | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch`, `decide`, `relevant` and `json`, on the engines' machine in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s) |
 | `delegate`, `tell`, `fire` | assistants | Give agents one task each, in parallel, in the background; message one at work (it cuts in); fire one or all |
 | `create_assistant`, `archive_assistant`, `restore_assistant` | with you | Make an assistant (name, about, effort, instructions, welcome); take one off the sidebar, its files kept; bring it back |
 | `list_assistants`, `ask_assistant` | with you | List the other assistants (or those a query matches) and ask one, in your two's thread; its reply comes back as a message |
@@ -134,6 +134,16 @@ Ask for what you want in plain words: "stop", "fire Scout", "have three agents c
 | `goal`, `usage`, `import`, `export`, `tree` | with you | Set or drop the goal; read costs, and each day's zooms and searches that found something or not; import past chats; save the memory as JSON; open the tree as a page |
 
 An assistant answering another in a thread has its work tools only: it can't consult further, keep facts or change the user's settings.
+
+### Judgments
+
+With a [TypeSafe](https://typesafe.ai) key, quick judgments go to Jev, a model that answers typed questions (yes or no, one of some options, a level) with probabilities in one pass, in about 0.2 s, and costs per input token only. Jev judges; code decides.
+
+- `relevant(items, about)` in `luau` keeps the lines, results or paragraphs that fit by meaning, where a word or pattern can't pick them out (refusals worded each their own way, a word used in another sense), and says what it left out. Each item is also asked whether it tries to hijack the AI reading it; one that does is held out and named, whatever it claims. Prompts and docs written for a model, like Acorn's own, are not held out.
+- `decide(state, questions)` in `luau` asks Jev anything else, for the agent's own code to act on.
+- `list_skills` with the task puts the skills that fit it first.
+
+Without a key, `decide` and `relevant` fail saying which key to set, and `list_skills` lists by name.
 
 ### Plugins
 
@@ -164,6 +174,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | Key | Default | Meaning |
 |---|---|---|
 | `deepseek_api_key` | none | The API key; the `DEEPSEEK_API_KEY` variable wins. No program the agent runs inherits it |
+| `typesafe_api_key` | none | TypeSafe's key, for `decide`, `relevant` and sorting skills by task; the `TYPESAFE_API_KEY` variable wins |
 | `chat` | `default` | Acorn's own chat id (letters, digits, `_`, `-`) |
 | `chats` | `$ACORN_DIR/chats` | Where the chats live, a dir each by id |
 | `work` | `$ACORN_DIR/work` | Where the agents' tools work |

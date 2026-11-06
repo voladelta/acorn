@@ -270,8 +270,8 @@ fn own() -> Vec<Spec> {
     ),
     spec(
       "list_skills",
-      "The user's skills (how-tos for particular tasks), each as name: description.",
-      json!({"dir": {"type": "string", "description": "A project folder you work in, whose own skills count too."}}),
+      "The user's skills (how-tos for particular tasks), each as name: description; given the task, those that fit it first.",
+      json!({"task": {"type": "string", "description": "The task at hand, in a few words: the skills that fit it come first."}, "dir": {"type": "string", "description": "A project folder you work in, whose own skills count too."}}),
       &[],
     ),
     spec(

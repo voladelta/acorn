@@ -20,6 +20,8 @@ pub mod compactor;
 #[cfg(feature = "engine")]
 pub mod config;
 #[cfg(feature = "engine")]
+pub mod decide;
+#[cfg(feature = "engine")]
 pub mod disk;
 pub mod effort;
 #[cfg(feature = "engine")]

@@ -187,7 +187,9 @@ impl Engine {
           .mem
           .search(memory::CHAT, &str("query"), num("n", 10) as usize),
       ),
-      "list_skills" => Out::ok(crate::skills::list(&crate::skills::roots(&cwd, &str("dir")))),
+      "list_skills" => {
+        Out::ok(crate::skills::list_for(&crate::skills::roots(&cwd, &str("dir")), &str("task"), &cancel).await)
+      }
       "load_skill" => {
         crate::skills::load(&crate::skills::roots(&cwd, &str("dir")), &str("name")).map_or_else(Out::fail, Out::ok)
       }

@@ -46,8 +46,9 @@ skill tools as dir). A later one's skill replaces an earlier one's of the same
 name. A skill holds the user's own rules for a kind of task (format, tone,
 steps) that you cannot guess, however simple the task looks. So at the start of
 any task that makes something (notes, code, a file, a plan), before its first
-step, list_skills (with dir, the project folder, if the task names one), then
-load_skill the one that fits and follow it. Do this even when the job is long or
+step, list_skills (with the task in a few words, which puts the skills that fit
+it first, and dir, the project folder, if the task names one), then load_skill
+the one that fits and follow it. Do this even when the job is long or
 handed to you with a single line. A plain question needs no skill. To make one,
 write {acorn}/<name>/{FILE}, or in a project's .acorn/skills to keep it to that
 project, starting with a --- block of a description: line saying when it applies.",
@@ -156,6 +157,72 @@ pub fn list(roots: &[PathBuf]) -> String {
   }
 }
 
+/// `list`, the skills that fit `task` first, as Jev judges them (`decide`):
+/// "Fit the task" (p >= FITS), best first; "May fit" (p >= MAYBE); the rest
+/// by name alone. With no task, no key, or fewer than two skills, `list`;
+/// a failed judgment says why after it.
+pub async fn list_for(roots: &[PathBuf], task: &str, cancel: &tokio_util::sync::CancellationToken) -> String {
+  let skills = scan(roots);
+  let task = task.trim();
+  if task.is_empty() || skills.len() < 2 || crate::decide::key().is_none() {
+    return list(roots);
+  }
+  let questions: serde_json::Map<String, serde_json::Value> = skills
+    .iter()
+    .enumerate()
+    .map(|(i, s)| {
+      let ask = format!("Does the skill '{}' ({}) apply to this task?", s.name, s.about);
+      (
+        format!("s{i}"),
+        serde_json::json!({"type": "noul", "instructions": ask}),
+      )
+    })
+    .collect();
+  let state = serde_json::json!({"task": task});
+  match crate::decide::ask(&state, &questions.into(), cancel).await {
+    Ok(answers) => {
+      let ps: Vec<f64> = (0..skills.len())
+        .map(|i| answers[format!("s{i}")]["noul"].as_f64().unwrap_or(0.0))
+        .collect();
+      sorted(&skills, &ps)
+    }
+    Err(why) => format!("{}\n\n(Not sorted for the task: {why})", list(roots)),
+  }
+}
+
+/// A skill fits a task from this probability on, and may fit from MAYBE.
+const FITS: f64 = 0.5;
+const MAYBE: f64 = 0.3;
+
+/// The skills by how likely each fits: those that do, best first, with
+/// their descriptions; those that may; the others' names.
+fn sorted(skills: &[Skill], ps: &[f64]) -> String {
+  let mut order: Vec<usize> = (0..skills.len()).collect();
+  order.sort_by(|&a, &b| ps[b].total_cmp(&ps[a]));
+  let line = |i: usize| format!("{}: {}", skills[i].name, skills[i].about);
+  let (mut fit, mut may, mut rest) = (Vec::new(), Vec::new(), Vec::new());
+  for i in order {
+    match ps[i] {
+      p if p >= FITS => fit.push(line(i)),
+      p if p >= MAYBE => may.push(line(i)),
+      _ => rest.push(skills[i].name.clone()),
+    }
+  }
+  rest.sort();
+  let mut parts = vec![if fit.is_empty() {
+    "None fit the task.".to_string()
+  } else {
+    format!("Fit the task, best first:\n{}", fit.join("\n"))
+  }];
+  if !may.is_empty() {
+    parts.push(format!("May fit:\n{}", may.join("\n")));
+  }
+  if !rest.is_empty() {
+    parts.push(format!("Others: {}", rest.join(", ")));
+  }
+  parts.join("\n\n")
+}
+
 /// A skill's steps, by name, with where it lives, which its relative paths
 /// start from.
 pub fn load(roots: &[PathBuf], name: &str) -> Result<String, String> {
@@ -180,6 +247,57 @@ mod tests {
   fn skill(dir: &Path, folder: &str, text: &str) {
     fs::create_dir_all(dir.join(folder)).unwrap();
     fs::write(dir.join(folder).join(FILE), text).unwrap();
+  }
+
+  /// list_for against TypeSafe's Jev; run with `cargo test -- --ignored`
+  /// and TYPESAFE_API_KEY.
+  #[tokio::test]
+  #[ignore]
+  async fn the_skills_that_fit_a_task_come_first_by_jev() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, about) in [
+      ("commit-msg", "Writing git commit messages in the user's style"),
+      ("slides", "Making a slide deck or presentation"),
+      (
+        "tax-receipts",
+        "Sorting receipts and invoices for the yearly tax return",
+      ),
+      ("email-reply", "Replying to work email in the user's tone"),
+    ] {
+      skill(dir.path(), name, &format!("---\ndescription: {about}\n---\nsteps"));
+    }
+    let roots = [dir.path().to_path_buf()];
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let got = list_for(
+      &roots,
+      "answer Linh's mail about the offsite, then make 5 slides for it",
+      &cancel,
+    )
+    .await;
+    println!("{got}");
+    let fit = got.split("\n\n").next().unwrap();
+    assert!(
+      fit.starts_with("Fit the task") && fit.contains("slides:") && fit.contains("email-reply:"),
+      "{got}"
+    );
+    assert!(!fit.contains("tax-receipts") && !fit.contains("commit-msg"), "{got}");
+    let none = list_for(&roots, "what is the capital of Peru?", &cancel).await;
+    assert!(none.starts_with("None fit the task."), "{none}");
+  }
+
+  #[test]
+  fn skills_that_fit_come_first_and_the_rest_by_name() {
+    let skill = |name: &str| Skill {
+      name: name.into(),
+      at: PathBuf::new(),
+      about: format!("{name} work"),
+    };
+    let skills = [skill("a"), skill("b"), skill("c"), skill("d")];
+    assert_eq!(
+      sorted(&skills, &[0.1, 0.9, 0.4, 0.6]),
+      "Fit the task, best first:\nb: b work\nd: d work\n\nMay fit:\nc: c work\n\nOthers: a"
+    );
+    assert_eq!(sorted(&skills[..1], &[0.0]), "None fit the task.\n\nOthers: a");
   }
 
   #[test]
