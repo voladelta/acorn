@@ -358,6 +358,24 @@ fn home() -> Vec<Spec> {
       &[],
     ),
     spec(
+      "set_timer",
+      "Remind the user, or do a task, later, when they ask (\"remind me at 9 to call mom\", \"check the build in an hour\", \"every evening, sum up the dev group\"): when: at a moment, in a while, or repeat on a cron line (its first time then, unless at or in says). A reminder is your message, said as it is when due; a task (task true) comes back as a message \"[Timer #id] what\" that starts your turn, and you do it then. It fires in this chat, and on the user's phone if this chat reaches it. Answers when it fires: tell the user.",
+      json!({"what": {"type": "string", "description": "A reminder's words to the user, or the task, said whole: it is all you will have then."}, "at": {"type": "string", "description": "RFC 3339 with the user's offset (2026-11-07T09:00:00+07:00), or a time on this machine (2026-11-07 09:00)."}, "in": {"type": "string", "description": "A while from now: 90s, 20m, 2h, 1h30m, 3d, 1w."}, "repeat": {"type": "string", "description": "A cron line, minute hour day month weekday, on this machine's time: 0 9 * * 1-5 is weekdays at 9."}, "task": {"type": "boolean"}}),
+      &["what"],
+    ),
+    spec(
+      "list_timers",
+      "The timers set in this chat, soonest first: each one's #id, when it fires next, what, and how it repeats.",
+      json!({}),
+      &[],
+    ),
+    spec(
+      "cancel_timer",
+      "Cancel a timer of this chat's, by its #id, when the user says so or it is no longer wanted.",
+      json!({"id": {"type": "integer"}}),
+      &["id"],
+    ),
+    spec(
       "usage",
       "What the user's calls cost, by day and kind, every assistant's chats and threads together, the last days (7 by default), then each day's zooms (found or not) and searches (with hits or without). Show the user a short table, in dollars.",
       json!({"days": {"type": "integer"}}),
@@ -469,6 +487,11 @@ mod tests {
       assert!(names(who, thread).contains(&"abilities"), "{who} {thread}");
     }
     assert!(names(MAIN, false).contains(&"extend"));
+    assert!(names(MAIN, false).contains(&"set_timer") && !names(MAIN, true).contains(&"set_timer"));
+    assert!(
+      !names("Scout", false).contains(&"set_timer"),
+      "a timer fires in an assistant's chat"
+    );
     assert!(!names(MAIN, true).contains(&"extend") && !names("Scout", false).contains(&"extend"));
     let (chat, thread) = (master(Path::new("/w"), false), master(Path::new("/w"), true));
     assert!(chat.contains("# Growing") && !thread.contains("# Growing"));

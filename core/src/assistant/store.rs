@@ -73,13 +73,20 @@ pub fn archived() -> Vec<Assistant> {
   saved().into_iter().filter(|a| a.archived).collect()
 }
 
-/// Every assistant, the archived too.
+/// Every assistant, the archived too: Acorn, Max, the bridges' (as
+/// Telegram App), then those made.
 fn everyone() -> Vec<Assistant> {
   let mut all = vec![Assistant::acorn()];
   if config::get().chat != MAX {
     all.push(Assistant::max());
   }
-  all.extend(saved());
+  for theirs in crate::bridge::all().iter().map(|b| b.assistant()) {
+    if !all.iter().any(|a| a.id == theirs.id) {
+      all.push(theirs);
+    }
+  }
+  let taken: Vec<String> = all.iter().map(|a| a.id.clone()).collect();
+  all.extend(saved().into_iter().filter(|m| !taken.contains(&m.id)));
   all
 }
 
@@ -98,7 +105,7 @@ fn saved() -> Vec<Assistant> {
 /// or the one asking (`me`, its id).
 pub fn archive(name: &str, me: &str) -> Result<Assistant, String> {
   mark(name, true, |a| {
-    if a.is_acorn() || a.id == MAX {
+    if a.is_acorn() || a.id == MAX || crate::bridge::of(&a.id).is_some() {
       return Err(format!("{} stays: only assistants made can be archived.", a.name));
     }
     if a.id == me {

@@ -130,6 +130,7 @@ async fn serve() {
     token: Arc::new(token()),
   };
 
+  acorn_telegram::add();
   let (tx, mut heard) = tokio::sync::mpsc::unbounded_channel();
   hub::listen(tx);
   let teller = server.clone();

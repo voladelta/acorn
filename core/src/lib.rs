@@ -12,6 +12,8 @@
 pub mod ai;
 pub mod assistant;
 #[cfg(feature = "engine")]
+pub mod bridge;
+#[cfg(feature = "engine")]
 pub mod chat;
 #[cfg(feature = "engine")]
 pub mod clip;
@@ -45,6 +47,8 @@ pub mod plugins;
 pub mod price;
 #[cfg(feature = "engine")]
 pub mod skills;
+#[cfg(feature = "engine")]
+pub mod timers;
 #[cfg(feature = "engine")]
 pub mod tools;
 #[cfg(feature = "engine")]

@@ -20,6 +20,10 @@ use crate::{Block, Kind, Served, config};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+/// Where a message came from, as told (`wire::Entry`).
+pub const APP: &str = "app";
+pub const TIMER: &str = "timer";
+
 /// A turn's head, as a summary's is "Compaction:": one prompt serves both.
 const HEAD: &str = "Turn: the user's new message:\n\n";
 
@@ -33,8 +37,8 @@ const GOAL_NO: &str = "The goal isn't satisfied yet: keep working. Treat the cur
 
 impl Engine {
   /// A message from the person (its images first put in place), logged
-  /// and taken.
-  pub(super) async fn say(self: Arc<Self>, text: String, images: Vec<Vec<u8>>) {
+  /// and taken, told as come from `via` (none: the app).
+  pub(super) async fn say(self: Arc<Self>, text: String, images: Vec<Vec<u8>>, via: Option<String>) {
     let dir = self.lock().mem.dir.clone();
     let mut names = Vec::new();
     for bytes in images {
@@ -52,10 +56,48 @@ impl Engine {
           images: names,
           ..Msg::new(Kind::User, text)
         };
-        let span = chat.push_msg(msg);
+        let span = chat.push_via(msg, Some(via.as_deref().unwrap_or(APP)));
         chat.take(span);
       })
       .await;
+  }
+
+  /// A reminder come due (`timers`): the assistant's own message, said
+  /// as it is, no call made.
+  pub fn remind(self: &Arc<Self>, text: String) {
+    let me = self.clone();
+    tokio::spawn(async move {
+      me.writing(async || {
+        me.lock().push_via(Msg::new(Kind::Acorn, text), Some(TIMER));
+      })
+      .await
+    });
+  }
+
+  /// A note in the chat, from outside it (a bridge's: paired, refused).
+  pub fn notice(self: &Arc<Self>, text: String) {
+    let me = self.clone();
+    tokio::spawn(async move {
+      me.writing(async || {
+        me.lock().push(None, Kind::Note, &text);
+      })
+      .await
+    });
+  }
+
+  /// A task come due (`timers`): a message from outside the chat, as an
+  /// agent's report is, that starts a turn, never cutting in.
+  pub fn wake(self: &Arc<Self>, text: String) {
+    let me = self.clone();
+    tokio::spawn(async move {
+      me.writing(async || {
+        let mut chat = me.lock();
+        let span = chat.push_via(Msg::new(Kind::Work, text), Some(TIMER));
+        chat.take(span);
+        chat.change();
+      })
+      .await
+    });
   }
 
   /// Calls while messages wait; then a thread's reply goes to its asker,
@@ -354,6 +396,7 @@ impl Chat {
           date: memory::iso_now(),
           images: vec![],
           spend: None,
+          via: None,
         };
         self.all(Event::Entry {
           agent: Some(name.into()),
@@ -366,7 +409,12 @@ impl Chat {
     }
   }
 
-  pub(super) fn push_msg(&mut self, mut msg: Msg) -> Span {
+  pub(super) fn push_msg(&mut self, msg: Msg) -> Span {
+    self.push_via(msg, None)
+  }
+
+  /// To the chat, told as come from `via` (`wire::Entry`).
+  pub(super) fn push_via(&mut self, mut msg: Msg, via: Option<&str>) -> Span {
     msg.text = self.redact(&msg.text);
     let roots = match self.mem.push(vec![msg]) {
       Ok(roots) => roots,
@@ -385,6 +433,7 @@ impl Chat {
         date: r.date.clone(),
         images: r.images.clone(),
         spend: None,
+        via: via.map(str::to_string),
       };
       self.all(Event::Entry {
         agent: None,
@@ -444,6 +493,7 @@ impl Chat {
           date: memory::iso_now(),
           images: vec![],
           spend: None,
+          via: None,
         };
         self.all(Event::Entry {
           agent: agent.map(str::to_string),

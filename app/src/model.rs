@@ -224,7 +224,11 @@ impl Model {
         if !text.is_empty() || !images.is_empty() {
           self.page = None;
           self.fold = None;
-          then.cmds.push(Command::Say { text, images });
+          then.cmds.push(Command::Say {
+            text,
+            images,
+            via: None,
+          });
         }
       }
       Act::Open(seg) => {
@@ -505,6 +509,7 @@ mod tests {
       date: "2026-10-26T10:00:00.000Z".into(),
       images: vec![],
       spend: None,
+      via: None,
     }
   }
 

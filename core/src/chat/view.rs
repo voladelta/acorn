@@ -104,6 +104,7 @@ impl Chat {
             date: m.date,
             images: m.images,
             spend: self.turn_use(id),
+            via: None,
           },
         ));
       }

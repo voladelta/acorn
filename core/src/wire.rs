@@ -17,7 +17,9 @@ pub const MODEL: &str = "deepseek-flash";
 pub type Seg = (u64, u64);
 
 /// A message logged: its kind, text, date (ISO), images, and, the last of
-/// a turn, what the turn's requests used.
+/// a turn, what the turn's requests used; as it is told, where it came
+/// from (`via`: "app", "telegram", "timer"; none for the engine's own),
+/// never kept.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Entry {
   pub kind: Kind,
@@ -25,6 +27,8 @@ pub struct Entry {
   pub date: String,
   pub images: Vec<String>,
   pub spend: Option<Spend>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub via: Option<String>,
 }
 
 /// A summary: its text, its last message's date.
@@ -152,11 +156,14 @@ pub enum Event {
 /// said, and an assistant does it by a tool (`tools`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
-  /// A message; one sent while the assistant works cuts in.
+  /// A message; one sent while the assistant works cuts in. via: where
+  /// it was written (none: the app).
   Say {
     text: String,
     #[serde(with = "base64s")]
     images: Vec<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    via: Option<String>,
   },
   /// The app (again) shows this chat: tell it all anew.
   Attach,

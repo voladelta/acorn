@@ -254,7 +254,7 @@ impl Ui {
   /// leaves it stale.
   fn unsent(self, chat: String, cmd: Command) {
     match cmd {
-      Command::Say { text, images } => {
+      Command::Say { text, images, .. } => {
         self
           .draft
           .update(|d| *d = if d.is_empty() { text } else { format!("{text}\n\n{d}") });

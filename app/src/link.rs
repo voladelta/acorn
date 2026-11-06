@@ -82,14 +82,25 @@ mod imp {
   /// Each chat's commands, waiting their turn.
   static QUEUES: LazyLock<Mutex<HashMap<String, UnboundedSender<Command>>>> = LazyLock::new(Default::default);
 
+  /// The bridges this app has (`acorn_core::bridge`), added once,
+  /// before any assistant is listed or chat opened.
+  fn bridges() {
+    static ADDED: std::sync::Once = std::sync::Once::new();
+    ADDED.call_once(|| {
+      acorn_telegram::add();
+    });
+  }
+
   /// The assistants known at the start.
   pub fn assistants() -> Vec<Assistant> {
+    bridges();
     acorn_core::assistant::all()
   }
 
   /// Every chat opened, and all told from now on (None: someone already
   /// hears them).
   pub fn listen() -> Option<Heard> {
+    bridges();
     let (tx, mut chats) = unbounded_channel();
     if !hub::listen(tx) {
       return None;

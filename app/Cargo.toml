@@ -19,6 +19,7 @@ tokio = { version = "1", features = ["sync"] }
 # in `acorn-server` (`link`).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 acorn-core = { path = "../core", features = ["engine"] }
+acorn-telegram = { path = "../bridges/telegram" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 env_logger = "0.11"
 mimalloc = "0.1"

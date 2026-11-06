@@ -6,7 +6,8 @@
 //! under `with/`). Each opens once, as it is first needed, or at the
 //! start if on disk, in a slot of its own: one opening holds up no other
 //! chat, and a chat still opening is not there yet (`get`), or is waited
-//! for (`ready`). Their events go to one listener, the app, named by chat.
+//! for (`ready`). Their events go to one listener, the app, named by chat,
+//! and a chat's also to whoever taps it (`tap`: Telegram, its chat's).
 
 use super::Engine;
 use crate::assistant::{self, Assistant};
@@ -16,7 +17,7 @@ use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, OnceLock};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 /// Where every chat's events go, each named by its chat.
 pub type Heard = UnboundedSender<(String, Event)>;
@@ -28,6 +29,24 @@ type Slot = Arc<Mutex<Option<Arc<Engine>>>>;
 
 static OPEN: LazyLock<Mutex<BTreeMap<String, Slot>>> = LazyLock::new(Default::default);
 
+/// Who else hears a chat's events, by chat.
+static TAPS: LazyLock<Mutex<BTreeMap<String, Vec<UnboundedSender<Event>>>>> = LazyLock::new(Default::default);
+
+/// A chat's events from now on, as the app hears them.
+pub fn tap(id: &str) -> UnboundedReceiver<Event> {
+  let (tx, rx) = unbounded_channel();
+  TAPS.lock().entry(id.to_string()).or_default().push(tx);
+  rx
+}
+
+/// An event of a chat's, to its taps (those gone, let go).
+pub(super) fn tapped(id: &str, ev: &Event) {
+  let mut taps = TAPS.lock();
+  if let Some(all) = taps.get_mut(id) {
+    all.retain(|t| t.send(ev.clone()).is_ok());
+  }
+}
+
 /// Where the chats' events go from now on: set once (false: it was).
 pub fn listen(heard: Heard) -> bool {
   HEARD.set(heard).is_ok()
@@ -35,8 +54,15 @@ pub fn listen(heard: Heard) -> bool {
 
 /// Every assistant's chat, and every thread on disk, opened (on the
 /// runtime): the work a quit cut in any of them goes on. Each one's
-/// failure is told as its note.
+/// failure is told as its note. Then the timers run, and the bridges
+/// (`bridge`).
 pub fn open_all() {
+  open_chats();
+  crate::timers::start();
+  crate::bridge::start();
+}
+
+fn open_chats() {
   let all = assistant::all();
   for me in &all {
     let _ = chat(me);

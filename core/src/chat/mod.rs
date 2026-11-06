@@ -39,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 
 pub use agents::Agent;
 pub(crate) use imports::Batch;
+pub use turns::{APP, TIMER};
 pub use usage::over_budget;
 
 /// The shortest text a secret is purged by: shorter, it would erase too much.
@@ -241,6 +242,7 @@ impl Engine {
   }
 
   fn tell(&self, ev: Event) {
+    hub::tapped(&self.id, &ev);
     let _ = self.events.send((self.id.clone(), ev));
   }
 
@@ -260,8 +262,8 @@ impl Engine {
   pub fn command(self: &Arc<Self>, cmd: Command) {
     let me = self.clone();
     match cmd {
-      Command::Say { text, images } => {
-        tokio::spawn(async move { me.say(text, images).await });
+      Command::Say { text, images, via } => {
+        tokio::spawn(async move { me.say(text, images, via).await });
       }
       Command::Attach => self.attach(),
       Command::Zoom(seg) => self.lock().zoom(seg),

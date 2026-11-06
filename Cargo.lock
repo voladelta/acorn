@@ -7,6 +7,7 @@ name = "acorn"
 version = "0.1.0"
 dependencies = [
  "acorn-core",
+ "acorn-telegram",
  "chrono",
  "env_logger",
  "image",
@@ -53,10 +54,28 @@ name = "acorn-server"
 version = "0.1.0"
 dependencies = [
  "acorn-core",
+ "acorn-telegram",
  "axum",
  "serde_json",
  "tokio",
  "tower-http 0.7.1",
+]
+
+[[package]]
+name = "acorn-telegram"
+version = "0.1.0"
+dependencies = [
+ "acorn-core",
+ "chrono",
+ "futures-util",
+ "parking_lot 0.13.0",
+ "rand 0.10.3",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

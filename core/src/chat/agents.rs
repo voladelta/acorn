@@ -99,15 +99,26 @@ pub struct Kit {
   thread: bool,
   /// What stops the turn the call serves (an agent's view waits on it).
   halt: CancellationToken,
+  /// The bridge whose assistant's chat with the user this is: its tools.
+  bridge: Option<Arc<dyn crate::bridge::Bridge>>,
 }
 
 impl Toolbox for Kit {
   fn specs(&self) -> Vec<Spec> {
-    tools::list(&self.who, self.thread)
+    let mut specs = tools::list(&self.who, self.thread);
+    specs.extend(self.bridge.iter().flat_map(|b| b.specs()));
+    specs
   }
 
   fn call(&self, name: String, input: Value, cancel: CancellationToken) -> BoxFuture<'static, Out> {
     let (engine, cwd, halt) = (self.engine.clone(), self.work.join(&self.who), self.halt.clone());
+    if let Some(bridge) = self
+      .bridge
+      .as_ref()
+      .filter(|b| b.specs().iter().any(|s| s.name == name))
+    {
+      return bridge.call(name, input, cancel);
+    }
     let specs = (name == "abilities").then(|| self.specs());
     let (who, thread) = (self.who.clone(), self.thread);
     async move {
@@ -238,6 +249,10 @@ impl Engine {
         Out::ok(said)
       }
       "usage" => Out::ok(super::usage::told(num("days", 7).clamp(1, 366) as i64)),
+      "set_timer" | "list_timers" | "cancel_timer" => {
+        let chat = self.lock().id.clone();
+        crate::timers::tool(&chat, name, &input).map_or_else(Out::fail, Out::ok)
+      }
       "import" => self.import_tool(&input).await,
       "export" => self
         .export()
@@ -437,6 +452,7 @@ impl Engine {
         thread.command(crate::wire::Command::Say {
           text: message.into(),
           images: vec![],
+          via: None,
         });
         Out::ok(format!(
           "Asked {}. Their reply will reach you as a message \"[{}]\".",
@@ -533,6 +549,9 @@ impl Chat {
       who: agent.map_or(MAIN, |a| a.name.as_str()).to_string(),
       thread: self.with.is_some(),
       halt: self.halt.clone(),
+      bridge: (agent.is_none() && self.with.is_none())
+        .then(|| crate::bridge::of(&self.me.id))
+        .flatten(),
     })
   }
 
@@ -682,6 +701,7 @@ impl Chat {
           date: r.date,
           images: r.images,
           spend: None,
+          via: None,
         })
         .collect()
     });
