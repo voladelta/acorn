@@ -401,3 +401,23 @@ async fn a_busy_bot_waits_as_told_and_a_conflict_is_said() {
   let got = tg.bot.call("getUpdates", &json!({"timeout": 0}), &cancel).await;
   assert!(matches!(got, Err(Fail::Conflict(_))));
 }
+
+#[tokio::test]
+async fn no_program_the_agent_runs_sees_the_bots_token() {
+  configured();
+  unsafe { std::env::set_var(KEY, "123:secret") };
+  let (bot, _asked) = api(plain).await;
+  let dir = tempfile::tempdir().unwrap();
+  bridge::add(Tg::new(bot, dir.path().into(), Box::new(Fake(Default::default()))));
+  assert!(config::hidden().contains(&KEY));
+  let ran = acorn_core::machine::shell(
+    "echo \"${TELEGRAM_BOT_TOKEN:-gone}\"",
+    dir.path(),
+    10_000.0,
+    CancellationToken::new(),
+  )
+  .await
+  .unwrap();
+  let (out, _) = ran.tails();
+  assert_eq!(out.trim(), "gone");
+}

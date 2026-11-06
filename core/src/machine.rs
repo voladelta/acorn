@@ -137,11 +137,13 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
     .current_dir(workdir)
     .envs(ENV)
     .env("ACORN_RUN", &*RUN)
-    .env_remove(config::KEY_VAR)
     .stdin(std::process::Stdio::null())
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped())
     .process_group(0);
+  for key in config::hidden() {
+    cmd.env_remove(key);
+  }
   let mut child = cmd.spawn().map_err(|err| err.to_string())?;
   let pid = child.id().map_or(0, |p| p as i32);
   let mut reap = Reap(pid);

@@ -26,6 +26,8 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Import** | Your past Claude Code and Codex sessions on this machine, and Claude and ChatGPT chats from their websites' exports, read into the chat |
 | **Growing** | An assistant sees what it is (`abilities`) and grows itself (`extend`): a skill when you teach it how you want a kind of task done, a plugin when a task needs a service or routine it lacks; each checked before it goes in, the old one kept |
 | **Goals** | Name a finish line ("keep at it until the tests pass") and the assistant works until a check says it is met; the goal shows above the message box |
+| **Timers** | "Remind me at 9 to call mom", "check the build in an hour", "every evening, sum up the dev group": a reminder said when due, or a task done then, once or on a cron line |
+| **Telegram App** | With a bot token, an assistant whose chat is also your DM with the bot: write in Telegram or the app, one chat. It hears the groups the bot is in for 24 hours, and posts only when you ask |
 
 ## How it works
 
@@ -131,6 +133,8 @@ Ask for what you want in plain words: "stop", "fire Scout", "have three agents c
 | `list_assistants`, `ask_assistant` | with you | List the other assistants (or those a query matches) and ask one, in your two's thread; its reply comes back as a message |
 | `extend` | with you | Install, replace or remove a skill or a plugin; a plugin is load-checked with all the others first and refused if it fails (one only missing its key is installed); what it replaces goes to the attic |
 | `remember`, `forget`, `purge`, `unpurge` | with you | Keep and drop facts; erase a message, or take that back within ten minutes |
+| `set_timer`, `list_timers`, `cancel_timer` | with you | A reminder (said as is when due, no call made) or a task (a turn then), at a time, in a while, or on a cron line in this machine's time zone; kept across quits, and one missed fires late, once |
+| `list_rooms`, `read_room`, `tell_room`, `allow_room` | Telegram App | The groups and channels the bot is in; one's last 24 hours (only what bears on `about`, and never a line that tries to give an AI orders, with a TypeSafe key); a post there as the bot; record one someone else added the bot to, or leave it |
 | `goal`, `usage`, `import`, `export`, `tree` | with you | Set or drop the goal; read costs, and each day's zooms and searches that found something or not; import past chats; save the memory as JSON; open the tree as a page |
 
 An assistant answering another in a thread has its work tools only: it can't consult further, keep facts or change the user's settings.
@@ -146,6 +150,15 @@ With a [TypeSafe](https://typesafe.ai) key, quick judgments go to Jev, a model t
 Without a key, `decide` and `relevant` fail saying which key to set, and `list_skills` lists by name.
 
 How well Jev does each of these is measured on labelled data frozen in [core/evals](core/evals): grep hits kept for the sense asked, refusals worded twenty ways in a log (asked in English and in Vietnamese), web results filtered to a question, a page by section, injections among prompts and plain text, and the skills that fit a task. Each set has a bar, and the run fails below it: `cargo test -p acorn-core evals -- --ignored --nocapture`, with `TYPESAFE_API_KEY` (under two cents a run).
+
+### Telegram
+
+1. Make a bot with [@BotFather](https://t.me/BotFather) and put its token in `config.json` as `telegram_bot_token` (or `TELEGRAM_BOT_TOKEN`), then start Acorn or `acorn-server`.
+2. Telegram App appears in the sidebar with a pairing code. Send the code to your bot: it binds the bot to your Telegram account, and it answers no one else.
+3. Chat there or in the app; it is one chat. Telegram gets all Telegram App says, and what you write to it in the app, quoted; replies to what you wrote in the app come without a buzz, reminders with one. `@Max` in a message asks Max, whose answer comes under his name.
+4. Add the bot to a group or channel to have it heard: one you add is recorded at once, one someone else adds once you say so. To hear every message of a group, make the bot an admin there or turn its privacy mode off (BotFather, `/setprivacy`) and add it again; a channel needs it as an admin to post.
+
+Messages of groups are kept in `telegram/rooms/` for 24 hours, erased each day at 04:00 and as Acorn starts, and never enter a chat's memory unless Telegram App reads them for you. Updates come by long poll, so no public address is needed. One Acorn polls a bot at a time: a second is refused by Telegram, and says so.
 
 ### Plugins
 
@@ -175,8 +188,9 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 
 | Key | Default | Meaning |
 |---|---|---|
-| `deepseek_api_key` | none | The API key; the `DEEPSEEK_API_KEY` variable wins. No program the agent runs inherits it |
+| `deepseek_api_key` | none | The API key; the `DEEPSEEK_API_KEY` variable wins. No program the agent runs inherits it, nor the TypeSafe or Telegram variables |
 | `typesafe_api_key` | none | TypeSafe's key, for `decide`, `relevant` and sorting skills by task; the `TYPESAFE_API_KEY` variable wins |
+| `telegram_bot_token` | none | A Telegram bot's token: Telegram App runs with it; the `TELEGRAM_BOT_TOKEN` variable wins |
 | `chat` | `default` | Acorn's own chat id (letters, digits, `_`, `-`) |
 | `chats` | `$ACORN_DIR/chats` | Where the chats live, a dir each by id |
 | `work` | `$ACORN_DIR/work` | Where the agents' tools work |
@@ -195,6 +209,9 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `~/.acorn/config.json` | The settings above |
 | `~/.acorn/assistants.json` | The assistants created, oldest first |
 | `~/.acorn/facts.db` | Facts, shared by all assistants |
+| `~/.acorn/timers.json` | The timers set, every chat's |
+| `~/.acorn/telegram.json` | Telegram's: where its updates are, your Telegram id once paired, the groups the bot is in |
+| `~/.acorn/telegram/rooms/<id>.jsonl` | A group's or channel's last 24 hours, a line a message |
 | `~/.acorn/plugins/` | Luau files that add to or replace `luau`'s globals |
 | `~/.acorn/skills/` | Skills, a dir each with a `SKILL.md` |
 | `~/.acorn/attic/` | Skills and plugins `extend` replaced or removed, named by kind, name and time |
@@ -209,6 +226,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 ## Privacy
 
 - The chat and its summaries are sent to DeepSeek on every call, as is any fact an assistant sees.
+- With Telegram, all Telegram App says, and what you write to it, goes through Telegram; and the groups the bot is in are kept here for 24 hours, readable by Telegram App.
 - A search or fetch goes to DeepSeek, or to the service of a plugin that replaces it, as does whatever else a plugin sends.
 - `purge` erases a message at once from everything a call or the app can see. It is held in `chat.db` for ten minutes, so `unpurge` can take it back; its text and old bytes stay in the file until a wipe deletes it and rewrites the file, which runs once the chat is idle (no turn, agent or summary at work) and no purge is still in its ten minutes, and is retried at the next launch if it fails or Acorn quits first.
 - Summaries written while a purged message's summary was in the compactor's context may still echo it.
@@ -232,7 +250,7 @@ cargo test
 cargo clippy --all-targets
 ```
 
-The workspace has three crates: `core` (`acorn-core`: the memory tree, compactor, DeepSeek loop, tools, import, facts), `app` (`acorn`: the window, on nsh, and the macOS and Linux binary), and `server` (`acorn-server`: the engines and API for the web window); the web window itself is the Bun package in `web/`. One test in `app/tests/live.rs` calls the real API and is ignored by default.
+The workspace has four crates: `core` (`acorn-core`: the memory tree, compactor, DeepSeek loop, tools, import, facts, timers, and the `bridge` a chat app plugs into), `app` (`acorn`: the window, on nsh, and the macOS and Linux binary), `server` (`acorn-server`: the engines and API for the web window), and `bridges/telegram` (`acorn-telegram`: Telegram App); the web window itself is the Bun package in `web/`. One test in `app/tests/live.rs` calls the real API and is ignored by default.
 
 ## License
 

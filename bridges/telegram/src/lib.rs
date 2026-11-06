@@ -513,6 +513,10 @@ impl Bridge for Tg {
   fn start(self: Arc<Self>) {
     tokio::spawn(self.run());
   }
+
+  fn secrets(&self) -> Vec<&'static str> {
+    vec![KEY]
+  }
 }
 
 /// The hub, as Telegram App's chat is reached: its messages said in

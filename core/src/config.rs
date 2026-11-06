@@ -112,6 +112,14 @@ impl Config {
   }
 }
 
+/// The variables Acorn's own keys may be in, kept from every program the
+/// agent runs (`machine`): DeepSeek's, Jev's, and each bridge's.
+pub fn hidden() -> Vec<&'static str> {
+  let mut all = vec![KEY_VAR, crate::decide::KEY_VAR];
+  all.extend(crate::bridge::all().iter().flat_map(|b| b.secrets()));
+  all
+}
+
 /// A key by its variable's name (EXA_API_KEY): the variable, else
 /// config.json's lowercase key (exa_api_key), read now, so a key added counts
 /// at once.

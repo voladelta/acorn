@@ -26,6 +26,11 @@ pub trait Bridge: Send + Sync + 'static {
   fn call(&self, name: String, input: Value, cancel: CancellationToken) -> BoxFuture<'static, Out>;
   /// Its work begun, once the chats are open (on the runtime).
   fn start(self: Arc<Self>);
+  /// The variables its keys may be in, kept from every program the
+  /// agent runs (`config::hidden`).
+  fn secrets(&self) -> Vec<&'static str> {
+    Vec::new()
+  }
 }
 
 static BRIDGES: RwLock<Vec<Arc<dyn Bridge>>> = RwLock::new(Vec::new());
