@@ -493,3 +493,140 @@ pub fn relevant() {
     "obeyed the log's injected order"
   );
 }
+
+/// A handbook of many sections, and a question in other words than the
+/// one that answers it: Acorn finds the section (relevant by section is
+/// the way the guide gives, but any way that finds it passes).
+pub fn handbook() {
+  const SECTIONS: [(&str, &str); 24] = [
+    (
+      "Welcome",
+      "This handbook covers how the studio works day to day. Ask Priya if anything here is out of date.",
+    ),
+    (
+      "Office hours",
+      "The studio is open from 8 to 19 on weekdays. The front door locks itself at 19:30.",
+    ),
+    (
+      "Parking",
+      "Bikes go in the basement rack. Car spaces are first come, first served, and the two by the lift are for visitors.",
+    ),
+    (
+      "Kitchen",
+      "Label food with your name and a date. The fridge is cleared every Friday at 16:00.",
+    ),
+    (
+      "Payroll",
+      "Salaries land on the 25th. If the 25th is a weekend, they land the Friday before.",
+    ),
+    (
+      "Expenses",
+      "Claim within 60 days with a photo of the receipt. Anything over 200 needs a manager's note.",
+    ),
+    (
+      "Holidays",
+      "You get 25 days a year plus public holidays. Book them in the team calendar at least two weeks ahead.",
+    ),
+    (
+      "Sick days",
+      "Message your lead before 10 if you can't come in. After three days in a row we need a doctor's note.",
+    ),
+    (
+      "Hardware incidents",
+      "If a company laptop or phone goes missing, call the desk on extension 4471 within the hour, then file a police report. The desk will wipe it remotely.",
+    ),
+    (
+      "Passwords",
+      "Use the password manager for everything. Never reuse the studio Wi-Fi password anywhere else.",
+    ),
+    (
+      "Printing",
+      "The printer on floor two does A3. Colour prints are logged against your project code.",
+    ),
+    (
+      "Meeting rooms",
+      "Book rooms in the calendar. Leave the big room tidy; it hosts clients on Tuesdays.",
+    ),
+    (
+      "Visitors",
+      "Visitors sign in at reception and wear a badge. Walk them out when they leave.",
+    ),
+    (
+      "Deliveries",
+      "Parcels go to reception. Large deliveries come through the loading bay on Mill Lane.",
+    ),
+    (
+      "Fire safety",
+      "The assembly point is the car park across the road. Alarms are tested on Monday mornings at 9.",
+    ),
+    (
+      "First aid",
+      "The first aid kit is in the kitchen. Trained first aiders wear a green lanyard.",
+    ),
+    (
+      "Training",
+      "Each person has a yearly budget for courses and books. Ask your lead before you spend it.",
+    ),
+    (
+      "Reviews",
+      "Reviews happen in March and September. Bring two things you're proud of and one you'd change.",
+    ),
+    (
+      "Travel",
+      "Book trains and flights through the travel desk. Economy for trips under six hours.",
+    ),
+    (
+      "Remote work",
+      "You can work from home two days a week. Keep your status up to date in chat.",
+    ),
+    (
+      "Social",
+      "Drinks are on the last Thursday of the month. Non-drinkers get a say in where we go.",
+    ),
+    (
+      "Recycling",
+      "Paper, cans and glass each have their own bin. Batteries go in the tube by the printer.",
+    ),
+    (
+      "Leaving",
+      "Give a month's notice. Hand back your keys, badge and hardware on your last day.",
+    ),
+    (
+      "Contacts",
+      "Reception is on 4400. The office manager is on 4402. Facilities is on 4410.",
+    ),
+  ];
+  let mut l = Live::start("handbook", &[], |d| {
+    let mut text = String::from("# Studio handbook\n\n");
+    for (title, body) in SECTIONS {
+      text += &format!("## {title}\n\n{body}\n\n");
+    }
+    write(&d.work().join("handbook.md"), &text);
+  });
+  let t = l.say(
+    "Acorn",
+    "default",
+    "My work computer was stolen at the airport an hour ago. Going by handbook.md, who do I ring, and how quickly? Give the number.",
+  );
+  assert!(t.replies.contains("4471"), "the number: {}", t.replies);
+  let ran = t.echoes.join("\n");
+  println!("relevant used: {}", ran.contains("relevant \""));
+}
+
+/// A small file needs no judging: read it and answer. relevant on twenty
+/// lines costs a call and a second for nothing.
+pub fn relevant_not_needed() {
+  let mut l = Live::start("relevant_not_needed", &[], |d| {
+    let lines: Vec<String> = (1..=20)
+      .map(|i| match i {
+        13 => "13. the spare key is under the blue pot by the back door".to_string(),
+        i => format!("{i}. water the plants on day {i}"),
+      })
+      .collect();
+    write(&d.work().join("house.txt"), &(lines.join("\n") + "\n"));
+  });
+  let t = l.say("Acorn", "default", "Where's the spare key, per house.txt?");
+  assert!(t.replies.to_lowercase().contains("blue pot"), "{}", t.replies);
+  let ran = t.echoes.join("\n");
+  assert!(!ran.contains("relevant \""), "judged twenty lines: {:?}", t.luau());
+}

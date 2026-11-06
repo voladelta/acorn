@@ -1,0 +1,88 @@
+{
+ "kind": "relevant",
+ "about_case": "tokio's select! docs, section by section",
+ "bars": {
+  "recall": 0.9,
+  "precision": 0.3,
+  "why": "A page has a dozen sections and one or two answer; keeping four or five still cuts most of it, and a section left out costs more than one read."
+ },
+ "items": [
+  "Skip to main content\n",
+  "## select\n",
+  "# Macro select\nmacro_rules! select {\n    {\n        $(\n            biased;\n        )?\n        $(\n            $bind:pat = $fut:expr $(, if $cond:expr)? => $handler:expr,\n        )*\n        $(\n            else => $els:expr $(,)?\n        )?\n    } => { ... };\n}\nAvailable on crate feature\nmacros only.\n",
+  "## Expand description\n\nWaits on multiple concurrent branches, returning when the first branch completes, cancelling the remaining branches.\n\nTheselect! macro must be used inside of async functions, closures, and\nblocks.\n\nTheselect! macro accepts one or more branches with the following pattern:\n<pattern> = <async expression> (, if <precondition>)? => <handler>,\nAdditionally, theselect! macro may include a single, optional else\nbranch, which evaluates if none of the other branches match their patterns:\nelse => <expression>\nThe macro aggregates all<async expression> expressions and runs them\nconcurrently on the current task. Once the first expression\ncompletes with a value that matches its <pattern>, the select! macro\nreturns the result of evaluating the completed branch’s <handler>\nexpression.\n\nAdditionally, each branch may include an optionalif precondition. If the\nprecondition returns false, then the branch is disabled. The provided\n<async expression> is still evaluated but the resulting future is never\npolled. This capability is useful when using select! within a loop.\n\nThe complete lifecycle of aselect! expression is as follows:\n\n- Evaluate all provided<precondition> expressions. If the precondition\nreturns false, disable the branch for the remainder of the current call\nto select!. Re-entering select! due to a loop clears the “disabled”\nstate.\n- Aggregate the<async expression>s from each branch, including the\ndisabled ones. If the branch is disabled, <async expression> is still\nevaluated, but the resulting future is not polled.\n- If all branches are disabled: go to step 6.\n- Concurrently await on the results for all remaining<async expression>s.\n- Once an<async expression> returns a value, attempt to apply the value to the\nprovided <pattern>. If the pattern matches, evaluate the <handler> and return.\nIf the pattern does not match, disable the current branch for the remainder of\nthe current call to select!. Continue from step 3.\n- Evaluate theelse expression. If no else expression is provided, panic.\n",
+  "## §Runtime characteristics\n\nBy running all async expressions on the current task, the expressions are able to run concurrently but not in parallel. This means all expressions are run on the same thread and if one branch blocks the thread, all other expressions will be unable to continue. If parallelism is required, spawn each async expression usingtokio::spawn and pass the\njoin handle to select!.\n",
+  "## §Fairness\n\nBy default,select! randomly picks a branch to check first. This provides\nsome level of fairness when calling select! in a loop with branches that\nare always ready.\n\nThis behavior can be overridden by addingbiased; to the beginning of the\nmacro usage. See the examples for details. This will cause select to poll\nthe futures in the order they appear from top to bottom. There are a few\nreasons you may want this:\n\n- The random number generation oftokio::select! has a non-zero CPU cost\n- Your futures may interact in a way where known polling order is significant\n\nBut there is an important caveat to this mode. It becomes your responsibility to ensure that the polling order of your futures is fair. If for example you are selecting between a stream and a shutdown future, and the stream has a huge volume of messages and zero or nearly zero time between them, you should place the shutdown future earlier in theselect! list to ensure that it is\nalways polled, and will not be ignored due to the stream being constantly\nready.\n",
+  "## §Panics\n\nTheselect! macro panics if all branches are disabled and there is no\nprovided else branch. A branch is disabled when the provided if\nprecondition returns false or when the pattern does not match the\nresult of <async expression>.\n",
+  "## §Cancellation safety\n\nWhen usingselect! in a loop to receive messages from multiple sources,\nyou should make sure that the receive call is cancellation safe to avoid\nlosing messages. This section goes through various common methods and\ndescribes whether they are cancel safe.  The lists in this section are not\nexhaustive.\n\nCancellation safety describes what happens when a future is dropped before it completes. Whether something is cancellation safe depends on the behavior of the future passed toselect!, which may come from an\nasync method, an async expression, or another future-producing operation.\n\nThe following methods are cancellation safe:\n\nThe following methods are not cancellation safe and can lead to loss of data:\n\nThe following methods are not cancellation safe because they use a queue for fairness and cancellation makes you lose your place in the queue:\n\nTo determine whether your own methods are cancellation safe, look for the location of uses of.await. This is because when an asynchronous method is\ncancelled, that always happens at an .await. If your function behaves\ncorrectly even if it is restarted while waiting at an .await, then it is\ncancellation safe.\n\nCancellation safety can be defined in the following way: If you have a future that has not yet completed, then it must be a no-op to drop that future and recreate it. This definition is motivated by the situation where aselect! is used in a loop. Without this guarantee, you would lose your\nprogress when another branch completes and you restart the select! by\ngoing around the loop.\n\nBe aware that cancelling something that is not cancellation safe is not necessarily wrong. For example, if you are cancelling a task because the application is shutting down, then you probably don’t care that partially read data is lost.\n",
+  "## §Examples\n\nBasic select with two branches.\nasync fn do_stuff_async() {\n    // async work\n}\n\nasync fn more_async_work() {\n    // more here\n}\n\ntokio::select! {\n    _ = do_stuff_async() => {\n        println!(\"do_stuff_async() completed first\")\n    }\n    _ = more_async_work() => {\n        println!(\"more_async_work() completed first\")\n    }\n};\nBasic stream selecting.\nuse tokio_stream::{self as stream, StreamExt};\n\nlet mut stream1 = stream::iter(vec![1, 2, 3]);\nlet mut stream2 = stream::iter(vec![4, 5, 6]);\n\nlet next = tokio::select! {\n    v = stream1.next() => v.unwrap(),\n    v = stream2.next() => v.unwrap(),\n};\n\nassert!(next == 1 || next == 4);\nCollect the contents of two streams. In this example, we rely on pattern matching and the fact thatstream::iter is “fused”, i.e. once the stream\nis complete, all calls to next() return None.\nuse tokio_stream::{self as stream, StreamExt};\n\nlet mut stream1 = stream::iter(vec![1, 2, 3]);\nlet mut stream2 = stream::iter(vec![4, 5, 6]);\n\nlet mut values = vec![];\n\nloop {\n    tokio::select! {\n        Some(v) = stream1.next() => values.push(v),\n        Some(v) = stream2.next() => values.push(v),\n        else => break,\n    }\n}\n\nvalues.sort();\nassert_eq!(&[1, 2, 3, 4, 5, 6], &values[..]);\nUsing the same future in multipleselect! expressions can be done by passing\na reference to the future. Doing so requires the future to be Unpin. A\nfuture can be made Unpin by either using Box::pin or stack pinning.\n\nHere, a stream is consumed for at most 1 second.\nuse tokio_stream::{self as stream, StreamExt};\nuse tokio::time::{self, Duration};\n\nlet mut stream = stream::iter(vec![1, 2, 3]);\nlet sleep = time::sleep(Duration::from_secs(1));\ntokio::pin!(sleep);\n\nloop {\n    tokio::select! {\n        maybe_v = stream.next() => {\n            if let Some(v) = maybe_v {\n                println!(\"got = {}\", v);\n            } else {\n                break;\n            }\n        }\n        _ = &mut sleep => {\n            println!(\"timeout\");\n            break;\n        }\n    }\n}\nJoining two values usingselect!.\nuse tokio::sync::oneshot;\n\nlet (tx1, mut rx1) = oneshot::channel();\nlet (tx2, mut rx2) = oneshot::channel();\n\ntokio::spawn(async move {\n    tx1.send(\"first\").unwrap();\n});\n\ntokio::spawn(async move {\n    tx2.send(\"second\").unwrap();\n});\n\nlet mut a = None;\nlet mut b = None;\n\nwhile a.is_none() || b.is_none() {\n    tokio::select! {\n        v1 = (&mut rx1), if a.is_none() => a = Some(v1.unwrap()),\n        v2 = (&mut rx2), if b.is_none() => b = Some(v2.unwrap()),\n    }\n}\n\nlet res = (a.unwrap(), b.unwrap());\n\nassert_eq!(res.0, \"first\");\nassert_eq!(res.1, \"second\");\nUsing thebiased; mode to control polling order.\nlet mut count = 0u8;\n\nloop {\n    tokio::select! {\n        // If you run this example without `biased;`, the polling order is\n        // pseudo-random, and the assertions on the value of count will\n        // (probably) fail.\n        biased;\n\n        _ = async {}, if count < 1 => {\n            count += 1;\n            assert_eq!(count, 1);\n        }\n        _ = async {}, if count < 2 => {\n            count += 1;\n            assert_eq!(count, 2);\n        }\n        _ = async {}, if count < 3 => {\n            count += 1;\n            assert_eq!(count, 3);\n        }\n        _ = async {}, if count < 4 => {\n            count += 1;\n            assert_eq!(count, 4);\n        }\n\n        else => {\n            break;\n        }\n    };\n}\n",
+  "### §Avoid racyif preconditions\n\nGiven thatif preconditions are used to disable select! branches, some\ncaution must be used to avoid missing values.\n\nFor example, here is incorrect usage ofsleep with if. The objective\nis to repeatedly run an asynchronous task for up to 50 milliseconds.\nHowever, there is a potential for the sleep completion to be missed.\n\nⓘ\nuse tokio::time::{self, Duration};\n\nasync fn some_async_work() {\n    // do work\n}\n\nlet sleep = time::sleep(Duration::from_millis(50));\ntokio::pin!(sleep);\n\nwhile !sleep.is_elapsed() {\n    tokio::select! {\n        _ = &mut sleep, if !sleep.is_elapsed() => {\n            println!(\"operation timed out\");\n        }\n        _ = some_async_work() => {\n            println!(\"operation completed\");\n        }\n    }\n}\n\npanic!(\"This example shows how not to do it!\");\nIn the above example,sleep.is_elapsed() may return true even if\nsleep.poll() never returned Ready. This opens up a potential race\ncondition where sleep expires between the while !sleep.is_elapsed()\ncheck and the call to select! resulting in the some_async_work() call to\nrun uninterrupted despite the sleep having elapsed.\n\nOne way to write the above example without the race would be:\nuse tokio::time::{self, Duration};\n\nasync fn some_async_work() {\n    // do work\n}\n\nlet sleep = time::sleep(Duration::from_millis(50));\ntokio::pin!(sleep);\n\nloop {\n    tokio::select! {\n        _ = &mut sleep => {\n            println!(\"operation timed out\");\n            break;\n        }\n        _ = some_async_work() => {\n            println!(\"operation completed\");\n        }\n    }\n}\n",
+  "## §Alternatives from the Ecosystem\n\nTheselect! macro is a powerful tool for managing multiple asynchronous\nbranches, enabling tasks to run concurrently within the same thread. However,\nits use can introduce challenges, particularly around cancellation safety, which\ncan lead to subtle and hard-to-debug errors. For many use cases, ecosystem\nalternatives may be preferable as they mitigate these concerns by offering\nclearer syntax, more predictable control flow, and reducing the need to manually\nhandle issues like fuse semantics or cancellation safety.\n",
+  "### §Merging Streams\n\nFor cases whereloop { select! { ... } } is used to poll multiple tasks,\nstream merging offers a concise alternative, inherently handle cancellation-safe\nprocessing, removing the risk of data loss. Libraries such as tokio_stream,\nfutures::stream and futures_concurrency provide tools for merging\nstreams and handling their outputs sequentially.\n",
+  "#### §Example withselect!\nstruct File;\nstruct Channel;\nstruct Socket;\n\nimpl Socket {\n    async fn read_packet(&mut self) -> Vec<u8> {\n        vec![]\n    }\n}\n\nasync fn read_send(_file: &mut File, _channel: &mut Channel) {\n    // do work that is not cancel safe\n}\n\n// open our IO types\nlet mut file = File;\nlet mut channel = Channel;\nlet mut socket = Socket;\n\nloop {\n    tokio::select! {\n        _ = read_send(&mut file, &mut channel) => { /* ... */ },\n        _data = socket.read_packet() => { /* ... */ }\n        _ = futures::future::ready(()) => break\n    }\n}\n",
+  "#### §Moving tomerge\n\nBy using merge, you can unify multiple asynchronous tasks into a single stream, eliminating the need to manage tasks manually and reducing the risk of unintended behavior like data loss.\nuse std::pin::pin;\n\nuse futures::stream::unfold;\nuse tokio_stream::StreamExt;\n\nstruct File;\nstruct Channel;\nstruct Socket;\n\nimpl Socket {\n    async fn read_packet(&mut self) -> Vec<u8> {\n        vec![]\n    }\n}\n\nasync fn read_send(_file: &mut File, _channel: &mut Channel) {\n    // do work that is not cancel safe\n}\n\nenum Message {\n    Stop,\n    Sent,\n    Data(Vec<u8>),\n}\n\n// open our IO types\nlet file = File;\nlet channel = Channel;\nlet socket = Socket;\n\nlet a = unfold((file, channel), |(mut file, mut channel)| async {\n    read_send(&mut file, &mut channel).await;\n    Some((Message::Sent, (file, channel)))\n});\nlet b = unfold(socket, |mut socket| async {\n    let data = socket.read_packet().await;\n    Some((Message::Data(data), socket))\n});\nlet c = tokio_stream::iter([Message::Stop]);\n\nlet mut s = pin!(a.merge(b).merge(c));\nwhile let Some(msg) = s.next().await {\n    match msg {\n        Message::Data(_data) => { /* ... */ }\n        Message::Sent => continue,\n        Message::Stop => break,\n    }\n}\n",
+  "### §Racing Futures\n\nIf you need to wait for the first completion among several asynchronous tasks, ecosystem utilities such asfutures,\nfutures-lite or\nfutures-concurrency\nprovide streamlined syntax for racing futures:\nuse futures_concurrency::future::Race;\n\nlet task_a = async { Ok(\"ok\") };\nlet task_b = async { Err(\"error\") };\nlet result = (task_a, task_b).race().await;\n\nmatch result {\n    Ok(output) => println!(\"First task completed with: {output}\"),\n    Err(err) => eprintln!(\"Error occurred: {err}\"),\n}"
+ ],
+ "cases": [
+  {
+   "about": "how to make select! check its branches in a fixed order instead of at random",
+   "labels": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+    false,
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  },
+  {
+   "about": "whether receiving from a channel inside select! in a loop can lose messages",
+   "labels": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+    false,
+    false,
+    false,
+    null,
+    null,
+    null,
+    false
+   ]
+  },
+  {
+   "about": "what happens when every branch is disabled and there is no else",
+   "labels": [
+    false,
+    false,
+    false,
+    null,
+    false,
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ]
+}

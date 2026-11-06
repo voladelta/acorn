@@ -58,13 +58,13 @@ project, starting with a --- block of a description: line saying when it applies
   )
 }
 
-struct Skill {
+pub(crate) struct Skill {
   /// Its dir's name, which is the skill's.
-  name: String,
+  pub(crate) name: String,
   /// Its dir.
-  at: PathBuf,
+  pub(crate) at: PathBuf,
   /// What its head says it is for.
-  about: String,
+  pub(crate) about: String,
 }
 
 /// The skills in `roots` by name. Only a dir with a SKILL.md is one; one
@@ -176,17 +176,20 @@ pub async fn list_for(roots: &[PathBuf], task: &str, cancel: &tokio_util::sync::
 
 /// How likely each skill applies to `task`: one question each, the task
 /// the state.
-async fn fits(skills: &[Skill], task: &str, cancel: &tokio_util::sync::CancellationToken) -> Result<Vec<f64>, String> {
+pub(crate) async fn fits(
+  skills: &[Skill],
+  task: &str,
+  cancel: &tokio_util::sync::CancellationToken,
+) -> Result<Vec<f64>, String> {
   let name = |i: usize| format!("s{i}");
+  // The skill in its question, as an object: worded as a sentence, its
+  // name and use pulled it to near topics (a code review for a plugin).
   let questions: serde_json::Map<_, _> = skills
     .iter()
     .enumerate()
     .map(|(i, s)| {
-      let what = match s.about.as_str() {
-        "" => format!("'{}'", s.name),
-        about => format!("'{}' ({about})", s.name),
-      };
-      let ask = format!("Does the skill {what} apply to this task?");
+      let skill = json!({"name": s.name, "use_when": s.about});
+      let ask = json!({"question": "Does `skill` apply to `task`?", "skill": skill});
       (name(i), json!({"type": "noul", "instructions": ask}))
     })
     .collect();

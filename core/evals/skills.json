@@ -1,0 +1,169 @@
+{
+ "kind": "skills",
+ "about_case": "twelve skills, near-twins among them, and twenty everyday tasks",
+ "skills": [
+  [
+   "commit-message",
+   "Use when asked to write a git commit message"
+  ],
+  [
+   "release-notes",
+   "Use when asked to write release notes or a changelog"
+  ],
+  [
+   "code-review",
+   "Use when reviewing a diff or pull request for bugs"
+  ],
+  [
+   "slides",
+   "Use when asked to make a slide deck or presentation"
+  ],
+  [
+   "email-reply",
+   "Use when replying to work email in the user's tone"
+  ],
+  [
+   "blog-post",
+   "Use when drafting a post for the user's personal blog"
+  ],
+  [
+   "tax-receipts",
+   "Use when sorting receipts and invoices for the yearly tax return"
+  ],
+  [
+   "luau-plugin",
+   "Use when writing an Acorn plugin in Luau for a web API"
+  ],
+  [
+   "sql-migration",
+   "Use when writing a SQL database migration"
+  ],
+  [
+   "meeting-notes",
+   "Use when turning a meeting transcript or recording into notes"
+  ],
+  [
+   "translate-vi",
+   "Use when translating between English and Vietnamese"
+  ],
+  [
+   "trip-plan",
+   "Use when planning a trip: flights, stays, a day-by-day plan"
+  ]
+ ],
+ "tasks": [
+  {
+   "task": "commit the staged changes",
+   "want": [
+    "commit-message"
+   ]
+  },
+  {
+   "task": "ship v0.4: bump the version, write the changelog and tag it",
+   "want": [
+    "release-notes"
+   ]
+  },
+  {
+   "task": "what changed since v0.3? write it up for users",
+   "want": [
+    "release-notes"
+   ]
+  },
+  {
+   "task": "look over PR #42 before I merge it",
+   "want": [
+    "code-review"
+   ]
+  },
+  {
+   "task": "add an Exa-like plugin for the Brave search API",
+   "want": [
+    "luau-plugin"
+   ]
+  },
+  {
+   "task": "what's the capital of Peru?",
+   "want": []
+  },
+  {
+   "task": "what's 12% of 340?",
+   "want": []
+  },
+  {
+   "task": "answer Linh's mail about the offsite, then make 5 slides for it",
+   "want": [
+    "email-reply",
+    "slides"
+   ]
+  },
+  {
+   "task": "I have a pile of PDFs from the dentist and the electrician for this year's taxes",
+   "want": [
+    "tax-receipts"
+   ]
+  },
+  {
+   "task": "write something for my site about why Acorn never forgets",
+   "want": [
+    "blog-post"
+   ]
+  },
+  {
+   "task": "add a column for the user's time zone to the accounts table",
+   "want": [
+    "sql-migration"
+   ]
+  },
+  {
+   "task": "here's the recording from this morning's standup, write it up",
+   "want": [
+    "meeting-notes"
+   ]
+  },
+  {
+   "task": "dịch email này sang tiếng Anh giúp tôi",
+   "want": [
+    "translate-vi"
+   ]
+  },
+  {
+   "task": "viết mail trả lời anh Minh về lịch họp",
+   "want": [
+    "email-reply"
+   ]
+  },
+  {
+   "task": "plan 4 days in Kyoto in April for two",
+   "want": [
+    "trip-plan"
+   ]
+  },
+  {
+   "task": "why does my Rust build fail with E0502?",
+   "want": []
+  },
+  {
+   "task": "turn these notes into a deck for Monday's all-hands",
+   "want": [
+    "slides"
+   ]
+  },
+  {
+   "task": "reply to the landlord's email, politely say no to the rent rise",
+   "want": [
+    "email-reply"
+   ]
+  },
+  {
+   "task": "rename the `users` table to `accounts` without downtime",
+   "want": [
+    "sql-migration"
+   ]
+  },
+  {
+   "task": "summarise this article for me",
+   "want": []
+  }
+ ]
+}

@@ -24,6 +24,8 @@ pub mod decide;
 #[cfg(feature = "engine")]
 pub mod disk;
 pub mod effort;
+#[cfg(all(test, feature = "engine"))]
+mod evals;
 #[cfg(feature = "engine")]
 pub mod extend;
 #[cfg(feature = "engine")]

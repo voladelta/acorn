@@ -63,6 +63,16 @@ const SCENARIOS: &[Scenario] = &[
     run: luau::relevant,
     needs: &["TYPESAFE_API_KEY"],
   },
+  Scenario {
+    name: "handbook",
+    run: luau::handbook,
+    needs: &["TYPESAFE_API_KEY"],
+  },
+  Scenario {
+    name: "relevant_not_needed",
+    run: luau::relevant_not_needed,
+    needs: &["TYPESAFE_API_KEY"],
+  },
   scenario("skills_scopes", skills::scopes),
   scenario("skills_kinds", skills::kinds),
   scenario("skills_agents", skills::agents),

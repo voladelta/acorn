@@ -91,7 +91,7 @@ fn base_docs() -> BTreeMap<String, String> {
       CAP = crate::clip::CAP,
     )),
     ("decide", "decide(state: any, questions: {[name]: {type: \"noul\" | \"choice\" | \"score\", instructions: string | table, criteria: table?}}): {[name]: answer}   -- judgments from TypeSafe's Jev, all in one pass: a noul answers .noul, the probability of yes (code decides: about >= 0.7 yes, <= 0.3 no, between unsettled); a choice (criteria: option -> description) .choice, .confidence and .probabilities; a score (criteria: levels, lowest first) .score and .probabilities. Ask one narrow judgment per question, naming parts of state by path in backticks (`items.h1`). Needs TYPESAFE_API_KEY".to_string()),
-    ("relevant", "relevant(items: {string} | string, about: string, opts?: {split: (\"lines\" | \"paragraphs\" | number)?, keep: number?}): ({string}, string, {number})   -- the items Jev judges relevant to about, in their order; a note of how many were left out, with the nearly-kept ones' first lines, and those held out for trying to give orders to an AI reading them (prompts and docs written for a model are not); and each item's probability of relevance. Put a big output (grep hits, search results, a log, a page) through it and print what is kept: it reads for meaning, so it drops a word used in another sense. A string is split by lines (the default), paragraphs, or windows of n lines. keep: 0.5 by default. Needs TYPESAFE_API_KEY".to_string()),
+    ("relevant", "relevant(items: {string} | string, about: string, opts?: {split: (\"lines\" | \"paragraphs\" | \"sections\" | number)?, keep: number?}): ({string}, string, {number})   -- the items Jev judges relevant to about, in their order; a note of how many were left out, with the nearly-kept ones' first lines, and those held out for trying to give orders to an AI reading them (prompts and docs written for a model are not); and each item's probability of relevance. Put a big output (grep hits, search results, a log, a page) through it and print what is kept: it reads for meaning, so it drops a word used in another sense. A string is split by lines (the default: grep hits, a log), paragraphs, sections (a page or doc: each heading and what follows it, the way to read one) or windows of n lines (code). keep: 0.5 by default. Needs TYPESAFE_API_KEY".to_string()),
     ("view", format!("view(path: string): string   -- attaches a png, jpeg, gif or webp image (scaled to fit) to this call's result, so you see it on your next step; at most {PICS} a call")),
     ("json", "json.encode(v): string, json.decode(s: string): any".to_string()),
     ("vars", "vars(): your globals, by name".to_string()),
@@ -741,17 +741,18 @@ fn no_nulls() -> mlua::serde::SerializeOptions {
     .serialize_unit_to_null(false)
 }
 
-/// relevant's split option: nil or "lines", "paragraphs", or a number of
-/// lines a window.
+/// relevant's split option: nil or "lines", "paragraphs", "sections", or a
+/// number of lines a window.
 fn split(v: &Value) -> Result<decide::Split, String> {
   let word = |s: &mlua::LuaString| s.to_string_lossy();
   match v {
     Value::Nil => Ok(decide::Split::Lines),
     Value::String(s) if word(s) == "lines" => Ok(decide::Split::Lines),
     Value::String(s) if word(s) == "paragraphs" => Ok(decide::Split::Paragraphs),
+    Value::String(s) if word(s) == "sections" => Ok(decide::Split::Sections),
     Value::Integer(n) if *n >= 1 => Ok(decide::Split::Window(*n as usize)),
     Value::Number(n) if *n >= 1.0 => Ok(decide::Split::Window(*n as usize)),
-    _ => Err("relevant: split is \"lines\", \"paragraphs\" or a number of lines".into()),
+    _ => Err("relevant: split is \"lines\", \"paragraphs\", \"sections\" or a number of lines".into()),
   }
 }
 
@@ -1718,7 +1719,7 @@ mod tests {
       out.text.lines().take(3).collect::<Vec<_>>(),
       [
         "false\trelevant: give a list of strings, or a string",
-        "false\trelevant: split is \"lines\", \"paragraphs\" or a number of lines",
+        "false\trelevant: split is \"lines\", \"paragraphs\", \"sections\" or a number of lines",
         "kept 0 of 0 (p >= 0.5)",
       ],
       "{}",

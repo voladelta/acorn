@@ -145,6 +145,8 @@ With a [TypeSafe](https://typesafe.ai) key, quick judgments go to Jev, a model t
 
 Without a key, `decide` and `relevant` fail saying which key to set, and `list_skills` lists by name.
 
+How well Jev does each of these is measured on labelled data frozen in [core/evals](core/evals): grep hits kept for the sense asked, refusals worded twenty ways in a log (asked in English and in Vietnamese), web results filtered to a question, a page by section, injections among prompts and plain text, and the skills that fit a task. Each set has a bar, and the run fails below it: `cargo test -p acorn-core evals -- --ignored --nocapture`, with `TYPESAFE_API_KEY` (under two cents a run).
+
 ### Plugins
 
 A plugin adds a global to `luau`, or replaces one, without restarting Acorn. Each is a Luau file in `~/.acorn/plugins`, and it counts from the caller's next `luau` call: edit or remove it and that counts too, and the agent's own globals stay. Ask Acorn for one in plain words ("use Exa for search", "learn to roll dice"): it writes the plugin and installs it with `extend`, which loads it beside the others first and refuses one that fails, so a broken plugin never replaces a working one. Or copy one from [plugins](plugins):
