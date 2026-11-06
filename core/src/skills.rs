@@ -7,7 +7,8 @@
 //! call, so an edit or a new skill counts at once; Acorn makes one by
 //! writing the file.
 
-use crate::config;
+use crate::{config, decide};
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
@@ -164,30 +165,33 @@ pub fn list(roots: &[PathBuf]) -> String {
 pub async fn list_for(roots: &[PathBuf], task: &str, cancel: &tokio_util::sync::CancellationToken) -> String {
   let skills = scan(roots);
   let task = task.trim();
-  if task.is_empty() || skills.len() < 2 || crate::decide::key().is_none() {
+  if task.is_empty() || skills.len() < 2 || decide::key().is_none() {
     return list(roots);
   }
-  let questions: serde_json::Map<String, serde_json::Value> = skills
+  match fits(&skills, task, cancel).await {
+    Ok(ps) => sorted(&skills, &ps),
+    Err(why) => format!("{}\n\n(Not sorted for the task: {why})", list(roots)),
+  }
+}
+
+/// How likely each skill applies to `task`: one question each, the task
+/// the state.
+async fn fits(skills: &[Skill], task: &str, cancel: &tokio_util::sync::CancellationToken) -> Result<Vec<f64>, String> {
+  let name = |i: usize| format!("s{i}");
+  let questions: serde_json::Map<_, _> = skills
     .iter()
     .enumerate()
     .map(|(i, s)| {
-      let ask = format!("Does the skill '{}' ({}) apply to this task?", s.name, s.about);
-      (
-        format!("s{i}"),
-        serde_json::json!({"type": "noul", "instructions": ask}),
-      )
+      let what = match s.about.as_str() {
+        "" => format!("'{}'", s.name),
+        about => format!("'{}' ({about})", s.name),
+      };
+      let ask = format!("Does the skill {what} apply to this task?");
+      (name(i), json!({"type": "noul", "instructions": ask}))
     })
     .collect();
-  let state = serde_json::json!({"task": task});
-  match crate::decide::ask(&state, &questions.into(), cancel).await {
-    Ok(answers) => {
-      let ps: Vec<f64> = (0..skills.len())
-        .map(|i| answers[format!("s{i}")]["noul"].as_f64().unwrap_or(0.0))
-        .collect();
-      sorted(&skills, &ps)
-    }
-    Err(why) => format!("{}\n\n(Not sorted for the task: {why})", list(roots)),
-  }
+  let answers = decide::ask(&json!({"task": task}), &questions.into(), cancel).await?;
+  (0..skills.len()).map(|i| decide::noul(&answers, &name(i))).collect()
 }
 
 /// A skill fits a task from this probability on, and may fit from MAYBE.
