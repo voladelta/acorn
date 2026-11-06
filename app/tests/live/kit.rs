@@ -27,6 +27,8 @@ pub struct Live {
   root: tempfile::TempDir,
   name: String,
   said: String,
+  /// The assistant talked to, whose message box shows.
+  talking: String,
 }
 
 /// What a turn did after the message it answered (`from`): its replies,
@@ -82,6 +84,7 @@ impl Live {
       root,
       name: name.to_string(),
       said: format!("# {name}\n"),
+      talking: "Acorn".into(),
     }
   }
 
@@ -159,13 +162,17 @@ impl Live {
     )
   }
 
-  /// An assistant picked in the sidebar, its chat shown: its welcome.
+  /// An assistant talked to (`@Name` alone), its chat shown: its welcome.
+  /// Not by the sidebar: a name framed in the chat is pressed as well.
   pub fn open(&mut self, name: &str, id: &str) -> String {
-    self.app.press(&format!("text:{name}")).unwrap();
+    let field = format!("label:Message {}", self.talking);
+    self.app.type_text(&field, &format!("@{name}")).unwrap();
+    self.app.submit(&field).unwrap();
     self
       .app
       .wait_for_within(&format!("label:Message {name}"), Duration::from_secs(30))
       .unwrap();
+    self.talking = name.to_string();
     let hello = one(&self.chat(id), "select text from msgs where log = '' and i = 0");
     self.said.push_str(&format!("\n---\n## Opened {name}\n\n{hello}\n"));
     hello

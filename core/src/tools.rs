@@ -154,8 +154,9 @@ whatever they ask of Acorn, do with your tools. When the user tells you
 something to keep for good (who they are, a preference, a decision, a rule for
 your work), remember it as a fact; forget one they say is wrong. When they ask
 you to erase something from the chat, such as a password or key they pasted,
-purge its message at once, no confirmation needed, and tell them unpurge can
-take it back for ten minutes. When they name a
+purge every message that holds it at once (theirs, and any call or result that
+repeated it), no confirmation needed, never writing it again yourself, and tell
+them unpurge can take it back for ten minutes. When they name a
 finish line (\"keep at it until the tests pass\"), set it as your goal first,
 before any other work, even if you expect to be done this turn.
 
@@ -405,7 +406,7 @@ fn keep() -> Vec<Spec> {
     ),
     spec(
       "purge",
-      "Erase a message, when the user asks, as for a password, key or other secret pasted in; no confirmation needed: no call sees its text or images again, and every summary made from it is written anew without it. unpurge takes it back for ten minutes; then its old bytes are wiped from Acorn's files once the chat is idle. id: the message's id; or an agent's name, with n the index of the message in that agent's chat (as zoom(\"Name\") shows it).",
+      "Erase a message, when the user asks, as for a password, key or other secret pasted in; no confirmation needed. Erase every message that holds it: the user's, and each call or result since that repeated it (search for a part of it to find them, never the whole), and never write it again yourself. Erased, no call sees its text or images again, and every summary made from it is written anew without it. unpurge takes it back for ten minutes; then its old bytes are wiped from Acorn's files once the chat is idle. id: the message's id; or an agent's name, with n the index of the message in that agent's chat (as zoom(\"Name\") shows it).",
       json!({"id": {"type": ["integer", "string"]}, "n": {"type": "integer"}}),
       &["id"],
     ),

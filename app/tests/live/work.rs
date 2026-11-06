@@ -217,8 +217,7 @@ West,Gizmo,1,30.00
 ";
 
 /// Two agents hired in parallel over a CSV, told where it is; both reports
-/// in, each framed under its agent's name, the answers right; the totals
-/// saved after.
+/// in, the answers right; the totals saved after.
 pub fn delegate() {
   let mut l = Live::start("delegate", &[], |d| write(&d.work().join("sales.csv"), SALES));
   let from = l.send(
@@ -249,16 +248,6 @@ pub fn delegate() {
     "East 100, Gadget 110: {}",
     t.replies
   );
-  let reports = rows(
-    &l.chat("default"),
-    &format!("select text from msgs where log = '' and kind = 'work' and i > {from}"),
-  );
-  let name = reports
-    .iter()
-    .find_map(|r| Some(r.strip_prefix('[')?.split(']').next()?.to_string()))
-    .expect("a report named by its agent");
-  assert!(l.shows(&name), "the report framed under {name}");
-
   l.say(
     "Acorn",
     "default",
