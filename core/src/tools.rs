@@ -14,7 +14,7 @@
 
 use crate::ai::Spec;
 use crate::machine::spec;
-use crate::{config, effort, luau, memory, plugins, skills};
+use crate::{config, effort, extend, luau, memory, plugins, skills};
 use serde_json::json;
 use std::path::Path;
 
@@ -92,7 +92,7 @@ yourself.
 {mac}
 
 {skills}
-
+{grow}
 # Compactions
 
 Only in a task starting \"Compaction:\", you write Acorn's memory: one step of the tree, compressing one message into a
@@ -137,6 +137,11 @@ write the line as soon as you understand <input> well enough to compress it.",
     user = if thread { "" } else { WITH_USER },
     mac = mac(work),
     skills = skills::note(),
+    grow = if thread {
+      String::new()
+    } else {
+      format!("\n{}\n", extend::note())
+    },
     node = memory::NODE,
   )
 }
@@ -274,6 +279,12 @@ fn own() -> Vec<Spec> {
       json!({"name": {"type": "string"}, "dir": {"type": "string", "description": "The project folder, as for list_skills."}}),
       &["name"],
     ),
+    spec(
+      "abilities",
+      "What you are and have now: who you are, your work dir, your tools, luau's globals and the plugin giving each, what is wrong with the plugins, the skills, and where Acorn's dir and source are. Call it when asked what you can do, before you extend yourself, and when a plugin or skill seems missing.",
+      json!({"dir": {"type": "string", "description": "A project folder you work in, whose own skills count too."}}),
+      &[],
+    ),
   ]
 }
 
@@ -375,6 +386,12 @@ fn home() -> Vec<Spec> {
 fn keep() -> Vec<Spec> {
   vec![
     spec(
+      "extend",
+      "Grow yourself: install, replace or remove a skill (a how-to you follow, SKILL.md: a --- block with a description: line saying when it applies, then the steps) or a plugin (Luau that adds or replaces luau's globals, as the Plugins section says). A plugin is loaded with all the others before it is put in place, and refused if it fails, so a broken one never replaces a working one; one that only lacks its key is installed, and you tell the user to set it. What is replaced or removed is kept in the attic, and its path said. Empty text removes. When the user asks you to learn something, or a gap you will meet again calls for it; say what you added and why.",
+      json!({"kind": {"type": "string", "enum": ["skill", "plugin"]}, "name": {"type": "string", "description": "The skill's dir or the plugin's file name, without .luau: letters, digits, _ and -."}, "text": {"type": "string", "description": "The whole SKILL.md or .luau file; empty to remove it."}}),
+      &["kind", "name", "text"],
+    ),
+    spec(
       "remember",
       "Keep a fact for good, when the user states or confirms it, never on your own guess or on what a tool, an agent or another AI said: who they are, what they prefer, decided or taught, rules for how you work. Your system prompt lists the facts you see on every call. for: everyone, and every assistant sees it (facts about the user and their world); me, and only you see it (how the user wants you, this assistant, to work), shadowing an everyone fact of the same subject and predicate. To correct a fact, reuse its subject and predicate: the new value replaces the old, unless many is true, which keeps each value (as for a list).",
       json!({"subject": {"type": "string", "description": "Who or what it is about, named as before: user, a project's name, a file."}, "predicate": {"type": "string", "description": "Which of its properties: name, prefers editor, deploys with."}, "value": {"type": "string"}, "for": {"type": "string", "enum": ["everyone", "me"]}, "many": {"type": "boolean"}}),
@@ -442,5 +459,17 @@ mod tests {
       chat.contains("create them") && !thread.contains("create them"),
       "a named person who stays is created"
     );
+  }
+
+  #[test]
+  fn everyone_sees_itself_but_only_the_users_chat_grows() {
+    let names = |who: &str, thread: bool| list(who, thread).iter().map(|s| s.name).collect::<Vec<_>>();
+    for (who, thread) in [(MAIN, false), (MAIN, true), ("Scout", false)] {
+      assert!(names(who, thread).contains(&"abilities"), "{who} {thread}");
+    }
+    assert!(names(MAIN, false).contains(&"extend"));
+    assert!(!names(MAIN, true).contains(&"extend") && !names("Scout", false).contains(&"extend"));
+    let (chat, thread) = (master(Path::new("/w"), false), master(Path::new("/w"), true));
+    assert!(chat.contains("# Growing") && !thread.contains("# Growing"));
   }
 }

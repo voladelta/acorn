@@ -23,6 +23,8 @@ pub mod config;
 pub mod disk;
 pub mod effort;
 #[cfg(feature = "engine")]
+pub mod extend;
+#[cfg(feature = "engine")]
 pub mod facts;
 #[cfg(feature = "engine")]
 pub mod import;

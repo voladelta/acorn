@@ -124,6 +124,19 @@ fn docs() -> String {
   docs
 }
 
+/// A plugins dir loaded: each global's doc, the plugin giving each, what is wrong.
+pub(crate) type Loaded = (BTreeMap<String, String>, BTreeMap<String, String>, Vec<String>);
+
+/// The plugins in `dir` loaded as a VM would load them: every global's doc
+/// by name, which plugin provides each, and what is wrong with them. For
+/// checking a plugin before it is installed, and for telling the model
+/// what its luau has.
+pub(crate) fn layer_of(dir: &Path) -> Result<Loaded, String> {
+  let mut vm = Vm::new(dir, dir).map_err(|e| clean(&e))?;
+  vm.refresh()?;
+  Ok((vm.docs, vm.provided, vm.warns))
+}
+
 /// What the system prompt says of luau, as hx's prompt does, and as
 /// deepseek-harness's says of the tools luau calls.
 pub const GUIDE: &str = "Do real work in each luau call: search, read the hits, edit and check in one call; load a big file once into a global (rows = rows or parse(read(\"data.csv\"))) and query it in later calls. A single look is one line: print(read(\"notes.md\")). Only what the code prints, and its last expression, comes back to you: print just what the next step needs, sliced or filtered, never a big file whole.

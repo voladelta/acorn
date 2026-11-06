@@ -24,6 +24,7 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Facts** | `remember` and `forget` keep facts you state, for every assistant or one; each call's system prompt lists them |
 | **Purge** | `purge` erases a message (a pasted key or password) and every summary made from it; `unpurge` takes it back for ten minutes, then it is wiped from the database file |
 | **Import** | Your past Claude Code and Codex sessions on this machine, and Claude and ChatGPT chats from their websites' exports, read into the chat |
+| **Growing** | An assistant sees what it is (`abilities`) and grows itself (`extend`): a skill when you teach it how you want a kind of task done, a plugin when a task needs a service or routine it lacks; each checked before it goes in, the old one kept |
 | **Goals** | Name a finish line ("keep at it until the tests pass") and the assistant works until a check says it is met; the goal shows above the message box |
 
 ## How it works
@@ -116,7 +117,7 @@ You act by words alone: there are no menus and no stop button. Clicks and keys o
 | Cmd+Shift+F (Ctrl+Shift+F off macOS) | The overview: the chat in the fewest blocks, and back |
 | Cmd+B (Ctrl+B off macOS) | Hide or show the sidebar |
 
-Ask for what you want in plain words: "stop", "fire Scout", "have three agents check each crate", "keep going until the build is green", "what did I spend this week?", "bring in my Claude Code chats since June", "export your memory", "show me your memory tree", "remember that I deploy with fly", "forget fact #12", "purge the message with my token", "ask Max what he thinks" (or `@Max what do you think?`; `@Max` alone opens Max's chat), "make me a personal stylist called Marrie".
+Ask for what you want in plain words: "stop", "fire Scout", "have three agents check each crate", "keep going until the build is green", "what did I spend this week?", "bring in my Claude Code chats since June", "export your memory", "show me your memory tree", "remember that I deploy with fly", "forget fact #12", "what can you do?", "learn how I like meeting notes", "purge the message with my token", "ask Max what he thinks" (or `@Max what do you think?`; `@Max` alone opens Max's chat), "make me a personal stylist called Marrie".
 
 ### Tools the agent has
 
@@ -124,10 +125,12 @@ Ask for what you want in plain words: "stop", "fire Scout", "have three agents c
 |---|---|---|
 | `zoom`, `date`, `search` | everyone | Open a line of the view; a message's date; find the messages whose words match (full text, newest first) |
 | `list_skills`, `load_skill` | everyone | The user's skills (how-tos for kinds of task), and one's steps |
+| `abilities` | everyone | What the caller is and has: who it is, its tools, luau's globals and the plugin giving each, broken plugins, skills, and where Acorn's dir and source are |
 | `luau` | everyone | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch` and `json`, on the engines' machine in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s) |
 | `delegate`, `tell`, `fire` | assistants | Give agents one task each, in parallel, in the background; message one at work (it cuts in); fire one or all |
 | `create_assistant`, `archive_assistant`, `restore_assistant` | with you | Make an assistant (name, about, effort, instructions, welcome); take one off the sidebar, its files kept; bring it back |
 | `list_assistants`, `ask_assistant` | with you | List the other assistants (or those a query matches) and ask one, in your two's thread; its reply comes back as a message |
+| `extend` | with you | Install, replace or remove a skill or a plugin; a plugin is load-checked with all the others first and refused if it fails (one only missing its key is installed); what it replaces goes to the attic |
 | `remember`, `forget`, `purge`, `unpurge` | with you | Keep and drop facts; erase a message, or take that back within ten minutes |
 | `goal`, `usage`, `import`, `export`, `tree` | with you | Set or drop the goal; read costs, and each day's zooms and searches that found something or not; import past chats; save the memory as JSON; open the tree as a page |
 
@@ -135,7 +138,7 @@ An assistant answering another in a thread has its work tools only: it can't con
 
 ### Plugins
 
-A plugin adds a global to `luau`, or replaces one, without restarting Acorn. Each is a Luau file in `~/.acorn/plugins`, and it counts from the caller's next `luau` call: edit or remove it and that counts too, and the agent's own globals stay. Ask Acorn for one in plain words ("use Exa for search"), or copy one from [plugins](plugins):
+A plugin adds a global to `luau`, or replaces one, without restarting Acorn. Each is a Luau file in `~/.acorn/plugins`, and it counts from the caller's next `luau` call: edit or remove it and that counts too, and the agent's own globals stay. Ask Acorn for one in plain words ("use Exa for search", "learn to roll dice"): it writes the plugin and installs it with `extend`, which loads it beside the others first and refuses one that fails, so a broken plugin never replaces a working one. Or copy one from [plugins](plugins):
 
 | Plugin | Replaces | Key |
 |---|---|---|
@@ -181,6 +184,8 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `~/.acorn/assistants.json` | The assistants created, oldest first |
 | `~/.acorn/facts.db` | Facts, shared by all assistants |
 | `~/.acorn/plugins/` | Luau files that add to or replace `luau`'s globals |
+| `~/.acorn/skills/` | Skills, a dir each with a `SKILL.md` |
+| `~/.acorn/attic/` | Skills and plugins `extend` replaced or removed, named by kind, name and time |
 | `~/.acorn/work/` | The agents' work dirs: `main` for Acorn, `assistants/<id>` for others |
 | `~/.acorn/chats/<id>/chat.db` | A chat: messages and their full-text index, agent logs, the summary tree, the view, usage, what each zoom and search found, and purged messages for their ten minutes (SQLite, WAL) |
 | `~/.acorn/chats/<id>/docs/images/` | The chat's images, by hash |
