@@ -17,6 +17,7 @@ dependencies = [
  "nsh-platform-linux",
  "nsh-platform-macos",
  "nsh-testing",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
