@@ -34,4 +34,13 @@ nsh-platform-linux = { version = "0.4.0", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"] }
 nsh-engine = "0.4.0"
 nsh-testing = "0.4.0"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 tempfile = "3"
+
+# The scenarios on the real model: each in a process of its own (the
+# engines are one a process), several at once. `cargo test -p acorn --test
+# live -- --ignored` with DEEPSEEK_API_KEY; see tests/live/main.rs.
+[[test]]
+name = "live"
+path = "tests/live/main.rs"
+harness = false
