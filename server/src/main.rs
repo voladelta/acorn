@@ -89,7 +89,6 @@ impl Server {
 }
 
 fn main() {
-  dotenv();
   tokio::runtime::Runtime::new().expect("runtime").block_on(serve());
 }
 
@@ -166,27 +165,6 @@ async fn serve() {
     .await
     .expect("acorn-server");
   acorn_core::machine::end();
-}
-
-/// `.env` in the working dir, if there: each KEY=value not already set
-/// joins the environment (DEEPSEEK_API_KEY; see .env.example).
-fn dotenv() {
-  let Ok(text) = std::fs::read_to_string(".env") else {
-    return;
-  };
-  for line in text
-    .lines()
-    .map(str::trim)
-    .filter(|l| !l.is_empty() && !l.starts_with('#'))
-  {
-    if let Some((k, v)) = line.split_once('=') {
-      let (k, v) = (k.trim(), v.trim().trim_matches('"'));
-      if std::env::var_os(k).is_none() {
-        // SAFETY: at the start, before any other thread runs.
-        unsafe { std::env::set_var(k, v) };
-      }
-    }
-  }
 }
 
 /// The server's token: kept in $ACORN_DIR, made the first time.

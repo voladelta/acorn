@@ -92,12 +92,11 @@ cargo build --release -p acorn
 The window runs in a browser as an Octane page (`web/`: Vite, Base UI and shadcn, the same chat, blocks, tabs and `@Name` box as the desktop's). The engines stay native: `acorn-server` runs them on a macOS or Linux machine and serves the page and its API, so the agent's tools act on that machine.
 
 ```bash
-(cd web && npm ci && npm run build)               # the page into web/dist
-cp .env.example .env                             # then put your DeepSeek key in it
+(cd web && npm ci && npm run build)  # the page into web/dist
 cargo run --release -p acorn-server
 ```
 
-Open the link it prints (`http://127.0.0.1:8484/?token=...`): the token becomes a cookie, and every request needs it, since the agent runs commands there. The token is kept in `$ACORN_DIR/server-token`. The server reads `.env` from where it starts (gitignored), without overriding what the environment already sets. `--addr HOST:PORT` (or `ACORN_ADDR`) listens elsewhere; on anything but localhost, put it behind HTTPS. `--web DIR` (or `ACORN_WEB`) serves another build.
+Open the link it prints (`http://127.0.0.1:8484/?token=...`): the token becomes a cookie, and every request needs it, since the agent runs commands there. The token is kept in `$ACORN_DIR/server-token`. `--addr HOST:PORT` (or `ACORN_ADDR`) listens elsewhere; on anything but localhost, put it behind HTTPS. `--web DIR` (or `ACORN_WEB`) serves another build.
 
 The server and the desktop app both hear every chat, so don't run both on the same `$ACORN_DIR` at once.
 
