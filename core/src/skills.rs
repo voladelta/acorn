@@ -97,7 +97,7 @@ fn scan(roots: &[PathBuf]) -> Vec<Skill> {
 
 /// A file's `---` block and what follows; no block, no head. A byte-order
 /// mark and CRLF lines are as the plain ones.
-fn split(text: &str) -> (&str, &str) {
+pub(crate) fn split(text: &str) -> (&str, &str) {
   let text = text.trim_start_matches('\u{feff}');
   let mut lines = text.split_inclusive('\n');
   let Some(first) = lines.next().filter(|l| l.trim_end() == "---") else {
@@ -115,7 +115,7 @@ fn split(text: &str) -> (&str, &str) {
 
 /// The value of `key:` in a head. One that opens a block (`>`, `|`) or is
 /// empty takes the indented lines after it.
-fn field(head: &str, key: &str) -> Option<String> {
+pub(crate) fn field(head: &str, key: &str) -> Option<String> {
   let mut lines = head.lines();
   let value = lines
     .find_map(|l| l.strip_prefix(key)?.trim_start().strip_prefix(':'))?

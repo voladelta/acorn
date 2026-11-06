@@ -108,10 +108,37 @@ impl Toolbox for Kit {
 
   fn call(&self, name: String, input: Value, cancel: CancellationToken) -> BoxFuture<'static, Out> {
     let (engine, cwd, halt) = (self.engine.clone(), self.work.join(&self.who), self.halt.clone());
+    let specs = (name == "abilities").then(|| self.specs());
+    let (who, thread) = (self.who.clone(), self.thread);
     async move {
       let Some(engine) = engine.upgrade() else {
         return Out::fail("Acorn quit.");
       };
+      if let Some(specs) = specs {
+        let me = engine.lock().me.clone();
+        let about = me.brief().map_or_else(String::new, |a| format!(" · {a}"));
+        let part = if who != MAIN {
+          format!("{who}, an agent {} delegated one task to", me.name)
+        } else if thread {
+          format!(
+            "{}{about}, answering another assistant in your thread with them",
+            me.name
+          )
+        } else {
+          format!(
+            "{}{about}, one of the user's assistants, in your chat with the user",
+            me.name
+          )
+        };
+        let project = input["dir"].as_str().unwrap_or_default().to_string();
+        return Out::ok(crate::extend::abilities(
+          &config::get().dir,
+          &part,
+          &specs,
+          &cwd,
+          &project,
+        ));
+      }
       engine.tool(cwd, &name, input, cancel, halt).await
     }
     .boxed()
@@ -252,6 +279,13 @@ impl Engine {
           id => Out::ok(chat.purge(None, number(id).unwrap_or(u64::MAX), back)),
         }
       }
+      "extend" => crate::extend::extend(
+        &config::get().dir,
+        &str("kind"),
+        &str("name"),
+        input["text"].as_str().unwrap_or_default(),
+      )
+      .map_or_else(Out::fail, Out::ok),
       "create_assistant" => {
         let Some(effort) = Effort::parse(&str("effort")) else {
           return no_effort(&input["effort"]);

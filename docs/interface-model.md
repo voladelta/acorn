@@ -122,6 +122,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Search | find what no summary mentions | The assistant searches the messages for a word or name, then opens the hits. |
 | Purge | erase a secret | "Purge the message with my token": it and its summaries vanish; "unpurge it" brings it back within ten minutes, then it is wiped from disk. |
 | Create assistant | more people | Ask for someone with a name and an about; they appear in the sidebar and stay. |
+| Growing | an assistant extends itself | It sees what it has (`abilities`); taught a way of working, it writes a skill; short of a service or routine, a plugin (`extend`), checked before it goes in, the old one kept in the attic. |
 | Mention | name an assistant in the box | `@Max` alone opens your chat with Max; `@Max what do you think?` has the one you talk to ask Max. |
 
 **Ask or delegate.** An assistant asks another assistant for judgment (a part, taste, expertise, memory of its own) and delegates labour to an agent (research, a long build, many files) that can run while it goes on. Assistants stay; agents are gone after one report. Agents delegate to no one and ask no one.
@@ -154,6 +155,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Interrupt, redirect, stop the turn | any message (barge-in) | – |
 | Look back in memory | `zoom`, `date`, `search` (the assistant's own) | – |
 | Work on the Mac and the web | `luau`; `list_skills`, `load_skill` | – |
+| Know itself / grow (skill, plugin) | `abilities`; `extend` (checked before installed, old one to the attic) | – |
 | Delegate to / message / fire an agent | `delegate`, `tell`, `fire` | – |
 | Ask another assistant | `list_assistants`, `ask_assistant`; `@Name` in a message | – |
 | Create / archive / restore an assistant | `create_assistant` (name, about, effort, instructions, welcome), `archive_assistant`, `restore_assistant` | – |
