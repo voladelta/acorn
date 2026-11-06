@@ -269,7 +269,7 @@ pub async fn tool(tg: &Arc<Tg>, name: &str, input: &Value, cancel: &Cancellation
           "The bot is in no group or channel. Add it to one in Telegram (as an admin, or with privacy mode off in BotFather, to hear every message).",
         );
       }
-      let deaf = !tg.me.get().is_some_and(|m| m.reads_all);
+      let deaf = !tg.hears_all().await;
       let mut said: Vec<String> = rooms
         .iter()
         .map(|(id, r)| {

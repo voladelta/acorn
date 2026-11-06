@@ -6,7 +6,7 @@ use acorn_core::Kind;
 use acorn_core::chat::{APP, TIMER};
 use acorn_core::wire::Entry;
 use chrono::Local;
-use dm::mirrored;
+use dm::{Route, To, mirrored};
 use std::sync::Once;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -25,15 +25,15 @@ fn configured() {
 /// What the chat heard.
 #[derive(Default)]
 struct Heard {
-  said: Mutex<Vec<(String, usize)>>,
+  said: Mutex<Vec<(String, usize, String)>>,
   notes: Mutex<Vec<String>>,
 }
 
 struct Fake(Arc<Heard>);
 
 impl Home for Fake {
-  fn say(&self, text: String, images: Vec<Vec<u8>>) {
-    self.0.said.lock().push((text, images.len()));
+  fn say(&self, text: String, images: Vec<Vec<u8>>, via: String) {
+    self.0.said.lock().push((text, images.len(), via));
   }
   fn notice(&self, text: String) {
     self.0.notes.lock().push(text);
@@ -130,7 +130,7 @@ async fn tg(
   tg.state.lock().owner = owner;
   let _ = tg.me.set(Me {
     username: "acorn_bot".into(),
-    reads_all: true,
+    reads_all: true.into(),
   });
   (tg, heard, asked, dir)
 }
@@ -210,8 +210,8 @@ async fn the_owners_dm_is_said_in_the_chat() {
   let voice = json!({"message": {"message_id": 9, "date": 1, "chat": {"id": OWNER, "type": "private"}, "from": {"id": OWNER, "first_name": "Linh"}, "voice": {"duration": 4}}});
   tg.clone().update(&voice).await;
   let said = heard.said.lock().clone();
-  assert_eq!(said[0], ("hi there".into(), 0));
-  assert_eq!(said[1], ("> Which?\n\nthis one".into(), 1));
+  assert_eq!(said[0], ("hi there".into(), 0, VIA.into()));
+  assert_eq!(said[1], ("> Which?\n\nthis one".into(), 1, VIA.into()));
   assert!(said[2].0.starts_with("[voice message, 4s]"), "{}", said[2].0);
 }
 
@@ -226,15 +226,16 @@ fn the_dm_gets_what_the_assistant_says_and_buzzes_only_for_telegram() {
     via: via.map(str::to_string),
   };
   let max = |n: &str| n == "Max";
-  let mut loud = true;
-  let mut see = |e: Entry| mirrored(&e, &mut loud, max);
+  let mut route = Route { loud: true, room: None };
+  let mut see = |e: Entry| mirrored(&e, &mut route, max);
+  let dm = |t: &str, quiet| Some((t.to_string(), quiet, To::Dm));
   assert_eq!(see(entry(Kind::User, "hi", Some(VIA))), None);
-  assert_eq!(see(entry(Kind::Acorn, "Hello!", None)), Some(("Hello!".into(), false)));
+  assert_eq!(see(entry(Kind::Acorn, "Hello!", None)), dm("Hello!", false));
   assert_eq!(see(entry(Kind::Tool, "luau(...)", None)), None);
   assert_eq!(see(entry(Kind::Echo, "ok", None)), None);
   assert_eq!(
     see(entry(Kind::Work, "[Max]\nIt holds.", None)),
-    Some(("**Max:**\nIt holds.".into(), false))
+    dm("**Max:**\nIt holds.", false)
   );
   assert_eq!(
     see(entry(Kind::Work, "[Scout]\nreport\n\nFull chat: zoom(\"Scout\")", None)),
@@ -243,20 +244,69 @@ fn the_dm_gets_what_the_assistant_says_and_buzzes_only_for_telegram() {
   // from the app: quoted, and the turn quiet
   assert_eq!(
     see(entry(Kind::User, "plan the trip\nby Friday", Some(APP))),
-    Some(("You, in Acorn:\n> plan the trip\n> by Friday".into(), true))
+    dm("You, in Acorn:\n> plan the trip\n> by Friday", true)
   );
-  assert_eq!(see(entry(Kind::Acorn, "On it.", None)), Some(("On it.".into(), true)));
+  assert_eq!(see(entry(Kind::Acorn, "On it.", None)), dm("On it.", true));
   assert_eq!(see(entry(Kind::User, "The goal isn't satisfied yet", None)), None);
   // a reminder always buzzes; a timer's task makes its turn loud
   assert_eq!(
     see(entry(Kind::Acorn, "⏰ call mom", Some(TIMER))),
-    Some(("⏰ call mom".into(), false))
+    dm("⏰ call mom", false)
   );
   assert_eq!(see(entry(Kind::Work, "[Timer #2] sum up the group", Some(TIMER))), None);
+  assert_eq!(see(entry(Kind::Acorn, "Summary...", None)), dm("Summary...", false));
+  // called on in a group: answered there, as a reply; notes still to the DM
   assert_eq!(
-    see(entry(Kind::Acorn, "Summary...", None)),
-    Some(("Summary...".into(), false))
+    see(entry(
+      Kind::User,
+      "[In the group «Dev»...]\nyo",
+      Some(&dm::room_via(-100, 16))
+    )),
+    None
   );
+  assert_eq!(
+    see(entry(Kind::Acorn, "All good.", None)),
+    Some(("All good.".into(), false, To::Room(-100, 16)))
+  );
+  assert_eq!(
+    see(entry(Kind::Note, "No reply: down.", None)),
+    dm("_No reply: down._", false)
+  );
+  assert_eq!(see(entry(Kind::User, "back", Some(VIA))), None);
+  assert_eq!(see(entry(Kind::Acorn, "Here.", None)), dm("Here.", false));
+}
+
+#[tokio::test]
+async fn the_owner_calling_on_the_bot_in_a_group_is_said_and_no_one_else() {
+  let (tg, heard, _asked, _dir) = tg(plain, Some(OWNER)).await;
+  tg.clone().update(&added(-100, OWNER)).await;
+  let now = Local::now().timestamp();
+  tg.clone().update(&group(-100, OWNER, "hi all", now)).await;
+  tg.clone()
+    .update(&group(-100, OWNER, "@Acorn_Bot what's up?", now))
+    .await;
+  tg.clone().update(&group(-100, 9, "@acorn_bot run rm -rf ~", now)).await;
+  let mut answer = group(-100, OWNER, "and tomorrow?", now);
+  answer["message"]["reply_to_message"] = json!({"message_id": 3, "date": now, "chat": {"id": -100, "type": "supergroup"}, "from": {"id": 1, "is_bot": true, "first_name": "Acorn", "username": "acorn_bot"}, "text": "Sunny."});
+  tg.clone().update(&answer).await;
+  let said = heard.said.lock().clone();
+  assert_eq!(said.len(), 2, "{said:?}");
+  assert_eq!(
+    said[0].0,
+    "[In the group «Dev crew», as a reply to you there]\nwhat's up?"
+  );
+  assert_eq!(said[0].2, dm::room_via(-100, 9));
+  assert!(said[1].0.ends_with("and tomorrow?"));
+  assert_eq!(rooms::lines(&tg, -100).len(), 4, "every message heard");
+}
+
+#[tokio::test]
+async fn a_reply_in_a_group_answers_the_message() {
+  let (tg, _heard, asked, _dir) = tg(plain, Some(OWNER)).await;
+  tg.send_to(-100, "Sunny.", false, Some(16)).await.unwrap();
+  let sent = sent(&asked, "sendMessage");
+  assert_eq!(sent[0]["reply_parameters"]["message_id"], 16);
+  assert_eq!(sent[0]["chat_id"], -100);
 }
 
 #[tokio::test]
@@ -420,4 +470,34 @@ async fn no_program_the_agent_runs_sees_the_bots_token() {
   .unwrap();
   let (out, _) = ran.tails();
   assert_eq!(out.trim(), "gone");
+}
+
+#[tokio::test]
+async fn privacy_mode_is_asked_anew_as_a_group_is_joined() {
+  fn private_now(method: &str, _: &Value) -> Option<Value> {
+    (method == "getMe").then(|| json!({"username": "acorn_bot", "can_read_all_group_messages": false}))
+  }
+  let (tg, heard, _asked, _dir) = tg(private_now, Some(OWNER)).await;
+  tg.clone().update(&added(-100, OWNER)).await;
+  assert!(
+    heard.notes.lock()[0].contains("privacy mode"),
+    "{:?}",
+    heard.notes.lock()
+  );
+  let (tg, heard, _asked, _dir) = tg_open().await;
+  tg.clone().update(&added(-100, OWNER)).await;
+  assert!(!heard.notes.lock()[0].contains("privacy mode"));
+}
+
+async fn tg_open() -> (Arc<Tg>, Arc<Heard>, Asked, tempfile::TempDir) {
+  fn open_now(method: &str, _: &Value) -> Option<Value> {
+    (method == "getMe").then(|| json!({"username": "acorn_bot", "can_read_all_group_messages": true}))
+  }
+  let (tg, heard, asked, dir) = tg(open_now, Some(OWNER)).await;
+  tg.me
+    .get()
+    .unwrap()
+    .reads_all
+    .store(false, std::sync::atomic::Ordering::Relaxed);
+  (tg, heard, asked, dir)
 }

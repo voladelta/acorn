@@ -27,7 +27,7 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Growing** | An assistant sees what it is (`abilities`) and grows itself (`extend`): a skill when you teach it how you want a kind of task done, a plugin when a task needs a service or routine it lacks; each checked before it goes in, the old one kept |
 | **Goals** | Name a finish line ("keep at it until the tests pass") and the assistant works until a check says it is met; the goal shows above the message box |
 | **Timers** | "Remind me at 9 to call mom", "check the build in an hour", "every evening, sum up the dev group": a reminder said when due, or a task done then, once or on a cron line |
-| **Telegram App** | With a bot token, an assistant whose chat is also your DM with the bot: write in Telegram or the app, one chat. It hears the groups the bot is in for 24 hours, and posts only when you ask |
+| **Telegram App** | With a bot token, an assistant whose chat is also your DM with the bot: write in Telegram or the app, one chat. It hears the groups the bot is in for 24 hours, and speaks there only when you call on it or ask it to post |
 
 ## How it works
 
@@ -156,7 +156,8 @@ How well Jev does each of these is measured on labelled data frozen in [core/eva
 1. Make a bot with [@BotFather](https://t.me/BotFather) and put its token in `config.json` as `telegram_bot_token` (or `TELEGRAM_BOT_TOKEN`), then start Acorn or `acorn-server`.
 2. Telegram App appears in the sidebar with a pairing code. Send the code to your bot: it binds the bot to your Telegram account, and it answers no one else.
 3. Chat there or in the app; it is one chat. Telegram gets all Telegram App says, and what you write to it in the app, quoted; replies to what you wrote in the app come without a buzz, reminders with one. `@Max` in a message asks Max, whose answer comes under his name.
-4. Add the bot to a group or channel to have it heard: one you add is recorded at once, one someone else adds once you say so. To hear every message of a group, make the bot an admin there or turn its privacy mode off (BotFather, `/setprivacy`) and add it again; a channel needs it as an admin to post.
+4. In a group, @mention the bot or answer one of its messages and it answers there, as a reply to you; anyone else's mention is only heard, since the assistant has your tools. It never speaks in a group on its own.
+5. Add the bot to a group or channel to have it heard: one you add is recorded at once, one someone else adds once you say so. To hear every message of a group, make the bot an admin there or turn its privacy mode off (BotFather, `/setprivacy`) and add it again; a channel needs it as an admin to post.
 
 Messages of groups are kept in `telegram/rooms/` for 24 hours, erased each day at 04:00 and as Acorn starts, and never enter a chat's memory unless Telegram App reads them for you. Updates come by long poll, so no public address is needed. One Acorn polls a bot at a time: a second is refused by Telegram, and says so.
 

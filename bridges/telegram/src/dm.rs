@@ -5,8 +5,10 @@
 //! and what the chat says goes back. All the assistant says is sent; what
 //! the owner wrote to it in the app, quoted, and the replies to that
 //! without a buzz, since they are at their desk; another assistant's
-//! answer ("[Max] ...") under its name; a reminder, loud. "typing" shows
-//! while a turn runs.
+//! answer ("[Max] ...") under its name; a reminder, loud. A turn the
+//! owner began by calling on the bot in a group answers there, as a reply
+//! to them; its notes still come to the DM. "typing" shows where the turn
+//! answers while it runs.
 
 use super::{Tg, VIA};
 use acorn_core::Kind;
@@ -61,58 +63,100 @@ pub async fn inbound(tg: &Arc<Tg>, msg: &Value, edited: bool) {
   if edited {
     text = format!("(edited) {text}");
   }
-  tg.home.say(text, images);
+  tg.home.say(text, images, VIA.into());
 }
 
-/// What the owner's DM gets of a chat's entry: its text, and whether it
-/// goes without a buzz. `loud`: whether the turn was begun on Telegram
-/// or by a timer, kept from entry to entry.
-pub fn mirrored(entry: &Entry, loud: &mut bool, assistant: impl Fn(&str) -> bool) -> Option<(String, bool)> {
+/// Where a turn answers, kept from entry to entry: loud, whether it was
+/// begun on Telegram or by a timer; room, the group and message it began
+/// by (none: the DM).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Route {
+  pub loud: bool,
+  pub room: Option<(i64, i64)>,
+}
+
+/// Where an entry goes: the DM, or a group as a reply to a message.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum To {
+  Dm,
+  Room(i64, i64),
+}
+
+/// How a mention in a group is said to come (`Home::say`).
+pub fn room_via(chat: i64, msg: i64) -> String {
+  format!("{VIA}:{chat}:{msg}")
+}
+
+/// The group and message a `room_via` names.
+fn room_of(via: &str) -> Option<(i64, i64)> {
+  let (chat, msg) = via.strip_prefix(VIA)?.strip_prefix(':')?.split_once(':')?;
+  Some((chat.parse().ok()?, msg.parse().ok()?))
+}
+
+/// What Telegram gets of a chat's entry: its text, whether it goes
+/// without a buzz, and where.
+pub fn mirrored(entry: &Entry, route: &mut Route, assistant: impl Fn(&str) -> bool) -> Option<(String, bool, To)> {
   let via = entry.via.as_deref();
   let text = entry.text.trim();
+  let to = route.room.map_or(To::Dm, |(chat, msg)| To::Room(chat, msg));
+  let quiet = !route.loud;
   match entry.kind {
-    Kind::User => match via {
-      Some(VIA) => {
-        *loud = true;
-        None
+    Kind::User => {
+      match via {
+        Some(VIA) => *route = Route { loud: true, room: None },
+        Some(APP) => {
+          *route = Route {
+            loud: false,
+            room: None,
+          };
+          let quote = text.lines().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n");
+          return Some((format!("You, in Acorn:\n{quote}"), true, To::Dm));
+        }
+        Some(v) if room_of(v).is_some() => {
+          *route = Route {
+            loud: true,
+            room: room_of(v),
+          }
+        }
+        _ => {}
       }
-      Some(APP) => {
-        *loud = false;
-        let quote = text.lines().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n");
-        Some((format!("You, in Acorn:\n{quote}"), true))
-      }
-      _ => None,
-    },
+      None
+    }
     Kind::Work if via == Some(TIMER) => {
-      *loud = true;
+      *route = Route { loud: true, room: None };
       None
     }
     Kind::Work => {
       let (head, said) = text.split_once('\n')?;
       let name = head.strip_prefix('[')?.strip_suffix(']')?;
-      assistant(name).then(|| (format!("**{name}:**\n{}", said.trim()), !*loud))
+      assistant(name).then(|| (format!("**{name}:**\n{}", said.trim()), quiet, to))
     }
-    Kind::Acorn if via == Some(TIMER) => Some((text.to_string(), false)),
-    Kind::Acorn if !text.is_empty() => Some((text.to_string(), !*loud)),
-    Kind::Note if !text.is_empty() => Some((format!("_{text}_"), !*loud)),
+    Kind::Acorn if via == Some(TIMER) => Some((text.to_string(), false, To::Dm)),
+    Kind::Acorn if !text.is_empty() => Some((text.to_string(), quiet, to)),
+    Kind::Note if !text.is_empty() => Some((format!("_{text}_"), quiet, To::Dm)),
     _ => None,
   }
 }
 
-/// The chat's events, mirrored to the owner's DM as they come.
+/// The chat's events, mirrored to Telegram as they come.
 pub async fn mirror(tg: Arc<Tg>, mut events: UnboundedReceiver<Event>) {
   let busy = Arc::new(AtomicBool::new(false));
-  tokio::spawn(typing(tg.clone(), busy.clone()));
-  let mut loud = true;
+  let route = Arc::new(parking_lot::Mutex::new(Route { loud: true, room: None }));
+  tokio::spawn(typing(tg.clone(), busy.clone(), route.clone()));
   let assistant = |name: &str| acorn_core::assistant::find(name).is_some();
   while let Some(ev) = events.recv().await {
     match ev {
       Event::State(state) => busy.store(state.busy, Ordering::Relaxed),
       Event::Entry { agent: None, entry, .. } => {
-        let (Some((text, silent)), Some(owner)) = (mirrored(&entry, &mut loud, assistant), tg.owner()) else {
+        let said = mirrored(&entry, &mut route.lock(), assistant);
+        let (Some((text, silent, to)), Some(owner)) = (said, tg.owner()) else {
           continue;
         };
-        if let Err(why) = tg.send(owner, &text, silent).await {
+        let sent = match to {
+          To::Dm => tg.send(owner, &text, silent).await,
+          To::Room(chat, msg) => tg.send_to(chat, &text, silent, Some(msg)).await,
+        };
+        if let Err(why) = sent {
           eprintln!("acorn: telegram: {why}");
         }
       }
@@ -121,21 +165,22 @@ pub async fn mirror(tg: Arc<Tg>, mut events: UnboundedReceiver<Event>) {
   }
 }
 
-/// "typing" in the owner's DM while a turn runs.
-async fn typing(tg: Arc<Tg>, busy: Arc<AtomicBool>) {
+/// "typing" where the turn answers, while it runs.
+async fn typing(tg: Arc<Tg>, busy: Arc<AtomicBool>, route: Arc<parking_lot::Mutex<Route>>) {
   loop {
     tokio::select! {
         _ = tokio::time::sleep(TYPING) => {}
         _ = tg.stop.cancelled() => return,
     }
+    let at = route.lock().room.map(|(chat, _)| chat).or(tg.owner());
     if busy.load(Ordering::Relaxed)
-      && let Some(owner) = tg.owner()
+      && let Some(chat) = at
     {
       let _ = tg
         .bot
         .call(
           "sendChatAction",
-          &json!({"chat_id": owner, "action": "typing"}),
+          &json!({"chat_id": chat, "action": "typing"}),
           &tg.stop,
         )
         .await;
