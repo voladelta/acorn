@@ -1619,6 +1619,88 @@ mod tests {
     }
   }
 
+  const GITHUB_FILE: &str = include_str!("../../plugins/github.luau");
+
+  /// The github plugin, its gh at `gh` and its API at `at`, with no token.
+  fn github_plugin(gh: &str, at: &str) -> String {
+    GITHUB_FILE
+      .replace("local GH = \"gh\"", &format!("local GH = {gh:?}"))
+      .replace("https://api.github.com", at)
+      .replace("key(\"GITHUB_TOKEN\") or key(\"GH_TOKEN\")", "'T'")
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn github_without_gh_calls_the_api_and_fills_the_repo() {
+    let lab = Lab::new();
+    let git = |args: &[&str]| {
+      let ok = std::process::Command::new("git")
+        .args(args)
+        .current_dir(lab.cwd.path())
+        .output()
+        .unwrap()
+        .status
+        .success();
+      assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["remote", "add", "origin", "git@github.com:octo/hello.git"]);
+    let (at, seen) = server(r#"{"number": 7}"#).await;
+    lab.file("github.luau", &github_plugin("/nonexistent/gh", &at));
+    let out = lab
+      .go("github('/repos/{owner}/{repo}/pulls', {json = {title = 'T'}}).number")
+      .await;
+    assert_eq!(out.text.lines().next(), Some("=> 7"), "{}", out.text);
+    let seen = seen.await.unwrap();
+    assert!(
+      seen.starts_with("POST /repos/octo/hello/pulls ")
+        && seen.contains("authorization: Bearer T")
+        && seen.ends_with(r#"{"title":"T"}"#),
+      "{seen}"
+    );
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn github_prefers_gh_when_it_is_signed_in() {
+    let lab = Lab::new();
+    let gh = lab.cwd.path().join("fake-gh");
+    std::fs::write(
+      &gh,
+      "#!/bin/sh\n[ \"$1\" = auth ] && exit 0\n[ \"$4\" = repos/x/y/nope ] && { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }\nbody=null\ncase \"$*\" in *--input*) body=$(cat);; esac\nprintf '{\"args\":\"%s\",\"body\":%s}' \"$*\" \"$body\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    lab.file(
+      "github.luau",
+      &github_plugin(gh.to_str().unwrap(), "http://127.0.0.1:1"),
+    );
+    let read = lab
+      .go("github('repos/x/y/issues', {query = {state = 'open', q = \"a b'\"}}).args")
+      .await;
+    assert_eq!(
+      read.text.lines().next(),
+      Some("=> api -X GET repos/x/y/issues?q=a%20b%27&state=open"),
+      "{}",
+      read.text
+    );
+    let wrote = lab
+      .go("local r = github('repos/x/y/issues', {method = 'patch', json = {title = \"it's\"}})\nreturn r.args, r.body.title")
+      .await;
+    assert_eq!(
+      wrote.text.lines().next(),
+      Some("=> api -X PATCH repos/x/y/issues --input -, it's"),
+      "{}",
+      wrote.text
+    );
+    let failed = lab.go("pcall(github, 'repos/x/y/nope')").await;
+    assert!(
+      failed
+        .text
+        .starts_with("=> false, github GET repos/x/y/nope: gh: Not Found (HTTP 404)"),
+      "{}",
+      failed.text
+    );
+  }
+
   #[tokio::test(flavor = "multi_thread")]
   async fn text_that_looks_like_bytecode_is_only_a_syntax_error() {
     let lab = Lab::new();
