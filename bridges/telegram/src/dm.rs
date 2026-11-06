@@ -17,11 +17,13 @@ use acorn_core::wire::{Entry, Event};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::sync::Notify;
 use tokio::sync::mpsc::UnboundedReceiver;
 
-/// How often "typing" is said again: Telegram shows it 5 s.
-const TYPING: Duration = Duration::from_secs(4);
+/// How often "typing" is looked at, and how long Telegram shows it.
+const TYPING: Duration = Duration::from_secs(1);
+const SHOWN: Duration = Duration::from_secs(5);
 /// The most characters of an answered message quoted.
 const QUOTE: usize = 200;
 
@@ -138,17 +140,30 @@ pub fn mirrored(entry: &Entry, route: &mut Route, assistant: impl Fn(&str) -> bo
   }
 }
 
+/// What "typing" goes by: whether a turn runs, when it was last said or a
+/// message last went (none again till Telegram's own showing of it is
+/// over), and a turn's start, said at once.
+#[derive(Default)]
+struct Typing {
+  busy: AtomicBool,
+  last: parking_lot::Mutex<Option<Instant>>,
+  begun: Notify,
+}
+
 /// The chat's events, mirrored to Telegram as they come.
 pub async fn mirror(tg: Arc<Tg>, mut events: UnboundedReceiver<Event>) {
-  let busy = Arc::new(AtomicBool::new(false));
-  let route = Arc::new(parking_lot::Mutex::new(Route { loud: true, room: None }));
-  tokio::spawn(typing(tg.clone(), busy.clone(), route.clone()));
+  let typing = Arc::new(Typing::default());
+  tokio::spawn(typist(tg.clone(), typing.clone()));
   let assistant = |name: &str| acorn_core::assistant::find(name).is_some();
   while let Some(ev) = events.recv().await {
     match ev {
-      Event::State(state) => busy.store(state.busy, Ordering::Relaxed),
+      Event::State(state) => {
+        if !typing.busy.swap(state.busy, Ordering::Relaxed) && state.busy {
+          typing.begun.notify_one();
+        }
+      }
       Event::Entry { agent: None, entry, .. } => {
-        let said = mirrored(&entry, &mut route.lock(), assistant);
+        let said = mirrored(&entry, &mut tg.route.lock(), assistant);
         let (Some((text, silent, to)), Some(owner)) = (said, tg.owner()) else {
           continue;
         };
@@ -156,6 +171,7 @@ pub async fn mirror(tg: Arc<Tg>, mut events: UnboundedReceiver<Event>) {
           To::Dm => tg.send(owner, &text, silent).await,
           To::Room(chat, msg) => tg.send_to(chat, &text, silent, Some(msg)).await,
         };
+        *typing.last.lock() = Some(Instant::now());
         if let Err(why) = sent {
           eprintln!("acorn: telegram: {why}");
         }
@@ -165,17 +181,23 @@ pub async fn mirror(tg: Arc<Tg>, mut events: UnboundedReceiver<Event>) {
   }
 }
 
-/// "typing" where the turn answers, while it runs.
-async fn typing(tg: Arc<Tg>, busy: Arc<AtomicBool>, route: Arc<parking_lot::Mutex<Route>>) {
+/// "typing" where the turn answers, while it runs: at its start, then
+/// again as Telegram's showing of it ends, never just after a message went
+/// (the turn is ending, and it would linger past the answer).
+async fn typist(tg: Arc<Tg>, typing: Arc<Typing>) {
   loop {
     tokio::select! {
         _ = tokio::time::sleep(TYPING) => {}
+        _ = typing.begun.notified() => {}
         _ = tg.stop.cancelled() => return,
     }
-    let at = route.lock().room.map(|(chat, _)| chat).or(tg.owner());
-    if busy.load(Ordering::Relaxed)
+    let fresh = typing.last.lock().is_none_or(|t| t.elapsed() >= SHOWN);
+    let at = tg.route.lock().room.map(|(chat, _)| chat).or(tg.owner());
+    if typing.busy.load(Ordering::Relaxed)
+      && fresh
       && let Some(chat) = at
     {
+      *typing.last.lock() = Some(Instant::now());
       let _ = tg
         .bot
         .call(
