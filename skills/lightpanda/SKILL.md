@@ -16,6 +16,20 @@ JavaScript but draws no pixels, so it is fast and light.
 - `browser('tools')` lists every tool with its args, `browser('tools', {name = 'extract'})`
   shows one in full, and `browser('help')` gives the browser's own guide.
 
+## Fast: let Jev drive
+
+For a task of several clicks (search a site, fill and submit a form, click
+through to a page), call `browser_goal` once instead of a luau call per click:
+
+    print(browser_goal("Search for rust async and open the first result",
+      {url = "https://example.org", inputs = {query = "rust async"}}))
+
+Each step TypeSafe's Jev picks the next action in about 0.2 s, so a 10-step flow
+takes seconds, not ten of your turns. Put every text to type in `inputs`: Jev
+never makes up text. It returns the steps done and the final page's text:
+read that to check the goal was met, and finish by hand with the steps below
+if it stopped (blocked, stuck, out of steps).
+
 ## Steps
 
 1. Load and read in one call: `browser('markdown', {url = u, maxBytes = 20000})`,

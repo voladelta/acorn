@@ -2271,6 +2271,52 @@ document.getElementById('go').addEventListener('click', () => {
     assert!(unsafe { libc::kill(pid, 0) } != 0, "the browser, pages loaded, is gone");
   }
 
+  /// browser_goal on the real Lightpanda, with a decide that plays Jev:
+  /// type the name, click Greet, then done. Run with `cargo test -- --ignored`.
+  #[tokio::test(flavor = "multi_thread")]
+  #[ignore]
+  async fn lightpanda_goal_types_clicks_and_stops() {
+    let lab = Lab::new();
+    lab.file("lightpanda.luau", LIGHTPANDA_FILE);
+    lab.file(
+      "zz_decide.luau",
+      r#"local function pick(cands, word)
+  for k, v in cands do
+    if v:find(word, 1, true) then return k end
+  end
+end
+local function decide(state, q)
+  local done = #state.recent_actions
+  local op = if done == 0 then "TYPE" elseif done == 1 then "CLICK" else "DONE"
+  local a = { operation = { choice = op } }
+  if q.type_target then a.type_target = { choice = pick(q.type_target.criteria, "Name") } end
+  if q.type_value then a.type_value = { choice = "who" } end
+  if q.click_target then a.click_target = { choice = pick(q.click_target.criteria, "Greet") } end
+  return a
+end
+return { decide = { doc = "decide(state, questions) -- scripted", value = decide } }"#,
+    );
+    let at = page_server().await;
+    let out = lab
+      .go(&format!(
+        "print(browser_goal('Greet Tony', {{url = '{at}/', inputs = {{who = 'Tony'}}}}))"
+      ))
+      .await;
+    println!("{}", out.text);
+    assert!(
+      out.text.starts_with("status: done")
+        && out.text.contains("1. TYPE who into [")
+        && out.text.contains("2. CLICK [")
+        && out.text.contains("3. DONE")
+        && out.text.contains("Hello, Tony!"),
+      "{}",
+      out.text
+    );
+    let none = lab.go("pcall(browser_goal, '')").await;
+    assert!(none.text.contains("say the goal"), "{}", none.text);
+    lab.go("browser('close')").await;
+  }
+
   #[tokio::test(flavor = "multi_thread")]
   async fn text_that_looks_like_bytecode_is_only_a_syntax_error() {
     let lab = Lab::new();

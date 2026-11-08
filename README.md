@@ -170,7 +170,7 @@ A plugin adds a global to `luau`, or replaces one, without restarting Acorn. Eac
 | [exa.luau](plugins/exa.luau) | `web_search`, `web_fetch` | `exa_api_key` in `config.json`, or `EXA_API_KEY` |
 | [tinyfish.luau](plugins/tinyfish.luau) | `web_search`, `web_fetch` | `tinyfish_api_key` in `config.json`, or `TINYFISH_API_KEY` |
 | [github.luau](plugins/github.luau) | adds `github`, GitHub's REST API | none with [`gh`](https://cli.github.com) signed in; else `github_token` in `config.json`, or `GITHUB_TOKEN` (public reads need none) |
-| [lightpanda.luau](plugins/lightpanda.luau) | adds `browser`, a headless browser of the caller's own ([Lightpanda](https://lightpanda.io)): pages built by JavaScript, clicks, forms, sign-ins, `extract` by selector, screenshots | none; [`lightpanda`](https://lightpanda.io/docs/run-locally/installation/one-liner) on the `PATH` (or in `~/.local/bin`) of the user Acorn runs as |
+| [lightpanda.luau](plugins/lightpanda.luau) | adds `browser`, a headless browser of the caller's own ([Lightpanda](https://lightpanda.io)): pages built by JavaScript, clicks, forms, sign-ins, `extract` by selector, screenshots; and `browser_goal`, a task of several steps done with Jev picking each action (after [jev-ultrafast](https://github.com/browser-use/jev-ultrafast)), with a TypeSafe key | none; [`lightpanda`](https://lightpanda.io/docs/run-locally/installation/one-liner) on the `PATH` (or in `~/.local/bin`) of the user Acorn runs as |
 
 Install one search provider at a time: with both, the last by name wins, and each call says so. A file returns its globals, each with a one-line doc that goes in the tool's description:
 
