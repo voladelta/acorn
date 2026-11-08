@@ -21,7 +21,7 @@ local FLAGS = key("LIGHTPANDA_FLAGS") or ""
 
 -- The broker: starts the browser if it isn't running (and says "fresh"),
 -- sends one JSON-RPC request through the fifo, and waits for the line
--- answering its id, which it leaves in $D/res. Exit 3: no browser to start;
+-- answering its id, which it prints after "ok" and leaves in $D/res. Exit 3: no browser to start;
 -- 4: no answer in time (the browser is closed); 5: the browser died.
 local BROKER = [==[
 D=__DIR__; BIN=__BIN__; IDLE=__IDLE__; ID=__ID__; WAIT=__WAIT__
@@ -43,6 +43,15 @@ answer() {
 	done
 }
 send() { printf '%s\n' "$1" >"$D/in"; }
+# Lightpanda ignores a TERM once it has loaded a page: so a KILL after 1 s.
+stop() {
+	kill "$1" 2>/dev/null || return 0
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		kill -0 "$1" 2>/dev/null || return 0
+		sleep 0.1
+	done
+	kill -9 "$1" 2>/dev/null
+}
 start() {
 	bin=$(command -v "$BIN" 2>/dev/null)
 	[ -z "$bin" ] && [ -x "$HOME/.local/bin/lightpanda" ] && bin=$HOME/.local/bin/lightpanda
@@ -61,27 +70,27 @@ start() {
 		while kill -0 "$pid" 2>/dev/null; do
 			sleep 20
 			if [ ! -e "$D/used" ] || [ -n "$(find "$D/used" -mmin +"$IDLE" 2>/dev/null)" ]; then
-				kill "$pid" 2>/dev/null
+				stop "$pid"
 			fi
 		done
 	) </dev/null >/dev/null 2>&1 &
 	send '{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"acorn","version":"1"}}}'
 	if ! answer init 20; then
 		echo "lightpanda did not start: $(tail -c 600 "$D/log" 2>/dev/null)" >&2
-		kill "$pid" 2>/dev/null
+		stop "$pid"
 		return 3
 	fi
 	cp "$D/res" "$D/init"
 	send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 	echo fresh
 }
-if ! alive; then start || exit 3; fi
-touch "$D/used"
 if [ "$ID" = close ]; then
-	kill "$pid" 2>/dev/null
+	alive && stop "$pid"
 	rm -rf "$D"
 	exit 0
 fi
+if ! alive; then start || exit 3; fi
+touch "$D/used"
 REQ=$(cat <<'ACORN_JSON'
 __REQ__
 ACORN_JSON
@@ -92,7 +101,7 @@ send "$REQ"
 answer "$ID" "$WAIT"
 case $? in
 1)
-	kill "$pid" 2>/dev/null
+	stop "$pid"
 	rm -rf "$D"
 	echo "no answer in $WAIT s, so the browser was closed (its pages and cookies with it)" >&2
 	exit 4
@@ -104,6 +113,7 @@ case $? in
 	;;
 esac
 echo ok
+cat "$D/res"
 ]==]
 
 local function quote(s)
@@ -153,13 +163,18 @@ local function rpc(method, params, wait, id)
 		local why = trim(r.stderr)
 		error(if why ~= "" then why else "the browser broker failed (" .. r.code .. ")", 0)
 	end
-	local fresh = r.stdout:find("fresh", 1, true) ~= nil
-	local renewed = fresh and had
+	-- Past sh's 64 KB the whole output is in a file.
+	local out = if r.truncated and r.full then read(r.full) else r.stdout
+	local renewed = out:sub(1, 6) == "fresh\n" and had
 	had = true
 	if id == "close" then
 		return nil, renewed
 	end
-	return json.decode(read(DIR .. "/res")), renewed
+	local line = out:match("ok\n({.*)$")
+	if not line then
+		error("the browser broker said: " .. trim(out):sub(1, 300), 0)
+	end
+	return json.decode(line), renewed
 end
 
 -- A tool's text (its content's text parts, joined) or the error it raised.
@@ -265,7 +280,10 @@ local function browser(tool, args)
 	if result.isError then
 		error("browser " .. tool .. ": " .. text, 0)
 	end
-	return text, result.structuredContent
+	if result.structuredContent ~= nil then
+		return text, result.structuredContent
+	end
+	return text
 end
 
 return {

@@ -1903,9 +1903,11 @@ print(#paras, paras[1])
 
   /// A fake `lightpanda mcp`, speaking MCP over stdio: `echo` answers with its
   /// pid and its params, `fail` is a tool error, `nope` an unknown tool, `big`
-  /// 200 KB of text, `slow` never answers, `die` quits.
+  /// 200 KB of text, `slow` never answers, `die` quits. Like Lightpanda with a
+  /// page loaded, it ignores a TERM.
   const FAKE_LIGHTPANDA: &str = r#"#!/bin/bash
 [ "$1" = mcp ] || exit 9
+trap '' TERM
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\("[^"]*"\).*/\1/p')
   [ -z "$id" ] && continue
@@ -1946,11 +1948,7 @@ done
     assert!(!first.fail, "{}", first.text);
     let pid_of = |text: &str| -> String {
       let at = text.find("pid ").expect("a pid");
-      text[at..]
-        .split([',', '\n'])
-        .next()
-        .unwrap()
-        .to_string()
+      text[at..].split([',', '\n']).next().unwrap().to_string()
     };
     let pid = pid_of(&first.text);
     assert!(first.text.starts_with("=> pid "), "{}", first.text);
@@ -2217,7 +2215,15 @@ document.getElementById('go').addEventListener('click', () => {
       .await;
     println!("{}", bad.text);
     assert!(bad.text.starts_with("=> false, browser goto: "), "{}", bad.text);
-    lab.go("browser('close')").await;
+    let pid: i32 = std::fs::read_to_string(lab.cwd.path().join(".lightpanda/pid"))
+      .unwrap()
+      .trim()
+      .parse()
+      .unwrap();
+    let closed = lab.go("browser('close')").await;
+    assert!(closed.text.starts_with("=> closed"), "{}", closed.text);
+    // SAFETY: only checks whether the process is there.
+    assert!(unsafe { libc::kill(pid, 0) } != 0, "the browser, pages loaded, is gone");
   }
 
   #[tokio::test(flavor = "multi_thread")]
