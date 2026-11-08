@@ -259,10 +259,21 @@ async fn collect(mut from: impl AsyncRead + Unpin, s: &Mutex<Stream>) {
   }
 }
 
+/// The user's own spill dir: one shared by every user would be the first
+/// one's, its files unwritable for the rest and readable by all.
+fn spill_dir() -> Option<PathBuf> {
+  use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+  // SAFETY: getuid cannot fail.
+  let uid = unsafe { libc::getuid() };
+  let dir = std::env::temp_dir().join(format!("acorn-spill-{uid}"));
+  let _ = fs::DirBuilder::new().mode(0o700).create(&dir);
+  let meta = fs::symlink_metadata(&dir).ok()?;
+  (meta.is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0).then_some(dir)
+}
+
 /// A new spill file, holding a stream so far.
 fn spill_file(so_far: &[u8]) -> Option<(PathBuf, fs::File, u64)> {
-  let dir = std::env::temp_dir().join("acorn-spill");
-  fs::create_dir_all(&dir).ok()?;
+  let dir = spill_dir()?;
   let path = dir.join(format!("{:016x}.log", rand::random::<u64>()));
   let mut f = fs::File::create(&path).ok()?;
   f.write_all(so_far).ok()?;
@@ -601,6 +612,16 @@ fn commit(t: &Target, content: &str, was: Option<&fs::Metadata>) -> Result<PathB
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn spill_files_go_in_a_dir_of_the_users_own() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = spill_dir().expect("a spill dir");
+    let meta = fs::metadata(&dir).unwrap();
+    // SAFETY: getuid cannot fail.
+    assert_eq!(meta.uid(), unsafe { libc::getuid() });
+    assert_eq!(meta.mode() & 0o777, 0o700);
+  }
 
   fn run(command: &str, timeout: f64) -> Ran {
     tokio::runtime::Runtime::new()

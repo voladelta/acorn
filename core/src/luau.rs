@@ -2346,6 +2346,15 @@ return { decide = { doc = "decide(state, questions) -- scripted", value = decide
     // A tool name still runs that tool.
     let url = lab.go("browser('getUrl')").await;
     assert!(url.text.starts_with(&format!("=> {at}/")), "{}", url.text);
+    // A click by hand hears of the goal, once.
+    let hand = lab.go("browser('click', {selector = '#go'})").await;
+    assert!(
+      hand.text.contains("(ultrafast mode: a flow of several steps"),
+      "{}",
+      hand.text
+    );
+    let again = lab.go("browser('click', {selector = '#go'})").await;
+    assert!(!again.text.contains("ultrafast mode"), "{}", again.text);
     lab.go("browser('close')").await;
   }
 
