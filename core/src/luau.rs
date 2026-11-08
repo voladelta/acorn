@@ -1899,6 +1899,7 @@ print(#paras, paras[1])
     LIGHTPANDA_FILE
       .replace("local BIN = \"lightpanda\"", &format!("local BIN = {bin:?}"))
       .replace("local SLACK, LEAST = 50, 60", "local SLACK, LEAST = 1, 1")
+      .replace("key(\"TYPESAFE_API_KEY\")", "nil")
   }
 
   /// A fake `lightpanda mcp`, speaking MCP over stdio: `echo` answers with its
@@ -1918,6 +1919,7 @@ while IFS= read -r line; do
     *'"method":"ping"'*) ok '{}' ;;
     *'"method":"tools/list"'*) ok '{"tools":[{"name":"goto","description":"Navigate to a URL. More words.","inputSchema":{"type":"object","properties":{"url":{"type":"string"},"timeout":{"type":"integer"}},"required":["url"]}},{"name":"getUrl","description":"The URL","inputSchema":{"type":"object","properties":{}}}]}' ;;
     *'"name":"echo"'*) ok "{\"content\":[{\"type\":\"text\",\"text\":\"pid $$\"}],\"structuredContent\":$params,\"isError\":false}" ;;
+    *'"name":"key"'*) ok "{\"content\":[{\"type\":\"text\",\"text\":\"key ${TYPESAFE_API_KEY:-none}\"}]}" ;;
     *'"name":"fail"'*) ok '{"content":[{"type":"text","text":"HTTP 404: an error page"}],"isError":true}' ;;
     *'"name":"big"'*) ok "{\"content\":[{\"type\":\"text\",\"text\":\"$(head -c 200000 /dev/zero | tr '\0' x)\"}]}" ;;
     *'"name":"slow"'*) ;;
@@ -2005,6 +2007,49 @@ done
       fresh.text
     );
     assert_ne!(pid_of(&fresh.text), pid);
+    lab.go("browser('close')").await;
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn lightpanda_gives_the_typesafe_key_to_the_browser_alone() {
+    let lab = lightpanda_lab();
+    let without = lab.go("browser('key')").await;
+    assert!(without.text.starts_with("=> key none"), "{}", without.text);
+    lab.go("browser('close')").await;
+    let src = std::fs::read_to_string(lab.plugins.path().join("lightpanda.luau")).unwrap();
+    lab.file(
+      "lightpanda.luau",
+      &src.replace("local TYPESAFE = nil", "local TYPESAFE = 'TK-secret'"),
+    );
+    let with = lab.go("browser('key')").await;
+    assert!(with.text.starts_with("=> key TK-secret"), "{}", with.text);
+    assert!(
+      with.text.contains("write \".lightpanda/key-"),
+      "written, not on a command line: {}",
+      with.text
+    );
+    let dir = lab.cwd.path().join(".lightpanda");
+    let left: Vec<_> = std::fs::read_dir(&dir)
+      .unwrap()
+      .flatten()
+      .map(|e| e.file_name().to_string_lossy().into_owned())
+      .collect();
+    assert!(
+      !left.iter().any(|f| f.starts_with("key-")),
+      "the key file is gone: {left:?}"
+    );
+    // A running browser needs no key: one sh a call.
+    let again = lab.go("browser('key')").await;
+    assert!(
+      again
+        .text
+        .starts_with("=> key TK-secret\n[calls: sh \"# browser tools/call\"]"),
+      "{}",
+      again.text
+    );
+    // The model's own sh doesn't inherit it.
+    let theirs = lab.go("sh('echo ${TYPESAFE_API_KEY:-none}').stdout").await;
+    assert!(theirs.text.starts_with("=> none"), "{}", theirs.text);
     lab.go("browser('close')").await;
   }
 

@@ -7,6 +7,11 @@
 --
 -- Optional: lightpanda_flags in config.json (or LIGHTPANDA_FLAGS), more flags
 -- for `lightpanda mcp`, e.g. "--obey-robots --http-cache-dir /tmp/lp-cache".
+--
+-- With a TypeSafe key (typesafe_api_key, or TYPESAFE_API_KEY), the browser
+-- gets it for classify, acceptCookies and login: written by `write` into the
+-- browser's own dir (700), read into its environment alone and deleted, so it
+-- is never on a command line (which `ps` shows every user) nor in the chat.
 local BIN = "lightpanda"
 local DIR = ".lightpanda"
 local IDLE = 30
@@ -18,13 +23,16 @@ local function key(name)
 	return if ok then got else nil
 end
 local FLAGS = key("LIGHTPANDA_FLAGS") or ""
+local TYPESAFE = key("TYPESAFE_API_KEY")
 
 -- The broker: starts the browser if it isn't running (and says "fresh"),
 -- sends one JSON-RPC request through the fifo, and waits for the line
--- answering its id, which it prints after "ok" and leaves in $D/res. Exit 3: no browser to start;
--- 4: no answer in time (the browser is closed); 5: the browser died.
+-- answering its id, which it prints after "ok" and leaves in $D/res. Wanting
+-- the key for a browser it must start (NEEDKEY), it makes $D and says "key"
+-- instead, to be called again once a key-* file is there. Exit 3: no browser
+-- to start; 4: no answer in time (the browser is closed); 5: the browser died.
 local BROKER = [==[
-D=__DIR__; BIN=__BIN__; IDLE=__IDLE__; ID=__ID__; WAIT=__WAIT__
+D=__DIR__; BIN=__BIN__; IDLE=__IDLE__; ID=__ID__; WAIT=__WAIT__; NEEDKEY=__NEEDKEY__
 alive() {
 	[ -p "$D/in" ] && pid=$(cat "$D/pid" 2>/dev/null) && [ -n "$pid" ] &&
 		ps -p "$pid" -o comm= 2>/dev/null | grep -q lightpanda
@@ -57,14 +65,24 @@ start() {
 	[ -z "$bin" ] && [ -x "$HOME/.local/bin/lightpanda" ] && bin=$HOME/.local/bin/lightpanda
 	if [ -z "$bin" ]; then
 		echo "lightpanda is not installed (or not on PATH): see https://lightpanda.io/docs/run-locally/installation/one-liner" >&2
+		rm -rf "$D"
 		return 3
 	fi
+	local k= f
+	for f in "$D"/key-*; do
+		[ -f "$f" ] && k=$(cat "$f")
+	done
 	rm -rf "$D" && mkdir -m 700 "$D" && mkfifo -m 600 "$D/in" || return 3
 	: >"$D/out"
 	touch "$D/used"
 	# fd 3 holds the fifo open both ways, so the browser never reads its end.
-	(exec 3<>"$D/in"; exec "$bin" mcp __FLAGS__ <&3 >>"$D/out" 2>>"$D/log") &
+	(
+		exec 3<>"$D/in"
+		[ -n "$k" ] && export TYPESAFE_API_KEY="$k"
+		exec "$bin" mcp __FLAGS__ <&3 >>"$D/out" 2>>"$D/log"
+	) &
 	pid=$!
+	k=
 	echo "$pid" >"$D/pid"
 	(
 		while kill -0 "$pid" 2>/dev/null; do
@@ -89,7 +107,14 @@ if [ "$ID" = close ]; then
 	rm -rf "$D"
 	exit 0
 fi
-if ! alive; then start || exit 3; fi
+if ! alive; then
+	if [ "$NEEDKEY" = 1 ] && ! ls "$D"/key-* >/dev/null 2>&1; then
+		rm -rf "$D" && mkdir -m 700 "$D" || exit 3
+		echo key
+		exit 0
+	fi
+	start || exit 3
+fi
 touch "$D/used"
 REQ=$(cat <<'ACORN_JSON'
 __REQ__
@@ -152,13 +177,21 @@ local function rpc(method, params, wait, id)
 			return tostring(wait)
 		elseif k == "FLAGS" then
 			return FLAGS
+		elseif k == "NEEDKEY" then
+			return if TYPESAFE then "1" else "0"
 		elseif k == "REQ" then
 			return req
 		end
 		return nil
 	end)
 	-- The call's log shows the first line alone.
-	local r = sh("# browser " .. method .. "\n" .. script, { timeout = wait + 30 })
+	local cmd = "# browser " .. method .. "\n" .. script
+	local r = sh(cmd, { timeout = wait + 30 })
+	if r.code == 0 and r.stdout == "key\n" then
+		-- A new name each time: write won't replace a file it saw go.
+		write(DIR .. "/key-" .. os.time() .. "-" .. n .. "-" .. math.random(1e9), TYPESAFE)
+		r = sh(cmd, { timeout = wait + 30 })
+	end
 	if r.code ~= 0 then
 		local why = trim(r.stderr)
 		error(if why ~= "" then why else "the browser broker failed (" .. r.code .. ")", 0)
