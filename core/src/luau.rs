@@ -1891,6 +1891,335 @@ print(#paras, paras[1])
     );
   }
 
+  const LIGHTPANDA_FILE: &str = include_str!("../../plugins/lightpanda.luau");
+
+  /// The lightpanda plugin, its binary at `bin`, a call's wait cut to its
+  /// tool's timeout plus one second.
+  fn lightpanda_plugin(bin: &str) -> String {
+    LIGHTPANDA_FILE
+      .replace("local BIN = \"lightpanda\"", &format!("local BIN = {bin:?}"))
+      .replace("local SLACK, LEAST = 50, 60", "local SLACK, LEAST = 1, 1")
+  }
+
+  /// A fake `lightpanda mcp`, speaking MCP over stdio: `echo` answers with its
+  /// pid and its params, `fail` is a tool error, `nope` an unknown tool, `big`
+  /// 200 KB of text, `slow` never answers, `die` quits.
+  const FAKE_LIGHTPANDA: &str = r#"#!/bin/bash
+[ "$1" = mcp ] || exit 9
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\("[^"]*"\).*/\1/p')
+  [ -z "$id" ] && continue
+  params=$(printf '%s' "$line" | sed -n 's/.*"params":\(.*\)}$/\1/p')
+  ok() { printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$id" "$1"; }
+  case "$line" in
+    *'"method":"initialize"'*) ok '{"instructions":"Drive me well."}' ;;
+    *'"method":"ping"'*) ok '{}' ;;
+    *'"method":"tools/list"'*) ok '{"tools":[{"name":"goto","description":"Navigate to a URL. More words.","inputSchema":{"type":"object","properties":{"url":{"type":"string"},"timeout":{"type":"integer"}},"required":["url"]}},{"name":"getUrl","description":"The URL","inputSchema":{"type":"object","properties":{}}}]}' ;;
+    *'"name":"echo"'*) ok "{\"content\":[{\"type\":\"text\",\"text\":\"pid $$\"}],\"structuredContent\":$params,\"isError\":false}" ;;
+    *'"name":"fail"'*) ok '{"content":[{"type":"text","text":"HTTP 404: an error page"}],"isError":true}' ;;
+    *'"name":"big"'*) ok "{\"content\":[{\"type\":\"text\",\"text\":\"$(head -c 200000 /dev/zero | tr '\0' x)\"}]}" ;;
+    *'"name":"slow"'*) ;;
+    *'"name":"die"'*) echo 'fatal: it broke' >&2; exit 1 ;;
+    *) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Tool not found"}}\n' "$id" ;;
+  esac
+done
+"#;
+
+  /// A lab with the lightpanda plugin on a fake browser.
+  fn lightpanda_lab() -> Lab {
+    let lab = Lab::new();
+    let bin = lab.plugins.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let fake = bin.join("lightpanda");
+    std::fs::write(&fake, FAKE_LIGHTPANDA).unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    lab.file("lightpanda.luau", &lightpanda_plugin(fake.to_str().unwrap()));
+    lab
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn lightpanda_keeps_one_browser_and_sends_args_as_given() {
+    let lab = lightpanda_lab();
+    let first = lab
+      .go("local t, s = browser('echo', {url = 'https://x.test/?a=1&b=\\'2\\'', timeout = 3000, n = 2.5, list = {1, 2}})\nreturn t, json.encode(s)")
+      .await;
+    assert!(!first.fail, "{}", first.text);
+    let pid_of = |text: &str| -> String {
+      let at = text.find("pid ").expect("a pid");
+      text[at..]
+        .split([',', '\n'])
+        .next()
+        .unwrap()
+        .to_string()
+    };
+    let pid = pid_of(&first.text);
+    assert!(first.text.starts_with("=> pid "), "{}", first.text);
+    let sent: Json = serde_json::from_str(first.text.lines().next().unwrap().split_once(", ").unwrap().1).unwrap();
+    assert_eq!(
+      sent,
+      json!({"name": "echo", "arguments": {"url": "https://x.test/?a=1&b='2'", "timeout": 3000, "n": 2.5, "list": [1, 2]}}),
+      "integers stay integers: {}",
+      first.text
+    );
+    assert!(
+      first.text.contains("sh \"# browser tools/call\""),
+      "the call's log names the request alone: {}",
+      first.text
+    );
+    let empty = lab.go("json.encode(select(2, browser('echo')))").await;
+    assert!(
+      empty.text.contains(r#""arguments":{}"#),
+      "no args is an empty object: {}",
+      empty.text
+    );
+    let again = lab.go("browser('echo')").await;
+    assert_eq!(pid_of(&again.text), pid, "the same browser: {}", again.text);
+    let dir = lab.cwd.path().join(".lightpanda");
+    let mode = std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&dir).unwrap().permissions());
+    assert_eq!(mode & 0o777, 0o700);
+
+    // Another caller, another browser.
+    let other = Lab {
+      plugins: tempfile::tempdir().unwrap(),
+      cwd: tempfile::tempdir().unwrap(),
+    };
+    for entry in std::fs::read_dir(lab.plugins.path()).unwrap() {
+      let entry = entry.unwrap();
+      if entry.path().is_file() {
+        std::fs::copy(entry.path(), other.plugins.path().join(entry.file_name())).unwrap();
+      }
+    }
+    let theirs = other.go("browser('echo')").await;
+    assert!(theirs.text.starts_with("=> pid "), "{}", theirs.text);
+    assert_ne!(pid_of(&theirs.text), pid, "{}", theirs.text);
+    other.go("browser('close')").await;
+
+    let closed = lab.go("browser('close')").await;
+    assert!(closed.text.starts_with("=> closed"), "{}", closed.text);
+    assert!(!dir.exists());
+    let pid_num: i32 = pid.trim_start_matches("pid ").parse().unwrap();
+    // SAFETY: only checks whether the process is there.
+    assert!(unsafe { libc::kill(pid_num, 0) } != 0, "the browser is gone");
+    let fresh = lab.go("browser('echo')").await;
+    assert!(
+      fresh.text.starts_with("=> pid "),
+      "closing doesn't announce a new one: {}",
+      fresh.text
+    );
+    assert_ne!(pid_of(&fresh.text), pid);
+    lab.go("browser('close')").await;
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn lightpanda_says_what_failed() {
+    let lab = lightpanda_lab();
+    let tool = lab.go("pcall(browser, 'fail', {url = 'https://x.test'})").await;
+    assert!(
+      tool.text.starts_with("=> false, browser fail: HTTP 404: an error page"),
+      "{}",
+      tool.text
+    );
+    let unknown = lab.go("pcall(browser, 'nope')").await;
+    assert!(
+      unknown.text.starts_with("=> false, browser nope: Tool not found"),
+      "{}",
+      unknown.text
+    );
+    let bad = lab.go("pcall(browser, 'echo', 5)").await;
+    assert!(bad.text.contains("args must be a table"), "{}", bad.text);
+    let big = lab.go("#browser('big')").await;
+    assert_eq!(big.text.lines().next(), Some("=> 200000"), "{}", big.text);
+
+    // A browser that doesn't answer in time is closed; the next call has a new one.
+    let before = lab.go("browser('echo')").await;
+    let slow = lab.go("pcall(browser, 'slow', {timeout = 1000})").await;
+    assert!(
+      slow
+        .text
+        .starts_with("=> false, no answer in 2 s, so the browser was closed"),
+      "{}",
+      slow.text
+    );
+    let after = lab.go("browser('echo')").await;
+    assert!(
+      after.text.starts_with("=> (a new browser: the last one had closed"),
+      "{}",
+      after.text
+    );
+    let pid = |t: &str| {
+      t.split("pid ")
+        .nth(1)
+        .and_then(|r| r.split(',').next())
+        .map(str::to_string)
+    };
+    assert_ne!(pid(&after.text), pid(&before.text), "{}", after.text);
+
+    // One that dies says so, and the next call starts another, saying so.
+    let died = lab.go("pcall(browser, 'die')").await;
+    assert!(
+      died.text.starts_with("=> false, the browser quit: fatal: it broke"),
+      "{}",
+      died.text
+    );
+    let next = lab.go("browser('echo')").await;
+    assert!(
+      next.text.starts_with("=> (a new browser: the last one had closed"),
+      "{}",
+      next.text
+    );
+    lab.go("browser('close')").await;
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn lightpanda_lists_its_tools_and_says_how_to_drive_it() {
+    let lab = lightpanda_lab();
+    let tools = lab.go("print(browser('tools'))").await;
+    assert!(
+      tools
+        .text
+        .starts_with("goto(url, timeout?)  Navigate to a URL.\ngetUrl()  The URL\n"),
+      "{}",
+      tools.text
+    );
+    let one = lab.go("print(browser('tools', {name = 'goto'}))").await;
+    assert!(
+      one.text.starts_with("goto: Navigate to a URL. More words.\nargs: {") && one.text.contains("required: [\"url\"]"),
+      "{}",
+      one.text
+    );
+    let none = lab.go("pcall(browser, 'tools', {name = 'fly'})").await;
+    assert!(none.text.starts_with("=> false, browser: no tool fly"), "{}", none.text);
+    let help = lab.go("browser('help')").await;
+    assert!(help.text.starts_with("=> Drive me well."), "{}", help.text);
+    lab.go("browser('close')").await;
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn lightpanda_missing_says_how_to_get_it() {
+    let lab = Lab::new();
+    lab.file("lightpanda.luau", &lightpanda_plugin("/nonexistent/lightpanda"));
+    let out = lab.go("pcall(browser, 'getUrl')").await;
+    // Unless installed in ~/.local/bin, which the plugin falls back to.
+    let home = std::env::var("HOME").unwrap_or_default();
+    if std::path::Path::new(&home).join(".local/bin/lightpanda").exists() {
+      lab.go("browser('close')").await;
+      return;
+    }
+    assert!(
+      out.text.starts_with("=> false, lightpanda is not installed"),
+      "{}",
+      out.text
+    );
+  }
+
+  /// A page with a form whose script answers a click, served for every request.
+  async fn page_server() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let at = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+      loop {
+        let Ok((mut sock, _)) = listener.accept().await else {
+          return;
+        };
+        tokio::spawn(async move {
+          use tokio::io::{AsyncReadExt, AsyncWriteExt};
+          let mut buf = vec![0u8; 8192];
+          let _ = sock.read(&mut buf).await;
+          let body = r#"<!doctype html><html><head><title>Acorn Lab</title></head><body>
+<h1 id="h">Waiting</h1>
+<ul id="items"></ul>
+<form id="f"><input id="name" name="name" aria-label="Name"><button id="go" type="button">Greet</button></form>
+<p id="out"></p>
+<script>
+document.getElementById('h').textContent = 'Rendered by script';
+for (const x of ['alpha', 'beta', 'gamma']) { const li = document.createElement('li'); li.textContent = x; document.getElementById('items').appendChild(li); }
+document.getElementById('go').addEventListener('click', () => {
+  document.getElementById('out').textContent = 'Hello, ' + document.getElementById('name').value + '!';
+});
+</script></body></html>"#;
+          let res = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+          );
+          let _ = sock.write_all(res.as_bytes()).await;
+        });
+      }
+    });
+    at
+  }
+
+  /// The plugin, unchanged, on the real Lightpanda; run with
+  /// `cargo test -- --ignored` with lightpanda installed.
+  #[tokio::test(flavor = "multi_thread")]
+  #[ignore]
+  async fn lightpanda_drives_a_real_page() {
+    let lab = Lab::new();
+    lab.file("lightpanda.luau", LIGHTPANDA_FILE);
+    let at = page_server().await;
+    let read = lab
+      .go(&format!("local t = browser('markdown', {{url = '{at}/'}})\nprint(t)"))
+      .await;
+    println!("{}", read.text);
+    assert!(
+      !read.fail && read.text.contains("Rendered by script") && read.text.contains("gamma"),
+      "the page's script ran: {}",
+      read.text
+    );
+    let went = lab
+      .go(&format!(
+        "local t, s = browser('goto', {{url = '{at}/x'}})\nreturn t, s.httpStatus, s.title"
+      ))
+      .await;
+    assert!(
+      went.text.starts_with("=> Navigated. HTTP 200 OK., 200, Acorn Lab"),
+      "{}",
+      went.text
+    );
+    let acted = lab
+      .go("browser('fill', {selector = '#name', value = 'Tony'})\nbrowser('click', {selector = '#go'})\nreturn browser('evaluate', {script = \"document.getElementById('out').textContent\"})")
+      .await;
+    assert!(
+      acted.text.contains("Hello, Tony!"),
+      "the page kept its state: {}",
+      acted.text
+    );
+    let got = lab
+      .go("browser('extract', {schema = {title = 'h1', items = {'#items li'}}})")
+      .await;
+    println!("{}", got.text);
+    assert!(
+      got.text.contains("Rendered by script") && got.text.contains("beta"),
+      "{}",
+      got.text
+    );
+    let found = lab
+      .go("browser('findElement', {role = 'button', name = 'Greet'})")
+      .await;
+    assert!(found.text.contains("Greet"), "{}", found.text);
+    let shot = lab.go("browser('screenshot')").await;
+    println!("{}", shot.text);
+    let png = std::fs::read_dir(lab.cwd.path())
+      .unwrap()
+      .flatten()
+      .find(|e| e.file_name().to_string_lossy().ends_with(".png"))
+      .expect("a screenshot in the work dir");
+    assert!(std::fs::read(png.path()).unwrap().starts_with(b"\x89PNG"));
+    let tools = lab.go("print(browser('tools'))").await;
+    assert!(
+      tools.text.contains("goto(url") && tools.text.contains("extract(schema"),
+      "{}",
+      tools.text
+    );
+    let help = lab.go("browser('help')").await;
+    assert!(help.text.contains("Lightpanda"), "{}", help.text);
+    let bad = lab
+      .go("pcall(browser, 'goto', {url = 'http://nonexistent.invalid/'})")
+      .await;
+    println!("{}", bad.text);
+    assert!(bad.text.starts_with("=> false, browser goto: "), "{}", bad.text);
+    lab.go("browser('close')").await;
+  }
+
   #[tokio::test(flavor = "multi_thread")]
   async fn text_that_looks_like_bytecode_is_only_a_syntax_error() {
     let lab = Lab::new();
