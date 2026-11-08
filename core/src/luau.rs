@@ -2114,6 +2114,26 @@ done
   }
 
   #[tokio::test(flavor = "multi_thread")]
+  async fn lightpanda_without_jev_runs_tools_and_refuses_a_goal() {
+    let lab = lightpanda_lab();
+    let goal = lab.go("pcall(browser, 'open the top story')").await;
+    assert!(
+      goal.text.contains("is a goal, and goals need ultrafast mode"),
+      "{}",
+      goal.text
+    );
+    let tool = lab.go("browser('echo')").await;
+    assert!(tool.text.starts_with("=> pid "), "{}", tool.text);
+    let docs = layer_of(lab.plugins.path()).unwrap().0;
+    assert!(
+      docs["browser"].starts_with("browser(tool: string"),
+      "{}",
+      docs["browser"]
+    );
+    lab.go("browser('close')").await;
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
   async fn lightpanda_lists_its_tools_and_says_how_to_drive_it() {
     let lab = lightpanda_lab();
     let tools = lab.go("print(browser('tools'))").await;
@@ -2267,17 +2287,26 @@ document.getElementById('go').addEventListener('click', () => {
       .unwrap();
     let closed = lab.go("browser('close')").await;
     assert!(closed.text.starts_with("=> closed"), "{}", closed.text);
-    // SAFETY: only checks whether the process is there.
-    assert!(unsafe { libc::kill(pid, 0) } != 0, "the browser, pages loaded, is gone");
+    // Killed, it may wait a moment to be reaped.
+    let gone = (0..20).any(|_| {
+      // SAFETY: only checks whether the process is there.
+      let gone = unsafe { libc::kill(pid, 0) } != 0;
+      std::thread::sleep(Duration::from_millis(100));
+      gone
+    });
+    assert!(gone, "the browser, pages loaded, is gone");
   }
 
-  /// browser_goal on the real Lightpanda, with a decide that plays Jev:
+  /// A goal in ultrafast mode, on the real Lightpanda, with a decide that plays Jev:
   /// type the name, click Greet, then done. Run with `cargo test -- --ignored`.
   #[tokio::test(flavor = "multi_thread")]
   #[ignore]
   async fn lightpanda_goal_types_clicks_and_stops() {
     let lab = Lab::new();
-    lab.file("lightpanda.luau", LIGHTPANDA_FILE);
+    lab.file(
+      "lightpanda.luau",
+      &LIGHTPANDA_FILE.replace("local TYPESAFE = key(\"TYPESAFE_API_KEY\")", "local TYPESAFE = 'K'"),
+    );
     lab.file(
       "zz_decide.luau",
       r#"local function pick(cands, word)
@@ -2299,7 +2328,7 @@ return { decide = { doc = "decide(state, questions) -- scripted", value = decide
     let at = page_server().await;
     let out = lab
       .go(&format!(
-        "print(browser_goal('Greet Tony', {{url = '{at}/', inputs = {{who = 'Tony'}}}}))"
+        "print(browser('Greet Tony', {{url = '{at}/', inputs = {{who = 'Tony'}}}}))"
       ))
       .await;
     println!("{}", out.text);
@@ -2312,8 +2341,11 @@ return { decide = { doc = "decide(state, questions) -- scripted", value = decide
       "{}",
       out.text
     );
-    let none = lab.go("pcall(browser_goal, '')").await;
+    let none = lab.go("pcall(browser, '')").await;
     assert!(none.text.contains("say the goal"), "{}", none.text);
+    // A tool name still runs that tool.
+    let url = lab.go("browser('getUrl')").await;
+    assert!(url.text.starts_with(&format!("=> {at}/")), "{}", url.text);
     lab.go("browser('close')").await;
   }
 

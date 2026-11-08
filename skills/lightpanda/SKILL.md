@@ -5,32 +5,36 @@ description: Browse like a person with luau's browser (Lightpanda, a headless br
 
 # Driving the browser
 
-`browser(tool, args)` in luau runs one Lightpanda tool in a headless browser of your
-own. It keeps its page and cookies between your luau calls, until you
-`browser('close')` it or leave it unused for 30 minutes. It runs the page's
-JavaScript but draws no pixels, so it is fast and light.
+`browser` in luau is a headless browser of your own (Lightpanda). It keeps its
+page and cookies between your luau calls, until you `browser('close')` it or
+leave it unused for 30 minutes. It runs the page's JavaScript but draws no
+pixels, so it is fast and light. Its line in luau's description says its mode.
 
-- To only read a page, `web_fetch` is enough. Use the browser when the page is
-  built by scripts, when you must act on it (log in, search a site, page
-  through results, submit), or when you need values picked by selector.
-- `browser('tools')` lists every tool with its args, `browser('tools', {name = 'extract'})`
-  shows one in full, and `browser('help')` gives the browser's own guide.
+## Ultrafast mode (with a TypeSafe key): give the goal
 
-## Fast: let Jev drive
+Say the whole task in words, once:
 
-For a task of several clicks (search a site, fill and submit a form, click
-through to a page), call `browser_goal` once instead of a luau call per click:
-
-    print(browser_goal("Search for rust async and open the first result",
+    print(browser("Search for rust async and open the first result",
       {url = "https://example.org", inputs = {query = "rust async"}}))
 
-Each step TypeSafe's Jev picks the next action in about 0.2 s, so a 10-step flow
-takes seconds, not ten of your turns. Put every text to type in `inputs`: Jev
-never makes up text. It returns the steps done and the final page's text:
-read that to check the goal was met, and finish by hand with the steps below
-if it stopped (blocked, stuck, out of steps).
+TypeSafe's Jev picks every click, typing, dropdown, Enter and scroll, about
+0.3 s a step, so a 10-step flow takes seconds instead of ten of your turns. Put
+every text to type in `inputs`: Jev never makes up text. It returns the steps
+done and the final page's text: read it to check the goal was met. If it
+stopped (blocked, stuck, out of steps), finish tool by tool, as below.
 
-## Steps
+A tool name instead of a goal runs that tool, in either mode:
+`browser('markdown', {url = u})` to just read a page, `extract` for values by
+selector, `screenshot`, `download`.
+
+## Normal mode (no key): one tool a call
+
+`browser(tool, args)` runs one Lightpanda tool. `browser('tools')` lists every
+tool with its args, `browser('tools', {name = 'extract'})` shows one in full,
+and `browser('help')` gives the browser's own guide. To only read a page,
+`web_fetch` is enough too.
+
+## Driving it tool by tool
 
 1. Load and read in one call: `browser('markdown', {url = u, maxBytes = 20000})`,
    or `browser('tree', {url = u, maxDepth = 6})` for an unfamiliar page's structure.
