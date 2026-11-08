@@ -160,8 +160,14 @@ async fn serve() {
   };
   println!("Acorn: http://{host}/?token={}", server.token);
   axum::serve(listener, app)
+    // A service stops with a TERM: end as Ctrl-C does, so `end` kills the
+    // agents' jobs (a browser ignoring TERM would hold the stop up).
     .with_graceful_shutdown(async {
-      let _ = tokio::signal::ctrl_c().await;
+      let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("a TERM handler");
+      tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = term.recv() => {}
+      }
     })
     .await
     .expect("acorn-server");
