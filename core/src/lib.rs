@@ -33,6 +33,8 @@ pub mod extend;
 #[cfg(feature = "engine")]
 pub mod facts;
 #[cfg(feature = "engine")]
+pub mod files;
+#[cfg(feature = "engine")]
 pub mod import;
 #[cfg(feature = "engine")]
 pub mod luau;

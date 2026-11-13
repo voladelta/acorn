@@ -7,10 +7,11 @@
 //! came, thoughts too. A server_error is busy; a failed, cut (incomplete)
 //! or refused answer fails. Silent while it reasons, it is dead after IDLE.
 
-use super::{Ask, Out, Spec};
+use super::{Ask, Doc, Out, Spec};
 use crate::price::Usage;
 use crate::{Img, Kind};
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::time::Duration;
 
 pub use crate::wire::MODEL;
@@ -18,6 +19,11 @@ pub const URL: &str = "https://api.deepseek.com/responses";
 /// A request's most output tokens: DeepSeek's documented cap.
 pub const MAX_OUTPUT_TOKENS: u64 = 384_000;
 pub const IDLE: Duration = Duration::from_secs(1200);
+/// The most documents a request may reference: DeepSeek's documented cap.
+pub const DOCS: usize = 20;
+/// Seconds before its upload expires that a document is no longer sent,
+/// so a request never names one gone by the time it is read.
+const DOC_MARGIN: i64 = 60;
 
 /// What a request sends after the system prompt: the user's text and
 /// images, the model's output as its API gave it, its reply so far as
@@ -69,6 +75,7 @@ pub fn body(ask: &Ask, items: &[Item], tools: &[Spec]) -> Value {
     .iter()
     .map(|t| json!({"type": "function", "name": t.name, "description": t.info, "parameters": t.schema}))
     .collect();
+  let live = attached(items, chrono::Utc::now().timestamp());
   let mut body = json!({
       "model": MODEL,
       "stream": true,
@@ -76,7 +83,7 @@ pub fn body(ask: &Ask, items: &[Item], tools: &[Spec]) -> Value {
       "reasoning": {"effort": ask.effort.as_str()},
       "max_output_tokens": MAX_OUTPUT_TOKENS,
       "instructions": ask.system,
-      "input": items.iter().flat_map(input).collect::<Vec<_>>(),
+      "input": items.iter().flat_map(|i| input(i, &live)).collect::<Vec<_>>(),
   });
   if let Some(user) = &ask.user {
     body["user"] = json!(user);
@@ -84,7 +91,26 @@ pub fn body(ask: &Ask, items: &[Item], tools: &[Spec]) -> Value {
   body
 }
 
-fn input(item: &Item) -> Vec<Value> {
+/// The documents a request at `now` references: the latest DOCS whose
+/// uploads still last. Any other is named in words instead (`input`), and
+/// that only once it expires or is crowded out, so the prompt's prefix,
+/// and DeepSeek's cache of it, stays put till then.
+fn attached(items: &[Item], now: i64) -> HashSet<&str> {
+  items
+    .iter()
+    .rev()
+    .filter_map(|i| match i {
+      Item::Back(backs) => Some(backs),
+      _ => None,
+    })
+    .flat_map(|backs| backs.iter().rev().flat_map(|(_, out)| out.docs.iter().rev()))
+    .filter(|d| d.until - DOC_MARGIN > now)
+    .take(DOCS)
+    .map(|d| d.id.as_str())
+    .collect()
+}
+
+fn input(item: &Item, live: &HashSet<&str>) -> Vec<Value> {
   match item {
     Item::User { parts, imgs } => {
       let mut content: Vec<Value> = parts.iter().map(|t| json!({"type": "input_text", "text": t})).collect();
@@ -98,6 +124,7 @@ fn input(item: &Item) -> Vec<Value> {
       .map(|(id, out)| {
         let mut output = vec![json!({"type": "input_text", "text": out.text})];
         output.extend(out.imgs.iter().map(image));
+        output.extend(out.docs.iter().map(|d| doc(d, live)));
         json!({"type": "function_call_output", "call_id": id, "output": output})
       })
       .collect(),
@@ -106,6 +133,14 @@ fn input(item: &Item) -> Vec<Value> {
 
 fn image(img: &Img) -> Value {
   json!({"type": "input_image", "image_url": format!("data:{};base64,{}", img.mime, img.data)})
+}
+
+fn doc(d: &Doc, live: &HashSet<&str>) -> Value {
+  if live.contains(d.id.as_str()) {
+    json!({"type": "input_file", "file_id": d.id})
+  } else {
+    json!({"type": "input_text", "text": format!("[{} is no longer attached: view it again to read it]", d.name)})
+  }
 }
 
 /// A Responses stream read so far: the final response, or an error event;
@@ -267,5 +302,54 @@ fn entries(o: &Value) -> Vec<Entry> {
       }]
     }
     _ => vec![],
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn back(docs: &[(&str, i64)]) -> Item {
+    let docs = docs
+      .iter()
+      .map(|(id, until)| Doc {
+        id: id.to_string(),
+        name: format!("{id}.pdf"),
+        until: *until,
+      })
+      .collect();
+    Item::Back(vec![(
+      "c".into(),
+      Out {
+        docs,
+        ..Out::ok("read")
+      },
+    )])
+  }
+
+  #[test]
+  fn a_document_is_sent_while_its_upload_lasts_and_then_named() {
+    let now = 1_000_000;
+    let items = [back(&[("old", now + 30), ("new", now + 3600)])];
+    let live = attached(&items, now);
+    let sent = input(&items[0], &live);
+    assert_eq!(
+      sent[0]["output"],
+      json!([
+        {"type": "input_text", "text": "read"},
+        {"type": "input_text", "text": "[old.pdf is no longer attached: view it again to read it]"},
+        {"type": "input_file", "file_id": "new"},
+      ])
+    );
+  }
+
+  #[test]
+  fn only_the_latest_documents_go_past_the_cap() {
+    let now = 0;
+    let items: Vec<Item> = (0..DOCS + 2).map(|k| back(&[(&format!("d{k}"), 3600)])).collect();
+    let live = attached(&items, now);
+    assert_eq!(live.len(), DOCS);
+    assert!(!live.contains("d0") && !live.contains("d1") && live.contains("d2"));
+    assert!(live.contains(format!("d{}", DOCS + 1).as_str()));
   }
 }

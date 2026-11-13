@@ -57,12 +57,22 @@ pub struct Spec {
   pub schema: Value,
 }
 
-/// A tool's answer: its text, whether it failed, its images.
+/// A tool's answer: its text, whether it failed, its images and documents.
 #[derive(Clone, Debug, Default)]
 pub struct Out {
   pub text: String,
   pub fail: bool,
   pub imgs: Vec<Img>,
+  pub docs: Vec<Doc>,
+}
+
+/// A document parsed in DeepSeek's Files API, which the model reads by its
+/// id until the upload expires (`until`, Unix seconds).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Doc {
+  pub id: String,
+  pub name: String,
+  pub until: i64,
 }
 
 impl Out {

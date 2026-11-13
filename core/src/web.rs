@@ -115,8 +115,20 @@ pub fn results(got: &Value) -> String {
     .join("\n\n")
 }
 
-/// A request to one of the APIs; its JSON, or why it failed.
+/// A JSON request to one of the APIs; its JSON, or why it failed.
 async fn post(url: &str, body: &Value, cancel: &CancellationToken) -> Result<Value, String> {
+  api(url, "application/json", body.to_string().into_bytes(), TIMEOUT, cancel).await
+}
+
+/// A POST to one of DeepSeek's APIs, on its key, of a body of a type; its
+/// JSON, or why it failed.
+pub async fn api(
+  url: &str,
+  kind: &str,
+  body: Vec<u8>,
+  timeout: Duration,
+  cancel: &CancellationToken,
+) -> Result<Value, String> {
   let key = &config::get().key;
   if key.is_empty() {
     return Err(format!("no API key: set {}", config::KEY_VAR));
@@ -127,10 +139,10 @@ async fn post(url: &str, body: &Value, cancel: &CancellationToken) -> Result<Val
     query: Vec::new(),
     headers: vec![
       ("authorization".into(), format!("Bearer {key}")),
-      ("content-type".into(), "application/json".into()),
+      ("content-type".into(), kind.into()),
     ],
-    body: Some(body.to_string().into_bytes()),
-    timeout: TIMEOUT,
+    body: Some(body),
+    timeout,
   };
   let bytes = read(request(&req, cancel).await?, cancel).await?;
   serde_json::from_slice(&bytes).map_err(|err| err.to_string())
