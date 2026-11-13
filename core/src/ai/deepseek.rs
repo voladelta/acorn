@@ -119,15 +119,27 @@ fn input(item: &Item, live: &HashSet<&str>) -> Vec<Value> {
     }
     Item::Turn(out) => out.clone(),
     Item::Said(text) => vec![json!({"role": "assistant", "content": text})],
-    Item::Back(backs) => backs
-      .iter()
-      .map(|(id, out)| {
-        let mut output = vec![json!({"type": "input_text", "text": out.text})];
-        output.extend(out.imgs.iter().map(image));
-        output.extend(out.docs.iter().map(|d| doc(d, live)));
-        json!({"type": "function_call_output", "call_id": id, "output": output})
-      })
-      .collect(),
+    Item::Back(backs) => {
+      let mut all: Vec<Value> = backs
+        .iter()
+        .map(|(id, out)| {
+          let mut output = vec![json!({"type": "input_text", "text": out.text})];
+          output.extend(out.imgs.iter().map(image));
+          json!({"type": "function_call_output", "call_id": id, "output": output})
+        })
+        .collect();
+      // A parsed document is read from a user message alone, after the
+      // results that viewed it.
+      let docs: Vec<Value> = backs
+        .iter()
+        .flat_map(|(_, out)| &out.docs)
+        .flat_map(|d| doc(d, live))
+        .collect();
+      if !docs.is_empty() {
+        all.push(json!({"role": "user", "content": docs}));
+      }
+      all
+    }
   }
 }
 
@@ -135,11 +147,16 @@ fn image(img: &Img) -> Value {
   json!({"type": "input_image", "image_url": format!("data:{};base64,{}", img.mime, img.data)})
 }
 
-fn doc(d: &Doc, live: &HashSet<&str>) -> Value {
+/// A document as a user message's parts: its name, then the file, or
+/// word that it is gone.
+fn doc(d: &Doc, live: &HashSet<&str>) -> Vec<Value> {
   if live.contains(d.id.as_str()) {
-    json!({"type": "input_file", "file_id": d.id})
+    vec![
+      json!({"type": "input_text", "text": format!("[{}, as viewed:]", d.name)}),
+      json!({"type": "input_file", "file_id": d.id}),
+    ]
   } else {
-    json!({"type": "input_text", "text": format!("[{} is no longer attached: view it again to read it]", d.name)})
+    vec![json!({"type": "input_text", "text": format!("[{} is no longer attached: view it again to read it]", d.name)})]
   }
 }
 
@@ -334,13 +351,17 @@ mod tests {
     let live = attached(&items, now);
     let sent = input(&items[0], &live);
     assert_eq!(
-      sent[0]["output"],
-      json!([
-        {"type": "input_text", "text": "read"},
-        {"type": "input_text", "text": "[old.pdf is no longer attached: view it again to read it]"},
-        {"type": "input_file", "file_id": "new"},
-      ])
+      sent,
+      [
+        json!({"type": "function_call_output", "call_id": "c", "output": [{"type": "input_text", "text": "read"}]}),
+        json!({"role": "user", "content": [
+          {"type": "input_text", "text": "[old.pdf is no longer attached: view it again to read it]"},
+          {"type": "input_text", "text": "[new.pdf, as viewed:]"},
+          {"type": "input_file", "file_id": "new"},
+        ]}),
+      ]
     );
+    assert_eq!(input(&back(&[]), &live).len(), 1, "no documents, no message");
   }
 
   #[test]

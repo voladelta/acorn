@@ -98,7 +98,7 @@ fn base_docs() -> BTreeMap<String, String> {
       DOCS = deepseek::DOCS,
       EXPIRES = files::EXPIRES,
     )),
-    ("ocr", "ocr(path: string): string   -- the text of a PDF, Word or PowerPoint document or an image, recognized by DeepSeek page by page, each page under a \"--- page n ---\" line when there are several (a PDF read for its layout: headings, tables); for code to search, slice, save or put through relevant".to_string()),
+    ("ocr", "ocr(path: string): string   -- the text of a PDF, Word or PowerPoint document or an image, recognized by DeepSeek page by page, each page under a \"--- page n ---\" line when there are several (a PDF read for its layout: headings, tables), raw: text read off a page keeps DeepSeek's <｜ref｜>label<｜/ref｜><｜box｜>[[x1, y1, x2, y2]]<｜/box｜> marks, corners from 0 to 1000 of the page's width and height; for code to search, slice, save or put through relevant".to_string()),
     ("json", "json.encode(v): string, json.decode(s: string): any".to_string()),
     ("vars", "vars(): your globals, by name".to_string()),
   ]

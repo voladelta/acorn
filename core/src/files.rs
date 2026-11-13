@@ -97,9 +97,18 @@ async fn send(url: &str, path: &Path, fields: &[(&str, String)], cancel: &Cancel
   let mut all = vec![("purpose", purpose(path, &bytes).to_string())];
   all.extend_from_slice(fields);
   let (kind, body) = form(&all, &name, &bytes);
-  web::api(url, &kind, body, TIMEOUT, cancel)
-    .await
-    .map_err(|why| format!("{}: {why}", path.display()))
+  let got = web::api(url, &kind, body, TIMEOUT, cancel).await;
+  got.and_then(failed).map_err(|why| format!("{}: {why}", path.display()))
+}
+
+/// A reply, unless it is an error: once parsing has begun the status is
+/// already 200, so a parse that fails or runs out of time says so in the
+/// body alone.
+fn failed(got: Value) -> Result<Value, String> {
+  match &got["error"] {
+    Value::Null => Ok(got),
+    err => Err(err["message"].as_str().unwrap_or("failed").to_string()),
+  }
 }
 
 /// A document parsed into the Files API, to last `expires` seconds
@@ -199,6 +208,13 @@ mod tests {
       "--- page 1 ---\nA\n\n--- page 2 ---\nB\n[page cut short: its text ran past the limit]"
     );
     assert_eq!(pages(&json!({"pages": []})), "");
+  }
+
+  #[test]
+  fn an_error_in_a_200_reply_is_a_failure() {
+    let err = json!({"error": {"message": "OCR did not finish in time", "code": "gateway_timeout_error"}});
+    assert_eq!(failed(err).unwrap_err(), "OCR did not finish in time");
+    assert!(failed(json!({"pages": []})).is_ok());
   }
 
   #[test]
