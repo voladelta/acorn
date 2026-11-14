@@ -16,8 +16,12 @@ const WAIT: Duration = Duration::from_secs(2);
 const MOST_WAIT: Duration = Duration::from_secs(300);
 /// What a call waits for beyond the long poll it asks for.
 const SLACK: Duration = Duration::from_secs(20);
-/// The biggest file a bot may download.
+/// The biggest file a bot may download, and send (a photo: PHOTO_BYTES).
 pub const FILE_BYTES: u64 = 20 << 20;
+pub const SEND_BYTES: u64 = 50 << 20;
+pub const PHOTO_BYTES: u64 = 10 << 20;
+/// What an upload waits for.
+const UPLOAD: Duration = Duration::from_secs(300);
 
 #[derive(Debug, PartialEq)]
 pub enum Fail {
@@ -69,14 +73,51 @@ impl Bot {
   /// waited for that long and more.
   pub async fn call(&self, method: &str, body: &Value, cancel: &CancellationToken) -> Result<Value, Fail> {
     let poll = Duration::from_secs(body["timeout"].as_u64().unwrap_or(0));
+    self
+      .ask(method, poll + SLACK, cancel, || {
+        self.client.post(format!("{}/{method}", self.base)).json(body)
+      })
+      .await
+  }
+
+  /// A method called with a file: `fields` (a JSON object) as form
+  /// fields, the file's bytes as `field`, named `name`.
+  pub async fn upload(
+    &self,
+    method: &str,
+    fields: &Value,
+    field: &str,
+    name: &str,
+    bytes: &[u8],
+    cancel: &CancellationToken,
+  ) -> Result<Value, Fail> {
+    let form = || {
+      let mut form = reqwest::multipart::Form::new();
+      for (k, v) in fields.as_object().into_iter().flatten() {
+        let v = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+        form = form.text(k.clone(), v);
+      }
+      let part = reqwest::multipart::Part::bytes(bytes.to_vec()).file_name(name.to_string());
+      form.part(field.to_string(), part)
+    };
+    self
+      .ask(method, UPLOAD, cancel, || {
+        self.client.post(format!("{}/{method}", self.base)).multipart(form())
+      })
+      .await
+  }
+
+  /// A request, sent anew while busy (`TRIES`): its result.
+  async fn ask(
+    &self,
+    method: &str,
+    timeout: Duration,
+    cancel: &CancellationToken,
+    request: impl Fn() -> reqwest::RequestBuilder,
+  ) -> Result<Value, Fail> {
     let mut wait = WAIT;
     for n in 1..=TRIES {
-      let sent = self
-        .client
-        .post(format!("{}/{method}", self.base))
-        .json(body)
-        .timeout(poll + SLACK)
-        .send();
+      let sent = request().timeout(timeout).send();
       let res = tokio::select! {
           res = sent => res,
           _ = cancel.cancelled() => return Err(Fail::Stopped),

@@ -1,11 +1,12 @@
 /** @jsxImportSource octane */
 // The message box (app/src/lib.rs's composer): Return sends (Shift+Return
-// a new line); images come by the attach button, a paste or a drop. Sent
-// while the assistant works, a message cuts in. An `@` word being typed
-// shows the other assistants it may name, over the box: ↑ and ↓ pick one,
-// Return or Tab takes it (Return sends a word already a name), a click
-// takes the one clicked, Esc closes it for that word: till the caret is
-// out of it (moved off, the word gone, the message sent).
+// a new line); images, videos, sounds and PDFs come by the attach button,
+// a paste or a drop. Sent while the assistant works, a message cuts in.
+// An `@` word being typed shows the other assistants it may name, over the
+// box: ↑ and ↓ pick one, Return or Tab takes it (Return sends a word
+// already a name), a click takes the one clicked, Esc closes it for that
+// word: till the caret is out of it (moved off, the word gone, the
+// message sent).
 
 import ArrowUp from '@octanejs/lucide/icons/arrow-up';
 import Plus from '@octanejs/lucide/icons/plus';
@@ -96,10 +97,17 @@ export function Composer() {
         <div class="flex flex-wrap gap-2">
           {ui.pics.map((p, k) => (
             <div key={p.url} class="group relative">
-              <img src={p.url} alt={`image ${k + 1}`} class="size-14 rounded-lg border object-cover" />
+              {p.image ? (
+                <img src={p.url} alt={p.name} class="size-14 rounded-lg border object-cover" />
+              ) : (
+                <div title={p.name} class="flex h-14 max-w-[160px] items-center gap-1.5 rounded-lg border bg-muted px-2.5 text-xs">
+                  <span aria-hidden="true">📄</span>
+                  <span class="truncate">{p.name}</span>
+                </div>
+              )}
               <button
                 type="button"
-                aria-label={`Drop image ${k + 1}`}
+                aria-label={`Drop ${p.name || `file ${k + 1}`}`}
                 class="absolute -top-1.5 -right-1.5 flex size-5 cursor-pointer items-center justify-center rounded-full bg-foreground text-background"
                 onClick={() => store.dropPic(k)}
               >
@@ -129,15 +137,15 @@ export function Composer() {
             ))}
           </div>
         ) : null}
-        <Tip tip="Attach images">
-          <Button variant="ghost" size="icon-lg" className="rounded-full text-muted-foreground" aria-label="Attach images" onClick={() => files.current?.click()}>
+        <Tip tip="Attach images, videos, sounds or PDFs">
+          <Button variant="ghost" size="icon-lg" className="rounded-full text-muted-foreground" aria-label="Attach files" onClick={() => files.current?.click()}>
             <Plus class="size-5" />
           </Button>
         </Tip>
         <input
           ref={files}
           type="file"
-          accept="image/*"
+          accept={store.ATTACHABLE}
           multiple
           hidden
           onChange={(e: Event) => {

@@ -103,7 +103,7 @@ export function RowView(props: { row: Row; chat: string; now: number }) {
 
 function Message(props: { kind: Kind; who: string; text: string; call: Call | null; images: string[]; chat: string }) {
   const { kind, who, text } = props;
-  const pics = props.images.length ? <Pictures chat={props.chat} names={props.images} /> : null;
+  const pics = props.images.length ? <Pictures chat={props.chat} names={props.images} big={kind === 'unii'} /> : null;
   switch (kind) {
     case 'user':
       return (
@@ -301,16 +301,47 @@ function FileOut(props: { out: Out }) {
 }
 
 /** A message's images, each opened by a click. */
-function Pictures(props: { chat: string; names: string[] }) {
+function Pictures(props: { chat: string; names: string[]; big?: boolean }) {
   return (
     <div class="mt-2 flex flex-wrap gap-2">
       {props.names.map((name) => {
         const url = link.image(props.chat, name);
-        return (
-          <a key={name} href={url} target="_blank" rel="noreferrer">
-            <img src={url} alt={name} class="h-[120px] w-[160px] rounded-lg border object-cover" />
-          </a>
-        );
+        switch (link.mediaOf(name)) {
+          case 'image':
+            return (
+              <a key={name} href={url} target="_blank" rel="noreferrer">
+                <img
+                  src={url}
+                  alt={name}
+                  loading="lazy"
+                  class={
+                    props.big
+                      ? 'max-h-[360px] max-w-full rounded-lg border object-contain'
+                      : 'h-[120px] w-[160px] rounded-lg border object-cover'
+                  }
+                />
+              </a>
+            );
+          case 'video':
+            return (
+              <video key={name} src={url} controls preload="metadata" playsInline class="max-h-[360px] max-w-full rounded-lg border bg-black" />
+            );
+          case 'audio':
+            return <audio key={name} src={url} controls preload="metadata" class="w-[320px] max-w-full" />;
+          case 'file':
+            return (
+              <a
+                key={name}
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                class="flex items-center gap-2 rounded-lg border bg-muted px-3 py-2 text-[13px] hover:bg-accent"
+              >
+                <span aria-hidden="true">📄</span>
+                <span class="font-medium">{`${link.extOf(name).toUpperCase() || 'A'} file`}</span>
+              </a>
+            );
+        }
       })}
     </div>
   );

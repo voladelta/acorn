@@ -376,6 +376,12 @@ fn home() -> Vec<Spec> {
       &["id"],
     ),
     spec(
+      "send_file",
+      "Show the user a file in this chat: an image, video, sound or document (a chart you plotted, a photo, a recording, a PDF you made), when they ask for one or it says more than words. It shows in the app and reaches their phone if this chat does; caption, words said with it. Write the file first (luau), then send its path; at most 50 MB.",
+      json!({"path": {"type": "string", "description": "The file, in your work dir or absolute."}, "caption": {"type": "string"}}),
+      &["path"],
+    ),
+    spec(
       "usage",
       "What the user's calls cost, by day and kind, every assistant's chats and threads together, the last days (7 by default), then each day's zooms (found or not) and searches (with hits or without). Show the user a short table, in dollars.",
       json!({"days": {"type": "integer"}}),

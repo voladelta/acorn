@@ -9,7 +9,8 @@
 //!   for one (`lost`: some were dropped, too old);
 //! - `POST /api/cmd?chat=ID`: a `Command` (JSON) to a chat, once it is open
 //!   (404: no such chat);
-//! - `GET /api/image?chat=ID&name=F`: an image of a chat's.
+//! - `GET /api/image?chat=ID&name=F`: an image or other file of a chat's
+//!   (a video, a sound, a document), in ranges if asked.
 //!
 //! The agent runs commands on this machine, so every request needs the
 //! server's token: opening the link it prints sets it as a cookie. The
@@ -19,8 +20,9 @@
 use acorn_core::chat::hub;
 use acorn_core::wire::{Command, Event};
 use axum::body::Bytes;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::{Query, Request, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -30,12 +32,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::watch;
+use tower::ServiceExt as _;
 use tower_http::compression::CompressionLayer;
-use tower_http::services::ServeDir;
+use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate as _};
+use tower_http::services::{ServeDir, ServeFile};
 
 /// Events kept for polls that come late: at most so many, and bytes.
 const KEEP: usize = 20_000;
 const KEEP_BYTES: usize = 256 << 20;
+/// The most bytes of a command: a message with its files (50 MB each at
+/// most, in base64).
+const CMD_BYTES: usize = 160 << 20;
 /// How long a poll waits for an event.
 const WAIT: Duration = Duration::from_secs(25);
 const COOKIE: &str = "acorn_token";
@@ -144,10 +151,17 @@ async fn serve() {
   let app = Router::new()
     .route("/api/hello", get(hello))
     .route("/api/events", get(events))
-    .route("/api/cmd", post(cmd))
+    .route("/api/cmd", post(cmd).layer(DefaultBodyLimit::max(CMD_BYTES)))
     .route("/api/image", get(image))
     .fallback_service(ServeDir::new(&web))
-    .layer(CompressionLayer::new())
+    .layer(
+      CompressionLayer::new().compress_when(
+        // a video or a sound is compressed already, and asked for in ranges
+        DefaultPredicate::new()
+          .and(NotForContentType::const_new("video/"))
+          .and(NotForContentType::const_new("audio/")),
+      ),
+    )
     .layer(middleware::from_fn_with_state(server.clone(), guard))
     .with_state(server.clone());
 
@@ -287,7 +301,7 @@ async fn cmd(Query(q): Query<HashMap<String, String>>, body: Bytes) -> Response 
   }
 }
 
-async fn image(Query(q): Query<HashMap<String, String>>, _: HeaderMap) -> Response {
+async fn image(Query(q): Query<HashMap<String, String>>, req: Request) -> Response {
   let (Some(chat), Some(name)) = (q.get("chat"), q.get("name")) else {
     return StatusCode::BAD_REQUEST.into_response();
   };
@@ -296,21 +310,9 @@ async fn image(Query(q): Query<HashMap<String, String>>, _: HeaderMap) -> Respon
     return StatusCode::BAD_REQUEST.into_response();
   }
   let path = hub::dir(chat).join("docs/images").join(name);
-  let Ok(bytes) = tokio::fs::read(&path).await else {
-    return StatusCode::NOT_FOUND.into_response();
-  };
-  let mime = match path
-    .extension()
-    .and_then(|e| e.to_str())
-    .unwrap_or("")
-    .to_ascii_lowercase()
-    .as_str()
-  {
-    "png" => "image/png",
-    "jpg" | "jpeg" => "image/jpeg",
-    "gif" => "image/gif",
-    "webp" => "image/webp",
-    _ => "application/octet-stream",
-  };
-  ([(header::CONTENT_TYPE, mime)], bytes).into_response()
+  // by its kind, and in ranges, so a video plays from any point
+  match ServeFile::new(&path).oneshot(req).await {
+    Ok(res) => res.into_response(),
+    Err(never) => match never {},
+  }
 }

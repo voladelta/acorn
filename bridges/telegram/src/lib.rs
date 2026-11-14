@@ -112,6 +112,8 @@ pub trait Home: Send + Sync {
   fn notice(&self, text: String);
   /// The chat's events from now on.
   fn tap(&self) -> UnboundedReceiver<Event>;
+  /// A file of the chat's (an entry's image or other media), by its name.
+  fn file(&self, name: &str) -> Option<PathBuf>;
 }
 
 pub struct Tg {
@@ -531,6 +533,45 @@ impl Tg {
     }
     Ok(())
   }
+
+  /// A file of the chat's sent to a chat, by the method its kind takes
+  /// (a photo, a video, a sound, a voice note), else as a document, as is
+  /// one that method refuses; `reply`, the message it answers.
+  async fn send_file(&self, chat: i64, name: &str, silent: bool, reply: Option<i64>) -> Result<(), String> {
+    let path = self.home.file(name).ok_or_else(|| format!("{name}: no such file"))?;
+    let bytes = tokio::fs::read(&path).await.map_err(|e| format!("{name}: {e}"))?;
+    if bytes.len() as u64 > api::SEND_BYTES {
+      return Err(format!("{name}: over 50 MB, the most a bot may send"));
+    }
+    let mut fields = json!({"chat_id": chat, "disable_notification": silent});
+    if let Some(msg) = reply {
+      fields["reply_parameters"] = json!({"message_id": msg, "allow_sending_without_reply": true});
+    }
+    let (method, field) = sent_as(name, bytes.len() as u64);
+    let res = self.bot.upload(method, &fields, field, name, &bytes, &self.stop).await;
+    match res {
+      Err(Fail::Refused(_)) if method != "sendDocument" => self
+        .bot
+        .upload("sendDocument", &fields, "document", name, &bytes, &self.stop)
+        .await
+        .map(drop)
+        .map_err(|e| e.to_string()),
+      res => res.map(drop).map_err(|e| e.to_string()),
+    }
+  }
+}
+
+/// The method a file is sent by, and its field, by its kind (its name's
+/// extension) and size.
+fn sent_as(name: &str, size: u64) -> (&'static str, &'static str) {
+  match name.rsplit('.').next().unwrap_or_default() {
+    "jpeg" | "jpg" | "png" if size <= api::PHOTO_BYTES => ("sendPhoto", "photo"),
+    "gif" => ("sendAnimation", "animation"),
+    "mp4" | "mov" => ("sendVideo", "video"),
+    "mp3" | "m4a" => ("sendAudio", "audio"),
+    "ogg" => ("sendVoice", "voice"),
+    _ => ("sendDocument", "document"),
+  }
 }
 
 /// Who sent a message: their name and @username, or the chat that posted.
@@ -638,6 +679,12 @@ impl Home for Hub {
 
   fn tap(&self) -> UnboundedReceiver<Event> {
     hub::tap(ID)
+  }
+
+  fn file(&self, name: &str) -> Option<PathBuf> {
+    let plain = !name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\\', '\0']);
+    let file = hub::dir(ID).join("docs/images").join(name);
+    (plain && file.is_file()).then_some(file)
   }
 }
 

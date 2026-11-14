@@ -46,7 +46,7 @@ mod images;
 mod purge;
 mod view;
 
-pub use images::{IMAGES_ARE, image_add, image_for_model, image_kind};
+pub use images::{IMAGES_ARE, image_add, image_for_model, image_kind, is_image, media_add, media_kind};
 pub use purge::{GRACE, erase, wipe};
 
 use crate::clip;

@@ -58,6 +58,7 @@ dependencies = [
  "axum",
  "serde_json",
  "tokio",
+ "tower",
  "tower-http 0.7.1",
 ]
 
@@ -4303,6 +4304,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",

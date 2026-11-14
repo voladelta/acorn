@@ -25,9 +25,10 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Purge** | `purge` erases a message (a pasted key or password) and every summary made from it; `unpurge` takes it back for ten minutes, then it is wiped from the database file |
 | **Import** | Your past Claude Code and Codex sessions on this machine, and Claude and ChatGPT chats from their websites' exports, read into the chat |
 | **Growing** | An assistant sees what it is (`abilities`) and grows itself (`extend`): a skill when you teach it how you want a kind of task done, a plugin when a task needs a service or routine it lacks; each checked before it goes in, the old one kept |
+| **Files** | An assistant shows you a file it made or found (`send_file`): an image, video, sound or document, shown in the chat (played in a browser) and sent to Telegram if the chat reaches it |
 | **Goals** | Name a finish line ("keep at it until the tests pass") and the assistant works until a check says it is met; the goal shows above the message box |
 | **Timers** | "Remind me at 9 to call mom", "check the build in an hour", "every evening, sum up the dev group": a reminder said when due, or a task done then, once or on a cron line |
-| **Telegram App** | With a bot token, an assistant whose chat is also your DM with the bot: write in Telegram or the app, one chat. It hears the groups the bot is in for 24 hours, and speaks there only when you call on it or ask it to post |
+| **Telegram App** | With a bot token, an assistant whose chat is also your DM with the bot: write in Telegram or the app, one chat, photos, videos, voice notes and files included. It hears the groups the bot is in for 24 hours, and speaks there only when you call on it or ask it to post |
 
 ## How it works
 
@@ -110,7 +111,7 @@ You act by words alone: there are no menus and no stop button. Clicks and keys o
 
 | Input | Effect |
 |---|---|
-| Message box | Talk to the assistant you picked; images can be attached, files dropped on the window add their paths (in a browser, images dropped are attached). Sent while it works, a message cuts in |
+| Message box | Talk to the assistant you picked; images can be attached, files dropped on the window add their paths (in a browser, images, videos, sounds and PDFs dropped or picked are attached). Sent while it works, a message cuts in |
 | Sidebar | Pick an assistant (who it is shows beside its name) |
 | A name in a report | Open that agent's work, or the thread where that assistant answered |
 | Esc | Back to your chat from an agent's page, a thread or the overview |

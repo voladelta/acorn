@@ -156,6 +156,9 @@ impl Toolbox for Kit {
   }
 }
 
+/// The biggest file `send_file` sends (Telegram's most for a bot).
+const SEND_BYTES: u64 = 50 << 20;
+
 impl Engine {
   async fn tool(
     self: Arc<Self>,
@@ -247,6 +250,35 @@ impl Engine {
         };
         self.lock().set_goal(goal);
         Out::ok(said)
+      }
+      "send_file" => {
+        let path = cwd.join(str("path"));
+        match tokio::fs::metadata(&path).await {
+          Ok(m) if !m.is_file() => return Out::fail(format!("{} is not a file.", path.display())),
+          Ok(m) if m.len() > SEND_BYTES => {
+            return Out::fail(format!("{} is over 50 MB, the most sent.", path.display()));
+          }
+          Ok(_) => {}
+          Err(err) => return Out::fail(format!("{}: {err}", path.display())),
+        }
+        let bytes = match tokio::fs::read(&path).await {
+          Ok(bytes) => bytes,
+          Err(err) => return Out::fail(format!("{}: {err}", path.display())),
+        };
+        let dir = self.lock().mem.dir.clone();
+        let name = match tokio::task::spawn_blocking(move || memory::media_add(&dir, &bytes)).await {
+          Ok(Ok(name)) => name,
+          Ok(Err(err)) => return Out::fail(format!("Not sent: {err}")),
+          Err(err) => return Out::fail(format!("Not sent: {err}")),
+        };
+        let msg = memory::Msg {
+          images: vec![name],
+          ..memory::Msg::new(Kind::Acorn, str("caption"))
+        };
+        self.lock().hold(move |chat| {
+          chat.push_msg(msg);
+        });
+        Out::ok(format!("Sent {}: the user sees it in the chat.", path.display()))
       }
       "usage" => Out::ok(super::usage::told(num("days", 7).clamp(1, 366) as i64)),
       "set_timer" | "list_timers" | "cancel_timer" => {

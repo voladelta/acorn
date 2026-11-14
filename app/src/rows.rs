@@ -378,7 +378,8 @@ fn file(out: Out) -> View {
   }
 }
 
-/// A message's images, each opened by a click.
+/// A message's images, and its other files (a video, a sound, a
+/// document) by their kind; each opened by a click.
 fn pictures(ui: Ui, names: &[String]) -> View {
   let chat = ui.shown.get_untracked();
   view().flex_row().flex_wrap().gap_2().mt_2().child(
@@ -387,6 +388,22 @@ fn pictures(ui: Ui, names: &[String]) -> View {
       .map(|name| {
         let url = crate::link::image(&chat, name);
         let open = url.clone();
+        let kind = name.rsplit('.').next().unwrap_or_default();
+        if !matches!(kind, "png" | "jpeg" | "gif" | "webp") {
+          let kind = kind.to_uppercase();
+          return view()
+            .px_3()
+            .py_2()
+            .rounded(px(8.0))
+            .bg(block())
+            .border_1()
+            .border_color(hair())
+            .on_press(move || {
+              drop(open_url(open.clone()));
+            })
+            .child(text(format!("📄 {kind} file")).text_size(px(13.0)))
+            .into_element();
+        }
         image(url)
           .h(px(120.0))
           .w(px(160.0))
@@ -397,6 +414,7 @@ fn pictures(ui: Ui, names: &[String]) -> View {
           .on_press(move || {
             drop(open_url(open.clone()));
           })
+          .into_element()
       })
       .collect::<Vec<_>>(),
   )

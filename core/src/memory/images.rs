@@ -1,7 +1,8 @@
 //! Images
 //! ======
-//! A message's images, in docs/images/ by their hash, each with a copy
-//! scaled for models beside it.
+//! A message's images and other media (video, audio, documents), in
+//! docs/images/ by their hash and kind; each image with a copy scaled for
+//! models beside it. Models see the images; the rest, by its path.
 
 use super::*;
 use anyhow::Context;
@@ -18,17 +19,19 @@ impl Memory {
     let ok = hash.len() == 16
       && hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
       && !ext.is_empty()
-      && ext.bytes().all(|b| b.is_ascii_lowercase());
+      && ext.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
     let file = self.images_dir().join(name);
     (ok && file.exists()).then_some(file)
   }
 
-  /// What models get of message id's images: their copies, if any.
+  /// What models get of message id's images: their copies, if any (its
+  /// other media, none).
   pub fn images(&self, id: u64) -> Vec<Img> {
     let names = self.message(id).map(|m| m.images).unwrap_or_default();
     let dir = self.images_dir();
     names
       .iter()
+      .filter(|name| is_image(name))
       .filter_map(|name| {
         let fit = dir.join(format!("{name}.jpg"));
         let (file, mime) = if fit.exists() {
@@ -63,6 +66,86 @@ pub fn image_kind(head: &[u8]) -> Option<&'static str> {
 }
 
 pub const IMAGES_ARE: &str = "Images are png, jpeg, gif or webp.";
+
+/// Whether a chat's file (by its name) is an image models see.
+pub fn is_image(name: &str) -> bool {
+  matches!(name.rsplit('.').next(), Some("png" | "jpeg" | "gif" | "webp"))
+}
+
+/// A file's kind by its first bytes, as an extension: an image's
+/// (`image_kind`), a video's, a sound's, a document's; else txt for UTF-8
+/// text, bin for anything else.
+pub fn media_kind(bytes: &[u8]) -> &'static str {
+  if let Some(kind) = image_kind(bytes) {
+    return &kind["image/".len()..];
+  }
+  let at = |k: usize, mark: &[u8]| bytes.get(k..k + mark.len()) == Some(mark);
+  let has = |mark: &[u8], within: usize| bytes[..bytes.len().min(within)].windows(mark.len()).any(|w| w == mark);
+  if at(0, b"%PDF") {
+    "pdf"
+  } else if at(4, b"ftyp") {
+    match bytes.get(8..12) {
+      Some(b"M4A " | b"M4B ") => "m4a",
+      Some(b"qt  ") => "mov",
+      _ => "mp4",
+    }
+  } else if at(0, b"\x1A\x45\xDF\xA3") {
+    if has(b"webm", 64) { "webm" } else { "mkv" }
+  } else if at(0, b"OggS") {
+    "ogg"
+  } else if at(0, b"fLaC") {
+    "flac"
+  } else if at(0, b"RIFF") && at(8, b"WAVE") {
+    "wav"
+  } else if at(0, b"RIFF") && at(8, b"AVI ") {
+    "avi"
+  } else if at(0, b"ID3") || (bytes.len() > 1 && bytes[0] == 0xFF && bytes[1] & 0xE6 == 0xE2) {
+    "mp3"
+  } else if bytes.len() > 1 && bytes[0] == 0xFF && bytes[1] & 0xF6 == 0xF0 {
+    "aac"
+  } else if at(0, b"PK\x03\x04") {
+    // an Office file is a zip whose first entries name its kind
+    if has(b"word/", 4096) {
+      "docx"
+    } else if has(b"ppt/", 4096) {
+      "pptx"
+    } else if has(b"xl/", 4096) {
+      "xlsx"
+    } else {
+      "zip"
+    }
+  } else if std::str::from_utf8(bytes).is_ok() {
+    "txt"
+  } else {
+    "bin"
+  }
+}
+
+/// A file's bytes put in a chat's dir by their hash and kind: an image
+/// as `image_add` puts it (one that won't decode, as it is), anything else
+/// as it is; its name. Blocking: run off the chat's lock.
+pub fn media_add(dir: &Path, bytes: &[u8]) -> Result<String> {
+  if image_kind(bytes).is_some()
+    && let Ok(name) = image_add(dir, bytes)
+  {
+    return Ok(name);
+  }
+  use sha2::Digest;
+  let hash = sha2::Sha256::digest(bytes);
+  let hex: String = hash.iter().take(8).map(|b| format!("{b:02x}")).collect();
+  let kind = match media_kind(bytes) {
+    // an image that won't decode is no image to models
+    "png" | "jpeg" | "gif" | "webp" => "bin",
+    kind => kind,
+  };
+  let name = format!("{hex}.{kind}");
+  let images = dir.join(IMAGES);
+  fs::create_dir_all(&images)?;
+  let file = images.join(&name);
+  fs::write(&file, bytes)?;
+  disk::wrote(&file);
+  Ok(name)
+}
 
 /// An image read: its kind, its width and height, and its copy for models
 /// if it needs one.
@@ -138,4 +221,47 @@ pub fn image_add(dir: &Path, bytes: &[u8]) -> Result<String> {
   fs::write(&file, bytes)?;
   disk::wrote(&file);
   Ok(name)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_file_is_known_by_its_first_bytes() {
+    let cases: [(&[u8], &str); 12] = [
+      (b"%PDF-1.7", "pdf"),
+      (b"\0\0\0\x20ftypisom\0\0", "mp4"),
+      (b"\0\0\0\x20ftypM4A \0\0", "m4a"),
+      (b"\0\0\0\x14ftypqt  \0\0", "mov"),
+      (b"\x1A\x45\xDF\xA3\x9f\x42\x82\x84webm", "webm"),
+      (b"OggS\0\x02", "ogg"),
+      (b"ID3\x04\0", "mp3"),
+      (b"\xFF\xFB\x90\x00", "mp3"),
+      (b"RIFF\0\0\0\0WAVEfmt ", "wav"),
+      (b"PK\x03\x04\x14\0\0\0[Content_Types].xmlword/document.xml", "docx"),
+      (b"plain words", "txt"),
+      (b"\x00\x01\xFE\xFF", "bin"),
+    ];
+    for (bytes, kind) in cases {
+      assert_eq!(media_kind(bytes), kind, "{bytes:?}");
+    }
+  }
+
+  #[test]
+  fn media_is_kept_by_its_kind_and_models_see_images_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let video = media_add(dir.path(), b"\0\0\0\x20ftypisom\0\0more").unwrap();
+    assert!(video.ends_with(".mp4") && video.len() == 20, "{video}");
+    assert!(dir.path().join(IMAGES).join(&video).is_file());
+    let mut png = Vec::new();
+    image::RgbImage::new(4, 3)
+      .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+      .unwrap();
+    let pic = media_add(dir.path(), &png).unwrap();
+    assert!(pic.ends_with(".png"));
+    assert!(is_image(&pic) && !is_image(&video));
+    let broken = media_add(dir.path(), b"\x89PNG not really").unwrap();
+    assert!(broken.ends_with(".bin"), "an image that won't decode: {broken}");
+  }
 }

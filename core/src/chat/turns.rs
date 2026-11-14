@@ -14,7 +14,7 @@
 
 use super::{Chat, Engine, Phase, Span};
 use crate::ai::{self, Event as AiEvent};
-use crate::memory::{self, IMAGES_ARE, Msg, Part};
+use crate::memory::{self, Msg, Part};
 use crate::wire::{Event, Live, live_push};
 use crate::{Block, Kind, Served, config};
 use std::sync::Arc;
@@ -36,18 +36,29 @@ const GOAL_ASK: &str = "\nThe goal:\n\n";
 const GOAL_NO: &str = "The goal isn't satisfied yet: keep working. Treat the current workspace, tool results and files as authoritative; inspect them instead of assuming earlier narration is still current. Make concrete progress and verify the result. Before saying the goal is done, gather evidence that the whole of it is achieved.";
 
 impl Engine {
-  /// A message from the person (its images first put in place), logged
-  /// and taken, told as come from `via` (none: the app).
-  pub(super) async fn say(self: Arc<Self>, text: String, images: Vec<Vec<u8>>, via: Option<String>) {
-    let dir = self.lock().mem.dir.clone();
+  /// A message from the person (its images and other media first put in
+  /// place, each but an image named in its text by its path, since models
+  /// see images alone), logged and taken, told as come from `via` (none:
+  /// the app).
+  pub(super) async fn say(self: Arc<Self>, mut text: String, images: Vec<Vec<u8>>, via: Option<String>) {
+    let (dir, at) = {
+      let chat = self.lock();
+      (chat.mem.dir.clone(), chat.mem.images_dir())
+    };
     let mut names = Vec::new();
     for bytes in images {
       let dir = dir.clone();
-      match tokio::task::spawn_blocking(move || memory::image_add(&dir, &bytes)).await {
-        Ok(Ok(name)) => names.push(name),
-        _ => return self.tell(Event::Note(IMAGES_ARE.into())),
+      match tokio::task::spawn_blocking(move || memory::media_add(&dir, &bytes)).await {
+        Ok(Ok(name)) => {
+          if !memory::is_image(&name) {
+            text.push_str(&format!("\n[attached: {}]", at.join(&name).display()));
+          }
+          names.push(name)
+        }
+        _ => return self.tell(Event::Note("That file couldn't be kept.".into())),
       }
     }
+    let text = text.trim_start().to_string();
     let me = self.clone();
     self
       .writing(async move || {

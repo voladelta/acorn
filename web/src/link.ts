@@ -131,6 +131,32 @@ export function send(chat: string, cmd: Command): Promise<boolean> {
   return sent;
 }
 
-/** Where a chat's image is shown from: the server. */
+/** Where a chat's image, or other file, is shown from: the server. */
 export const image = (chat: string, name: string) =>
   `/api/image?chat=${encodeURIComponent(chat)}&name=${encodeURIComponent(name)}`;
+
+/** How a chat's file is shown, by its kind (its name's extension, as
+ * the engine gives it from its first bytes). */
+export type Media = 'image' | 'video' | 'audio' | 'file';
+
+const KINDS: Record<string, Media> = {
+  png: 'image',
+  jpeg: 'image',
+  jpg: 'image',
+  gif: 'image',
+  webp: 'image',
+  mp4: 'video',
+  mov: 'video',
+  webm: 'video',
+  mkv: 'video',
+  mp3: 'audio',
+  m4a: 'audio',
+  ogg: 'audio',
+  wav: 'audio',
+  flac: 'audio',
+  aac: 'audio',
+};
+
+export const extOf = (name: string) => (name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : '');
+
+export const mediaOf = (name: string): Media => KINDS[extOf(name)] ?? 'file';

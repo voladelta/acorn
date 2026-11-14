@@ -1,8 +1,9 @@
 //! The DM
 //! ======
 //! The owner's DM with the bot, as Telegram App's chat: what they write
-//! there is said in it (a photo with it, a quote of what they answered),
-//! and what the chat says goes back. All the assistant says is sent; what
+//! there is said in it (a photo, video, sound or document with it, a quote
+//! of what they answered), and what the chat says goes back, with the
+//! files it shows. All the assistant says is sent; what
 //! the owner wrote to it in the app, quoted, and the replies to that
 //! without a buzz, since they are at their desk; another assistant's
 //! answer ("[Max] ...") under its name; a reminder, loud. A turn the
@@ -35,23 +36,21 @@ pub async fn inbound(tg: &Arc<Tg>, msg: &Value, edited: bool) {
     .unwrap_or_default()
     .to_string();
   let mut images = Vec::new();
-  let photo = msg["photo"]
-    .as_array()
-    .and_then(|sizes| sizes.last())
-    .map(|p| &p["file_id"]);
-  let picture = msg["document"]["mime_type"]
-    .as_str()
-    .is_some_and(|m| m.starts_with("image/"))
-    .then(|| &msg["document"]["file_id"]);
-  if let Some(file) = photo.or(picture).and_then(|f| f.as_str()) {
+  if let Some(file) = media(msg) {
+    if !msg["photo"].is_array()
+      && let Some(said) = super::rooms::what(msg)
+    {
+      // its kind and name ("[file: report.docx]"), with the caption
+      text = said;
+    }
     match tg.bot.download(file, &tg.stop).await {
       Ok(bytes) => images.push(bytes),
-      Err(why) => text = format!("{text}\n\n[a picture that didn't come through: {why}]"),
+      Err(why) => text = format!("{text}\n\n[a file that didn't come through: {why}]"),
     }
   } else if text.is_empty()
     && let Some(held) = super::rooms::what(msg)
   {
-    text = format!("{held} (sent on Telegram; you get its words and pictures only)");
+    text = format!("{held} (sent on Telegram; you get its words, pictures and files only)");
   }
   if text.trim().is_empty() && images.is_empty() {
     return;
@@ -66,6 +65,17 @@ pub async fn inbound(tg: &Arc<Tg>, msg: &Value, edited: bool) {
     text = format!("(edited) {text}");
   }
   tg.home.say(text, images, VIA.into());
+}
+
+/// The file a message brings, by its id: a photo (its largest size), a
+/// video, an animation, a sound, a voice or video note, a document.
+fn media(msg: &Value) -> Option<&str> {
+  if let Some(sizes) = msg["photo"].as_array() {
+    return sizes.last()?["file_id"].as_str();
+  }
+  ["animation", "video", "video_note", "voice", "audio", "document"]
+    .iter()
+    .find_map(|k| msg[*k]["file_id"].as_str())
 }
 
 /// Where a turn answers, kept from entry to entry: loud, whether it was
@@ -95,8 +105,8 @@ fn room_of(via: &str) -> Option<(i64, i64)> {
   Some((chat.parse().ok()?, msg.parse().ok()?))
 }
 
-/// What Telegram gets of a chat's entry: its text, whether it goes
-/// without a buzz, and where.
+/// What Telegram gets of a chat's entry: its text (empty: its files
+/// alone), whether it goes without a buzz, and where; its files go after.
 pub fn mirrored(entry: &Entry, route: &mut Route, assistant: impl Fn(&str) -> bool) -> Option<(String, bool, To)> {
   let via = entry.via.as_deref();
   let text = entry.text.trim();
@@ -134,7 +144,7 @@ pub fn mirrored(entry: &Entry, route: &mut Route, assistant: impl Fn(&str) -> bo
       assistant(name).then(|| (format!("**{name}:**\n{}", said.trim()), quiet, to))
     }
     Kind::Acorn if via == Some(TIMER) => Some((text.to_string(), false, To::Dm)),
-    Kind::Acorn if !text.is_empty() => Some((text.to_string(), quiet, to)),
+    Kind::Acorn if !text.is_empty() || !entry.images.is_empty() => Some((text.to_string(), quiet, to)),
     Kind::Note if !text.is_empty() => Some((format!("_{text}_"), quiet, To::Dm)),
     _ => None,
   }
@@ -167,14 +177,21 @@ pub async fn mirror(tg: Arc<Tg>, mut events: UnboundedReceiver<Event>) {
         let (Some((text, silent, to)), Some(owner)) = (said, tg.owner()) else {
           continue;
         };
-        let sent = match to {
-          To::Dm => tg.send(owner, &text, silent).await,
-          To::Room(chat, msg) => tg.send_to(chat, &text, silent, Some(msg)).await,
+        let (chat, reply) = match to {
+          To::Dm => (owner, None),
+          To::Room(chat, msg) => (chat, Some(msg)),
         };
-        *typing.last.lock() = Some(Instant::now());
-        if let Err(why) = sent {
+        if !text.is_empty()
+          && let Err(why) = tg.send_to(chat, &text, silent, reply).await
+        {
           eprintln!("acorn: telegram: {why}");
         }
+        for name in &entry.images {
+          if let Err(why) = tg.send_file(chat, name, silent, reply).await {
+            eprintln!("acorn: telegram: {why}");
+          }
+        }
+        *typing.last.lock() = Some(Instant::now());
       }
       _ => {}
     }

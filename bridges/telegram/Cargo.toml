@@ -12,7 +12,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 futures-util = "0.3"
 parking_lot = "0.13"
 rand = "0.10"
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "multipart"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

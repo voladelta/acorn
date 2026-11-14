@@ -27,6 +27,8 @@ fn configured() {
 struct Heard {
   said: Mutex<Vec<(String, usize, String)>>,
   notes: Mutex<Vec<String>>,
+  /// Where the chat's files are.
+  files: Mutex<Option<PathBuf>>,
 }
 
 struct Fake(Arc<Heard>);
@@ -40,6 +42,10 @@ impl Home for Fake {
   }
   fn tap(&self) -> UnboundedReceiver<Event> {
     unbounded_channel().1
+  }
+  fn file(&self, name: &str) -> Option<PathBuf> {
+    let file = self.0.files.lock().as_ref()?.join(name);
+    file.is_file().then_some(file)
   }
 }
 
@@ -89,7 +95,9 @@ async fn api(answer: fn(&str, &Value) -> Option<Value>) -> (Bot, Asked) {
             (200, "IMG".to_string())
           } else {
             let method = path.rsplit('/').next().unwrap_or_default().to_string();
-            let body: Value = serde_json::from_slice(&body).unwrap_or_default();
+            // a form (an upload): its raw text, to look for its fields in
+            let body: Value =
+              serde_json::from_slice(&body).unwrap_or_else(|_| json!({"form": String::from_utf8_lossy(&body)}));
             kept.lock().push((method.clone(), body.clone()));
             match answer(&method, &body) {
               Some(v) if v["ok"] == false => (v["error_code"].as_u64().unwrap_or(400) as u16, v.to_string()),
@@ -522,4 +530,80 @@ async fn tg_open() -> (Arc<Tg>, Arc<Heard>, Asked, tempfile::TempDir) {
     .reads_all
     .store(false, std::sync::atomic::Ordering::Relaxed);
   (tg, heard, asked, dir)
+}
+
+#[tokio::test]
+async fn a_video_or_document_in_the_dm_comes_with_its_kind() {
+  let (tg, heard, _asked, _dir) = tg(plain, Some(OWNER)).await;
+  let msg = |media: Value| {
+    let mut m = json!({"message_id": 8, "date": 1, "chat": {"id": OWNER, "type": "private"}, "from": {"id": OWNER, "first_name": "Linh"}, "caption": "look"});
+    m.as_object_mut().unwrap().extend(media.as_object().unwrap().clone());
+    json!({"message": m})
+  };
+  tg.clone()
+    .update(&msg(json!({"video": {"file_id": "v", "duration": 3}})))
+    .await;
+  tg.clone()
+    .update(&msg(json!({"document": {"file_id": "d", "file_name": "report.docx"}})))
+    .await;
+  let said = heard.said.lock().clone();
+  assert_eq!(said[0], ("[video] look".into(), 1, VIA.into()));
+  assert_eq!(said[1], ("[file: report.docx] look".into(), 1, VIA.into()));
+}
+
+fn refuse_video(method: &str, body: &Value) -> Option<Value> {
+  match method {
+    "sendVideo" => Some(json!({"ok": false, "error_code": 400, "description": "Bad Request: wrong file"})),
+    _ => plain(method, body),
+  }
+}
+
+#[tokio::test]
+async fn the_chats_files_go_by_their_kind_a_refused_one_as_a_document() {
+  let (tg, heard, asked, dir) = tg(refuse_video, Some(OWNER)).await;
+  *heard.files.lock() = Some(dir.path().into());
+  for name in ["0123456789abcdef.png", "0123456789abcdef.pdf", "0123456789abcdef.mp4"] {
+    std::fs::write(dir.path().join(name), b"bytes").unwrap();
+  }
+  tg.send_file(OWNER, "0123456789abcdef.png", true, Some(5))
+    .await
+    .unwrap();
+  tg.send_file(OWNER, "0123456789abcdef.pdf", false, None).await.unwrap();
+  tg.send_file(OWNER, "0123456789abcdef.mp4", false, None).await.unwrap();
+  assert!(tg.send_file(OWNER, "gone.png", false, None).await.is_err());
+  let methods: Vec<String> = asked.lock().iter().map(|(m, _)| m.clone()).collect();
+  assert_eq!(methods, ["sendPhoto", "sendDocument", "sendVideo", "sendDocument"]);
+  let photo = sent(&asked, "sendPhoto")[0]["form"].as_str().unwrap().to_string();
+  assert!(
+    photo.contains("name=\"photo\"; filename=\"0123456789abcdef.png\""),
+    "{photo}"
+  );
+  assert!(
+    photo.contains(&OWNER.to_string()) && photo.contains("\"message_id\":5"),
+    "{photo}"
+  );
+  let doc = sent(&asked, "sendDocument")[1]["form"].as_str().unwrap().to_string();
+  assert!(doc.contains("filename=\"0123456789abcdef.mp4\""), "{doc}");
+}
+
+#[test]
+fn a_reply_of_files_alone_reaches_the_dm() {
+  let mut route = Route { loud: true, room: None };
+  let entry = Entry {
+    kind: Kind::Acorn,
+    text: String::new(),
+    date: String::new(),
+    images: vec!["0123456789abcdef.png".into()],
+    spend: None,
+    via: None,
+  };
+  assert_eq!(
+    mirrored(&entry, &mut route, |_| false),
+    Some((String::new(), false, To::Dm))
+  );
+  let bare = Entry {
+    images: vec![],
+    ..entry
+  };
+  assert_eq!(mirrored(&bare, &mut route, |_| false), None);
 }

@@ -20,11 +20,20 @@ import type { Act, Model } from './model.ts';
 import { mentionAlone } from './text.ts';
 import type { Assistant, Command, Event } from './wire.ts';
 
-/** An image waiting to go: its bytes in base64, a URL to show it. */
+/** A file waiting to go (an image, a video, a sound, a PDF): its bytes in
+ * base64, a URL to show it, its name, and whether it is an image. */
 export interface Pic {
   b64: string;
   url: string;
+  name: string;
+  image: boolean;
 }
+
+/** What may be attached: images, videos, sounds, PDFs. */
+export const ATTACHABLE = 'image/*,video/*,audio/*,application/pdf';
+const attachable = (type: string) => /^(image|video|audio)\//.test(type) || type === 'application/pdf';
+/** The most bytes a file attached may have. */
+const MOST = 50 << 20;
 
 export interface Ui {
   model: Model;
@@ -242,18 +251,19 @@ function reach(down: string | null) {
   if (down === null && stale) resync();
 }
 
-/** Images join those waiting: files read as base64. */
+/** Files join those waiting, read as base64: images, videos, sounds and
+ * PDFs, each of 50 MB at most. */
 export async function addPics(files: Iterable<File>) {
   const pics: Pic[] = [];
   for (const f of files) {
-    if (!f.type.startsWith('image/')) continue;
+    if (!attachable(f.type) || f.size > MOST) continue;
     const b64 = await new Promise<string>((ok, no) => {
       const r = new FileReader();
       r.onload = () => ok(String(r.result).replace(/^data:[^,]*,/, ''));
       r.onerror = () => no(r.error);
       r.readAsDataURL(f);
     });
-    pics.push({ b64, url: URL.createObjectURL(f) });
+    pics.push({ b64, url: URL.createObjectURL(f), name: f.name, image: f.type.startsWith('image/') });
   }
   if (pics.length) set({ pics: [...ui.pics, ...pics] });
 }
