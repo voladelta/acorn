@@ -15,7 +15,9 @@
 //! The agent runs commands on this machine, so every request needs the
 //! server's token: opening the link it prints sets it as a cookie. The
 //! token is kept in $ACORN_DIR/server-token. It listens on 127.0.0.1:8484
-//! (`--addr` or $ACORN_ADDR to change).
+//! (`--addr` or $ACORN_ADDR to change), or on a Unix socket (`--unix PATH`),
+//! which `acorn-host` uses: a path only its sandbox and the host can reach,
+//! where a port could be taken by anyone's agent while this one restarts.
 
 use acorn_core::chat::hub;
 use acorn_core::wire::{Command, Event};
@@ -102,6 +104,7 @@ fn main() {
 async fn serve() {
   let mut args = std::env::args().skip(1);
   let mut addr = std::env::var("ACORN_ADDR").unwrap_or_else(|_| "127.0.0.1:8484".into());
+  let mut unix: Option<PathBuf> = None;
   let mut web = std::env::var("ACORN_WEB")
     .map(PathBuf::from)
     .unwrap_or_else(|_| "web/dist".into());
@@ -109,8 +112,9 @@ async fn serve() {
     match arg.as_str() {
       "--addr" => addr = args.next().expect("--addr HOST:PORT"),
       "--web" => web = args.next().expect("--web DIR").into(),
+      "--unix" => unix = Some(args.next().expect("--unix PATH").into()),
       _ => {
-        eprintln!("usage: acorn-server [--addr HOST:PORT] [--web DIR]");
+        eprintln!("usage: acorn-server [--addr HOST:PORT | --unix PATH] [--web DIR]");
         std::process::exit(2);
       }
     }
@@ -165,26 +169,39 @@ async fn serve() {
     .layer(middleware::from_fn_with_state(server.clone(), guard))
     .with_state(server.clone());
 
-  let listener = tokio::net::TcpListener::bind(&addr)
-    .await
-    .unwrap_or_else(|err| panic!("acorn-server: can't listen on {addr}: {err}"));
-  let host = match addr.split_once(':') {
-    Some(("0.0.0.0", port)) => format!("localhost:{port}"),
-    _ => addr.clone(),
+  // A service stops with a TERM: end as Ctrl-C does, so `end` kills the
+  // agents' jobs (a browser ignoring TERM would hold the stop up).
+  let stop = async {
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("a TERM handler");
+    tokio::select! {
+      _ = tokio::signal::ctrl_c() => {}
+      _ = term.recv() => {}
+    }
   };
-  println!("Acorn: http://{host}/?token={}", server.token);
-  axum::serve(listener, app)
-    // A service stops with a TERM: end as Ctrl-C does, so `end` kills the
-    // agents' jobs (a browser ignoring TERM would hold the stop up).
-    .with_graceful_shutdown(async {
-      let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("a TERM handler");
-      tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
-        _ = term.recv() => {}
-      }
-    })
-    .await
-    .expect("acorn-server");
+  if let Some(path) = unix {
+    // a socket left by a run that was killed
+    let _ = std::fs::remove_file(&path);
+    let listener = tokio::net::UnixListener::bind(&path)
+      .unwrap_or_else(|err| panic!("acorn-server: can't listen on {}: {err}", path.display()));
+    println!("Acorn: on {}", path.display());
+    axum::serve(listener, app)
+      .with_graceful_shutdown(stop)
+      .await
+      .expect("acorn-server");
+  } else {
+    let listener = tokio::net::TcpListener::bind(&addr)
+      .await
+      .unwrap_or_else(|err| panic!("acorn-server: can't listen on {addr}: {err}"));
+    let host = match addr.split_once(':') {
+      Some(("0.0.0.0", port)) => format!("localhost:{port}"),
+      _ => addr.clone(),
+    };
+    println!("Acorn: http://{host}/?token={}", server.token);
+    axum::serve(listener, app)
+      .with_graceful_shutdown(stop)
+      .await
+      .expect("acorn-server");
+  }
   acorn_core::machine::end();
 }
 

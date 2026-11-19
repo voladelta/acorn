@@ -50,6 +50,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "acorn-host"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "acorn-server"
 version = "0.1.0"
 dependencies = [
