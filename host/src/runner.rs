@@ -364,23 +364,28 @@ mod tests {
     says(&name, b'a');
     says(&other, b'b');
     std::os::unix::fs::symlink(&other, &link).unwrap();
+    let [a, b] = [&name, &link].map(|p| std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap());
+    // server.sock: the socket, then the link, then the socket again
+    let exchange = move || unsafe {
+      libc::renameat2(
+        libc::AT_FDCWD,
+        a.as_ptr(),
+        libc::AT_FDCWD,
+        b.as_ptr(),
+        libc::RENAME_EXCHANGE,
+      )
+    };
+    if exchange() != 0 {
+      // some filesystems (older overlayfs, NFS) can't swap two names at once
+      eprintln!("skipped: no RENAME_EXCHANGE here: {}", std::io::Error::last_os_error());
+      return;
+    }
     let stop = Arc::new(AtomicBool::new(false));
     let swap = {
       let stop = stop.clone();
-      let [a, b] = [&name, &link].map(|p| std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap());
       std::thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
-          // server.sock: the socket, then the link, then the socket again
-          let done = unsafe {
-            libc::renameat2(
-              libc::AT_FDCWD,
-              a.as_ptr(),
-              libc::AT_FDCWD,
-              b.as_ptr(),
-              libc::RENAME_EXCHANGE,
-            )
-          };
-          assert_eq!(done, 0);
+          assert_eq!(exchange(), 0);
         }
       })
     };
