@@ -157,8 +157,8 @@ async fn forward(State(host): State<Arc<Host>>, mut req: Request) -> Response {
     // the token is read at each start of the server
     let token = runner.token();
     if !token.is_empty()
-      && runner::is_sock(&sock)
-      && let Ok(s) = tokio::net::UnixStream::connect(&sock).await
+      && let Some(held) = runner::hold(&sock)
+      && let Ok(s) = tokio::net::UnixStream::connect(held.path()).await
     {
       req
         .headers_mut()

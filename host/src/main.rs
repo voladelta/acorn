@@ -85,7 +85,7 @@ fn main() {
       let book = st.read().unwrap_or_else(|e| fail(e));
       for p in book.people {
         let sock = runner::sock(&runner::run_dir(&st.dir, &p.id));
-        let up = runner::is_sock(&sock) && std::os::unix::net::UnixStream::connect(&sock).is_ok();
+        let up = runner::hold(&sock).is_some_and(|held| std::os::unix::net::UnixStream::connect(held.path()).is_ok());
         println!(
           "{}\t{}\t{}\t{}",
           p.id,

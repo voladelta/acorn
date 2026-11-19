@@ -227,9 +227,27 @@ pub fn sock(run: &Path) -> PathBuf {
   run.join("sock").join("server.sock")
 }
 
-/// Whether `path` is a socket (not a link to one elsewhere).
-pub fn is_sock(path: &Path) -> bool {
-  std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_socket())
+/// The socket at `path`, held open: `None` for a link to one elsewhere.
+/// The person's agents can write the directory it is in, so the name could be
+/// swapped for a link between a look at it and a connect to it; a connect to
+/// [`Held::path`] reaches the file that was looked at whatever the name is by then.
+pub fn hold(path: &Path) -> Option<Held> {
+  let file = std::fs::OpenOptions::new()
+    .read(true)
+    .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+    .open(path)
+    .ok()?;
+  file.metadata().ok()?.file_type().is_socket().then_some(Held(file))
+}
+
+/// A socket held open by [`hold`].
+pub struct Held(std::fs::File);
+
+impl Held {
+  /// A path to connect to, good for as long as this is held.
+  pub fn path(&self) -> PathBuf {
+    format!("/proc/self/fd/{}", self.0.as_raw_fd()).into()
+  }
 }
 
 /// The server's token, kept in the host-owned runtime directory.
@@ -289,4 +307,93 @@ async fn first_child(pid: i32) -> Option<i32> {
     tokio::time::sleep(Duration::from_millis(20)).await;
   }
   None
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::io::Read as _;
+  use std::os::unix::net::{UnixListener, UnixStream};
+  use std::sync::atomic::{AtomicBool, Ordering};
+
+  /// A listener at `path` that says `name` to whoever connects.
+  fn says(path: &Path, name: u8) {
+    let listener = UnixListener::bind(path).unwrap();
+    std::thread::spawn(move || {
+      for s in listener.incoming().flatten() {
+        let _ = std::io::Write::write_all(&mut &s, &[name]);
+      }
+    });
+  }
+
+  fn heard(held: &Held) -> Option<u8> {
+    let mut s = UnixStream::connect(held.path()).ok()?;
+    let mut b = [0u8; 1];
+    s.read_exact(&mut b).ok()?;
+    Some(b[0])
+  }
+
+  #[test]
+  fn holds_a_socket_and_no_link_to_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (own, other, link) = (
+      dir.path().join("own"),
+      dir.path().join("other"),
+      dir.path().join("link"),
+    );
+    says(&own, b'a');
+    says(&other, b'b');
+    std::os::unix::fs::symlink(&other, &link).unwrap();
+    assert_eq!(heard(&hold(&own).unwrap()), Some(b'a'));
+    assert!(hold(&link).is_none(), "a link to a socket is not the person's socket");
+    assert!(hold(&dir.path().join("none")).is_none());
+    std::fs::write(dir.path().join("file"), "").unwrap();
+    assert!(hold(&dir.path().join("file")).is_none());
+  }
+
+  /// The name swapped for a link to another socket while the host connects:
+  /// what a person's agent can do in the socket directory it is given.
+  #[test]
+  fn a_held_socket_is_the_one_connected_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let (name, other, link) = (
+      dir.path().join("server.sock"),
+      dir.path().join("other"),
+      dir.path().join("link"),
+    );
+    says(&name, b'a');
+    says(&other, b'b');
+    std::os::unix::fs::symlink(&other, &link).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let swap = {
+      let stop = stop.clone();
+      let [a, b] = [&name, &link].map(|p| std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap());
+      std::thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+          // server.sock: the socket, then the link, then the socket again
+          let done = unsafe {
+            libc::renameat2(
+              libc::AT_FDCWD,
+              a.as_ptr(),
+              libc::AT_FDCWD,
+              b.as_ptr(),
+              libc::RENAME_EXCHANGE,
+            )
+          };
+          assert_eq!(done, 0);
+        }
+      })
+    };
+    let end = Instant::now() + Duration::from_secs(2);
+    let mut reached = 0;
+    while Instant::now() < end {
+      if let Some(held) = hold(&name) {
+        assert_eq!(heard(&held), Some(b'a'), "connected to the socket the link names");
+        reached += 1;
+      }
+    }
+    stop.store(true, Ordering::Relaxed);
+    swap.join().unwrap();
+    assert!(reached > 0);
+  }
 }
