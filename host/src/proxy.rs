@@ -1,8 +1,8 @@
-//! The host's front: `/join/<code>` signs a device in; every other request
-//! needs a session, and goes to that person's server, and only there, with
-//! that server's token in place of the client's cookies. Bodies stream
-//! both ways with no limit or timeout of the host's own (`/api/cmd` takes
-//! up to 160 MB, `/api/events` waits 25 s).
+//! The host's front: POST `/join/<code>` signs a device in; every other
+//! request needs a session, and goes to that person's server, and only there,
+//! with that server's token in place of the client's cookies. Bodies stream
+//! both ways with no limit or timeout of the host's own (`/api/cmd` takes up
+//! to 160 MB, `/api/events` waits 25 s).
 
 use crate::runner::{self, Plan, Runner};
 use crate::store::{self, Store};
@@ -39,9 +39,22 @@ impl Host {
 
 pub fn app(host: Arc<Host>) -> axum::Router {
   axum::Router::new()
-    .route("/join/{code}", axum::routing::get(join))
+    .route("/join/{code}", axum::routing::get(preview).post(join))
     .fallback(forward)
     .with_state(host)
+}
+
+async fn preview(UrlPath(_code): UrlPath<String>) -> Response {
+  let body = r#"<!doctype html><meta charset="utf-8"><title>Open Acorn</title><form method="post"><button>Open Acorn</button></form>"#;
+  (
+    StatusCode::OK,
+    [
+      (header::CACHE_CONTROL, "no-store"),
+      (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+    ],
+    body,
+  )
+    .into_response()
 }
 
 async fn join(State(host): State<Arc<Host>>, UrlPath(code): UrlPath<String>) -> Response {

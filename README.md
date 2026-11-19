@@ -99,7 +99,7 @@ The window runs in a browser as an Octane page (`web/`: Vite, Base UI and shadcn
 cargo run --release -p acorn-server
 ```
 
-Open the link it prints (`http://127.0.0.1:8484/?token=...`): the token becomes a cookie, and every request needs it, since the agent runs commands there. The token is kept in `$ACORN_DIR/server-token`. `--addr HOST:PORT` (or `ACORN_ADDR`) listens elsewhere; on anything but localhost, put it behind HTTPS. `--unix PATH` listens on a Unix socket instead. `--web DIR` (or `ACORN_WEB`) serves another build.
+Open the link it prints (`http://127.0.0.1:8484/?token=...`): the token becomes a cookie, and every request needs it, since the agent runs commands there. The token is kept in `$ACORN_DIR/server-token`, unless `ACORN_TOKEN` is set. `--addr HOST:PORT` (or `ACORN_ADDR`) listens elsewhere; on anything but localhost, put it behind HTTPS. `--unix PATH` listens on a Unix socket instead. `--web DIR` (or `ACORN_WEB`) serves another build.
 
 The server and the desktop app both hear every chat, so don't run both on the same `$ACORN_DIR` at once.
 
@@ -107,7 +107,7 @@ To work on the page, build it once (the server wants `web/dist`), run the server
 
 ## For several people
 
-`acorn-host` gives each person on one machine an Acorn of their own: it runs one `acorn-server` per person, each with its own HOME (`<data>/users/<id>`) in a `bwrap` sandbox (`sudo apt install bubblewrap`), on a Unix socket in that dir, and signs people in from an invite link. A person's agent sees the system read-only and their own HOME only: not the other people's, not the host's key or book.
+`acorn-host` gives each person on one machine an Acorn of their own: it runs one `acorn-server` per person, each with its own HOME (`<data>/users/<id>`) in a `bwrap` sandbox (`sudo apt install bubblewrap`), on a host-owned Unix socket under `<data>/run/<id>/`, and signs people in from an invite link. A person's agent sees the system read-only and their own HOME only: not the other people's, not the host's key or book.
 
 ```bash
 cargo build --release -p acorn-server -p acorn-host
@@ -117,9 +117,9 @@ acorn-host link u1a2b3c4d5 # another link for them (a second device)
 acorn-host users           # id, name, created, up or down
 ```
 
-A link signs in once and is good for 7 days. The data dir is `$ACORN_HOST_DIR`, else `~/.acorn-host`; its `config.json` holds `deepseek_api_key` (or set `DEEPSEEK_API_KEY`) and `budget`, USD a day per person (1 by default). Put it behind HTTPS (Caddy, or a Cloudflare Tunnel).
+A link shows a sign-in button, signs in once when pressed, and is good for 7 days. The data dir is `$ACORN_HOST_DIR`, else `~/.acorn-host`; its `config.json` holds `deepseek_api_key` (or set `DEEPSEEK_API_KEY`) and `budget`, USD a day per person (1 by default). Put it behind HTTPS (Caddy, or a Cloudflare Tunnel).
 
-Each person's agent can read the DeepSeek key (it is in their server's environment), so for now invite only people you would hand it to, and use a key with little credit. The network is shared, so a service on the machine's localhost with no password of its own is open to every person's agent.
+Each person's agent can read the DeepSeek key (it is in their server's environment), so for now invite only people you would hand it to, and use a key with little credit. The network is shared, so a service on the machine's localhost with no password of its own is open to every person's agent. The shared network namespace also exposes abstract Unix sockets, including ones used by some X11 and D-Bus setups.
 
 ## Using it
 

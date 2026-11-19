@@ -14,8 +14,9 @@
 //!
 //! The agent runs commands on this machine, so every request needs the
 //! server's token: opening the link it prints sets it as a cookie. The
-//! token is kept in $ACORN_DIR/server-token. It listens on 127.0.0.1:8484
-//! (`--addr` or $ACORN_ADDR to change), or on a Unix socket (`--unix PATH`),
+//! token is kept in $ACORN_DIR/server-token, unless `ACORN_TOKEN` is set.
+//! It listens on 127.0.0.1:8484 (`--addr` or $ACORN_ADDR to change), or on a
+//! Unix socket (`--unix PATH`),
 //! which `acorn-host` uses: a path only its sandbox and the host can reach,
 //! where a port could be taken by anyone's agent while this one restarts.
 
@@ -205,8 +206,13 @@ async fn serve() {
   acorn_core::machine::end();
 }
 
-/// The server's token: kept in $ACORN_DIR, made the first time.
+/// The server's token: `ACORN_TOKEN` wins; otherwise keep it in $ACORN_DIR.
 fn token() -> String {
+  if let Ok(t) = std::env::var("ACORN_TOKEN")
+    && t.trim().len() >= 32
+  {
+    return t.trim().to_string();
+  }
   let file = acorn_core::config::get().dir.join("server-token");
   if let Ok(t) = std::fs::read_to_string(&file)
     && t.trim().len() >= 32

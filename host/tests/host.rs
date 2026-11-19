@@ -122,7 +122,11 @@ fn invite(data: &Path, name: &str) -> String {
 
 /// Joins: the session cookie, as a Cookie header.
 async fn join(addr: &str, path: &str) -> String {
-  let r = get(addr, path, None).await;
+  let preview = get(addr, path, None).await;
+  assert_eq!(preview.status, 200);
+  assert_eq!(preview.headers["cache-control"], "no-store");
+  assert!(!preview.headers.contains_key("set-cookie"));
+  let r = ask(addr, "POST", path, None, Vec::new()).await;
   assert_eq!(r.status, 303, "{}", String::from_utf8_lossy(&r.body));
   assert_eq!(r.headers["location"], "/");
   let set = r.headers["set-cookie"].to_str().unwrap();
@@ -177,14 +181,17 @@ async fn hosts_people_apart() {
   let addr = host.addr.clone();
 
   // 1. a join link signs in once
+  let preview = get(&addr, &link_a, None).await;
+  assert_eq!(preview.status, 200);
   let a = join(&addr, &link_a).await;
-  let again = get(&addr, &link_a, None).await;
+  let again = ask(&addr, "POST", &link_a, None, Vec::new()).await;
   assert_eq!(again.status, 410);
   assert_eq!(
     String::from_utf8_lossy(&again.body).trim(),
     "This link was used or has expired. Ask for a new one."
   );
-  assert_eq!(get(&addr, "/join/00", None).await.status, 410);
+  assert_eq!(get(&addr, "/join/00", None).await.status, 200);
+  assert_eq!(ask(&addr, "POST", "/join/00", None, Vec::new()).await.status, 410);
   let b = join(&addr, &link_b).await;
 
   // 2. no cookie, or a made-up one: 401
@@ -209,7 +216,7 @@ async fn hosts_people_apart() {
   assert_eq!(get(&addr, marker, Some(&b)).await.status, 404);
 
   // 4. B's server token with A's session still reaches A
-  let b_token = std::fs::read_to_string(data.join("users").join(b_id).join(".acorn/server-token")).unwrap();
+  let b_token = std::fs::read_to_string(data.join("run").join(b_id).join("server-token")).unwrap();
   let both = format!("acorn_token={}; {a}", b_token.trim());
   assert_eq!(get(&addr, marker, Some(&both)).await.status, 200);
   let both = format!("{b}; acorn_token={}", b_token.trim());
@@ -235,7 +242,7 @@ async fn hosts_people_apart() {
   assert!(held, "no poll waited its 25 s");
 
   // 7. a server killed answers again within 5 s
-  let sock = data.join("users").join(a_id).join(".acorn/server.sock");
+  let sock = data.join("run").join(a_id).join("sock/server.sock");
   let pid = server_pid(&sock).expect("A's server");
   unsafe { libc::kill(pid, libc::SIGKILL) };
   let killed = Instant::now();
@@ -286,6 +293,74 @@ async fn hosts_people_apart() {
   assert_eq!(server_pid(&sock), None);
 }
 
+/// Host-owned runtime paths must not follow links in an agent's HOME.
+#[tokio::test(flavor = "multi_thread")]
+async fn host_does_not_follow_home_symlinks() {
+  let modes = if sandbox::check().is_ok() {
+    vec![true, false]
+  } else {
+    vec![false]
+  };
+  for sandbox in modes {
+    let dir = temp();
+    let data = dir.path().join("data");
+    let web = dir.path().join("web");
+    std::fs::create_dir_all(&web).unwrap();
+    std::fs::write(web.join("index.html"), "<!doctype html>acorn").unwrap();
+    let link_a = invite(&data, "A");
+    let link_b = invite(&data, "B");
+    let ids = people(&data);
+    let (a_id, b_id) = (&ids[0], &ids[1]);
+    let mut host = serve(&data, &web, sandbox);
+    let a = join(&host.addr, &link_a).await;
+    let b = join(&host.addr, &link_b).await;
+    let b_hello: serde_json::Value =
+      serde_json::from_slice(&get(&host.addr, "/api/hello", Some(&b)).await.body).unwrap();
+
+    let a_home = data.join("users").join(a_id);
+    let b_home = data.join("users").join(b_id);
+    let a_sock = data.join("run").join(a_id).join("sock/server.sock");
+    let old_acorn = a_home.join(".acorn.original");
+    let _ = server_pid(&a_sock).expect("A's server");
+    unsafe { libc::kill(server_pid(&a_sock).unwrap(), libc::SIGKILL) };
+    while server_pid(&a_sock).is_some() {
+      tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    std::fs::rename(a_home.join(".acorn"), &old_acorn).unwrap();
+    std::os::unix::fs::symlink(b_home.join(".acorn"), a_home.join(".acorn")).unwrap();
+
+    let a_hello = loop {
+      let response = get(&host.addr, "/api/hello", Some(&a)).await;
+      if response.status == 200 {
+        break serde_json::from_slice::<serde_json::Value>(&response.body).unwrap();
+      }
+      tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_ne!(a_hello["epoch"], b_hello["epoch"], "A reached B's server");
+
+    // A link in the agent's HOME must not redirect the host's log either.
+    unsafe { libc::kill(server_pid(&a_sock).unwrap(), libc::SIGKILL) };
+    while server_pid(&a_sock).is_some() {
+      tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    std::fs::remove_file(a_home.join(".acorn")).unwrap();
+    std::fs::rename(&old_acorn, a_home.join(".acorn")).unwrap();
+    let outside = data.join("outside.log");
+    std::fs::write(&outside, "sentinel\n").unwrap();
+    std::os::unix::fs::symlink(&outside, a_home.join(".acorn/server.log")).unwrap();
+    loop {
+      let response = get(&host.addr, "/api/hello", Some(&a)).await;
+      if response.status == 200 {
+        break;
+      }
+      tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "sentinel\n");
+    unsafe { libc::kill(host.child.id() as i32, libc::SIGTERM) };
+    let _ = host.child.wait();
+  }
+}
+
 /// 8. what a person's agent sees in its sandbox
 #[test]
 fn sandbox_shows_its_own_home_only() {
@@ -301,11 +376,14 @@ fn sandbox_shows_its_own_home_only() {
   std::fs::write(data.join("host.json"), "{}").unwrap();
   std::fs::write(data.join("config.json"), "{}").unwrap();
   let home = data.join("users/uaaaaaaaaaa");
+  let sock = data.join("run/sock");
+  std::fs::create_dir_all(&sock).unwrap();
   let me = std::env::current_exe().unwrap();
   let show = [me.clone()];
   let args = Sandbox {
     data: &data,
     home: &home,
+    sock: &sock,
     show: &show,
     info_fd: None,
   }

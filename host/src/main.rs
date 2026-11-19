@@ -84,7 +84,7 @@ fn main() {
     ("users", []) => {
       let book = st.read().unwrap_or_else(|e| fail(e));
       for p in book.people {
-        let sock = runner::sock(&st.home(&p.id));
+        let sock = runner::sock(&runner::run_dir(&st.dir, &p.id));
         let up = runner::is_sock(&sock) && std::os::unix::net::UnixStream::connect(&sock).is_ok();
         println!(
           "{}\t{}\t{}\t{}",

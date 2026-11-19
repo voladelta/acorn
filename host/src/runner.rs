@@ -31,6 +31,7 @@ pub struct Plan {
 pub struct Runner {
   pub id: String,
   pub home: PathBuf,
+  pub run: PathBuf,
   /// The server's token, read at each start.
   token: Mutex<String>,
   /// The pid to TERM: the server itself.
@@ -43,7 +44,7 @@ pub struct Runner {
 
 impl Runner {
   pub fn sock(&self) -> PathBuf {
-    sock(&self.home)
+    sock(&self.run)
   }
 
   pub fn token(&self) -> String {
@@ -53,9 +54,11 @@ impl Runner {
   /// Starts it, and keeps it up until `end`.
   pub fn start(plan: &Plan, id: &str) -> Arc<Runner> {
     let home = plan.data.join("users").join(id);
+    let run = run_dir(&plan.data, id);
     let runner = Arc::new(Runner {
       id: id.to_string(),
       home,
+      run,
       token: Mutex::new(String::new()),
       pid: Mutex::new(None),
       outer: Mutex::new(None),
@@ -95,10 +98,13 @@ impl Runner {
   /// One run, until it exits.
   async fn run(&self, plan: &Plan, stop: &mut watch::Receiver<bool>) -> Result<String, String> {
     let acorn = self.home.join(".acorn");
+    let sock_dir = self.run.join("sock");
     crate::store::make_dir(&self.home)?;
-    crate::store::make_dir(&acorn)?;
-    *self.token.lock().unwrap() = token(&acorn)?;
-    let log = open_log(&acorn.join("server.log"))?;
+    crate::store::make_dir(&self.run)?;
+    crate::store::make_dir(&sock_dir)?;
+    *self.token.lock().unwrap() = token(&self.run)?;
+    let token = self.token();
+    let log = open_log(&self.run.join("server.log"))?;
     let sock = self.sock();
     let server_args = |c: &mut std::process::Command| {
       c.arg(&plan.server).arg("--unix").arg(&sock).arg("--web").arg(&plan.web);
@@ -111,6 +117,7 @@ impl Runner {
       let sandbox = Sandbox {
         data: &plan.data,
         home: &self.home,
+        sock: &sock_dir,
         show: &show,
         info_fd: Some(w.as_raw_fd()),
       };
@@ -133,6 +140,7 @@ impl Runner {
     cmd
       .env("HOME", &self.home)
       .env("ACORN_DIR", &acorn)
+      .env("ACORN_TOKEN", token)
       .env("DEEPSEEK_API_KEY", &plan.key)
       .env("ACORN_BUDGET", plan.budget.to_string())
       .current_dir(&self.home)
@@ -176,7 +184,11 @@ impl Runner {
         .ok()
         .and_then(|v| v["child-pid"].as_i64())
         .map(|p| p as i32);
-      *self.pid.lock().unwrap() = init.and_then(first_child).or(outer);
+      let child = match init {
+        Some(pid) => first_child(pid).await,
+        None => None,
+      };
+      *self.pid.lock().unwrap() = child.or(outer);
     }
     let status = tokio::select! {
       s = child.wait() => s.map_err(|e| e.to_string())?,
@@ -205,10 +217,14 @@ impl Runner {
   }
 }
 
-/// Where a person's server listens: a path only their sandbox and the
-/// host can reach.
-pub fn sock(home: &Path) -> PathBuf {
-  home.join(".acorn").join("server.sock")
+/// The host-owned runtime directory for a person's server.
+pub fn run_dir(data: &Path, id: &str) -> PathBuf {
+  data.join("run").join(id)
+}
+
+/// Where a person's server listens: a path only its sandbox and the host can reach.
+pub fn sock(run: &Path) -> PathBuf {
+  run.join("sock").join("server.sock")
 }
 
 /// Whether `path` is a socket (not a link to one elsewhere).
@@ -216,10 +232,9 @@ pub fn is_sock(path: &Path) -> bool {
   std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_socket())
 }
 
-/// The server's token, written the first time (`acorn-server` uses one it
-/// finds there).
-fn token(acorn: &Path) -> Result<String, String> {
-  let file = acorn.join("server-token");
+/// The server's token, kept in the host-owned runtime directory.
+fn token(run: &Path) -> Result<String, String> {
+  let file = run.join("server-token");
   if let Ok(t) = std::fs::read_to_string(&file)
     && t.trim().len() >= 32
   {
@@ -260,7 +275,7 @@ fn pipe() -> Result<(OwnedFd, OwnedFd), String> {
 }
 
 /// The first child of `pid`, waited for a moment (bwrap's init forks it).
-fn first_child(pid: i32) -> Option<i32> {
+async fn first_child(pid: i32) -> Option<i32> {
   for _ in 0..50 {
     if let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) {
       for t in tasks.flatten() {
@@ -271,7 +286,7 @@ fn first_child(pid: i32) -> Option<i32> {
         }
       }
     }
-    std::thread::sleep(Duration::from_millis(20));
+    tokio::time::sleep(Duration::from_millis(20)).await;
   }
   None
 }

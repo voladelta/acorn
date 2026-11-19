@@ -15,6 +15,8 @@ pub struct Sandbox<'a> {
   pub data: &'a Path,
   /// The person's HOME, `<data>/users/<id>`.
   pub home: &'a Path,
+  /// The host-owned socket directory, mounted at its own path.
+  pub sock: &'a Path,
   /// Files and dirs shown read-only at their own paths (the server, the web
   /// window), which may sit in a hidden dir.
   pub show: &'a [PathBuf],
@@ -69,6 +71,9 @@ impl Sandbox<'_> {
     a.push("--bind".into());
     a.push(self.home.into());
     a.push(self.home.into());
+    a.push("--bind".into());
+    a.push(self.sock.into());
+    a.push(self.sock.into());
     a.push("--chdir".into());
     a.push(self.home.into());
     if let Some(fd) = self.info_fd {
