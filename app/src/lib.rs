@@ -751,6 +751,7 @@ fn names_menu(ui: Ui, menu: Menu, take: impl Fn(String) + Copy + 'static) -> imp
   let keys = KeyOptions {
     when: nsh_core::keymap::When::Always,
     repeat: true,
+    ..Default::default()
   };
   let found = move || naming.get_untracked().map(|(_, found, _)| found).unwrap_or_default();
   on_key_with("up", keys, move |_| {
