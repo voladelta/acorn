@@ -36,6 +36,17 @@ struct Reply {
 }
 
 async fn ask(addr: &str, method: &str, path: &str, cookie: Option<&str>, body: Vec<u8>) -> Reply {
+  ask_with(addr, method, path, cookie, body, &[]).await
+}
+
+async fn ask_with(
+  addr: &str,
+  method: &str,
+  path: &str,
+  cookie: Option<&str>,
+  body: Vec<u8>,
+  extra: &[(&str, &str)],
+) -> Reply {
   let stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
   let (mut send, conn) = hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(stream))
     .await
@@ -47,6 +58,9 @@ async fn ask(addr: &str, method: &str, path: &str, cookie: Option<&str>, body: V
     .header("host", "acorn.test");
   if let Some(c) = cookie {
     req = req.header("cookie", c);
+  }
+  for (k, v) in extra {
+    req = req.header(*k, *v);
   }
   if !body.is_empty() {
     req = req.header("content-type", "application/json");
@@ -126,7 +140,16 @@ async fn join(addr: &str, path: &str) -> String {
   assert_eq!(preview.status, 200);
   assert_eq!(preview.headers["cache-control"], "no-store");
   assert!(!preview.headers.contains_key("set-cookie"));
-  let r = ask(addr, "POST", path, None, Vec::new()).await;
+  // what a browser sends when the page's own button is pressed
+  let r = ask_with(
+    addr,
+    "POST",
+    path,
+    None,
+    Vec::new(),
+    &[("sec-fetch-site", "same-origin")],
+  )
+  .await;
   assert_eq!(r.status, 303, "{}", String::from_utf8_lossy(&r.body));
   assert_eq!(r.headers["location"], "/");
   let set = r.headers["set-cookie"].to_str().unwrap();
@@ -148,6 +171,15 @@ fn people(data: &Path) -> Vec<String> {
 /// A temp dir with a short path (a socket's path is at most 108 bytes).
 fn temp() -> tempfile::TempDir {
   tempfile::Builder::new().prefix("ah").tempdir_in("/tmp").unwrap()
+}
+
+/// Polls `done` until it holds, failing after 10 s.
+async fn wait_for(what: &str, mut done: impl AsyncFnMut() -> bool) {
+  let end = Instant::now() + Duration::from_secs(10);
+  while !done().await {
+    assert!(Instant::now() < end, "timed out waiting for {what}");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+  }
 }
 
 /// The pid of the acorn-server listening on `sock`.
@@ -190,8 +222,21 @@ async fn hosts_people_apart() {
     String::from_utf8_lossy(&again.body).trim(),
     "This link was used or has expired. Ask for a new one."
   );
-  assert_eq!(get(&addr, "/join/00", None).await.status, 200);
+  assert_eq!(get(&addr, &link_a, None).await.status, 410);
+  assert_eq!(get(&addr, "/join/00", None).await.status, 410);
   assert_eq!(ask(&addr, "POST", "/join/00", None, Vec::new()).await.status, 410);
+  // another site can't press the button for a browser, and the code survives
+  let cross = ask_with(
+    &addr,
+    "POST",
+    &link_b,
+    None,
+    Vec::new(),
+    &[("sec-fetch-site", "cross-site")],
+  )
+  .await;
+  assert_eq!(cross.status, 403);
+  assert!(!cross.headers.contains_key("set-cookie"));
   let b = join(&addr, &link_b).await;
 
   // 2. no cookie, or a made-up one: 401
@@ -246,9 +291,7 @@ async fn hosts_people_apart() {
   let pid = server_pid(&sock).expect("A's server");
   unsafe { libc::kill(pid, libc::SIGKILL) };
   let killed = Instant::now();
-  while server_pid(&sock) == Some(pid) {
-    tokio::time::sleep(Duration::from_millis(20)).await;
-  }
+  wait_for("A's server to die", async || server_pid(&sock) != Some(pid)).await;
   let again = get(&addr, "/api/hello", Some(&a)).await;
   assert_eq!(again.status, 200);
   assert!(killed.elapsed() < Duration::from_secs(5), "took {:?}", killed.elapsed());
@@ -321,40 +364,39 @@ async fn host_does_not_follow_home_symlinks() {
     let b_home = data.join("users").join(b_id);
     let a_sock = data.join("run").join(a_id).join("sock/server.sock");
     let old_acorn = a_home.join(".acorn.original");
-    let _ = server_pid(&a_sock).expect("A's server");
-    unsafe { libc::kill(server_pid(&a_sock).unwrap(), libc::SIGKILL) };
-    while server_pid(&a_sock).is_some() {
-      tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    // The no-sandbox run checks only that the host doesn't follow the link
+    // to B's socket: without a sandbox A's server does read B's data through
+    // it, as the host's warning says.
+    let pid = server_pid(&a_sock).expect("A's server");
+    unsafe { libc::kill(pid, libc::SIGKILL) };
+    wait_for("A's server to die", async || server_pid(&a_sock) != Some(pid)).await;
     std::fs::rename(a_home.join(".acorn"), &old_acorn).unwrap();
     std::os::unix::fs::symlink(b_home.join(".acorn"), a_home.join(".acorn")).unwrap();
 
-    let a_hello = loop {
+    let mut a_hello = serde_json::Value::Null;
+    wait_for("A's server to come back", async || {
       let response = get(&host.addr, "/api/hello", Some(&a)).await;
       if response.status == 200 {
-        break serde_json::from_slice::<serde_json::Value>(&response.body).unwrap();
+        a_hello = serde_json::from_slice(&response.body).unwrap();
       }
-      tokio::time::sleep(Duration::from_millis(100)).await;
-    };
+      response.status == 200
+    })
+    .await;
     assert_ne!(a_hello["epoch"], b_hello["epoch"], "A reached B's server");
 
     // A link in the agent's HOME must not redirect the host's log either.
-    unsafe { libc::kill(server_pid(&a_sock).unwrap(), libc::SIGKILL) };
-    while server_pid(&a_sock).is_some() {
-      tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    let pid = server_pid(&a_sock).expect("A's server");
+    unsafe { libc::kill(pid, libc::SIGKILL) };
+    wait_for("A's server to die", async || server_pid(&a_sock) != Some(pid)).await;
     std::fs::remove_file(a_home.join(".acorn")).unwrap();
     std::fs::rename(&old_acorn, a_home.join(".acorn")).unwrap();
     let outside = data.join("outside.log");
     std::fs::write(&outside, "sentinel\n").unwrap();
     std::os::unix::fs::symlink(&outside, a_home.join(".acorn/server.log")).unwrap();
-    loop {
-      let response = get(&host.addr, "/api/hello", Some(&a)).await;
-      if response.status == 200 {
-        break;
-      }
-      tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    wait_for("A's server to come back", async || {
+      get(&host.addr, "/api/hello", Some(&a)).await.status == 200
+    })
+    .await;
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "sentinel\n");
     unsafe { libc::kill(host.child.id() as i32, libc::SIGTERM) };
     let _ = host.child.wait();
@@ -376,7 +418,7 @@ fn sandbox_shows_its_own_home_only() {
   std::fs::write(data.join("host.json"), "{}").unwrap();
   std::fs::write(data.join("config.json"), "{}").unwrap();
   let home = data.join("users/uaaaaaaaaaa");
-  let sock = data.join("run/sock");
+  let sock = data.join("run/uaaaaaaaaaa/sock");
   std::fs::create_dir_all(&sock).unwrap();
   let me = std::env::current_exe().unwrap();
   let show = [me.clone()];

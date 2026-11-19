@@ -208,7 +208,7 @@ async fn serve() {
 
 /// The server's token: `ACORN_TOKEN` wins; otherwise keep it in $ACORN_DIR.
 fn token() -> String {
-  if let Ok(t) = std::env::var("ACORN_TOKEN")
+  if let Ok(t) = std::env::var(acorn_core::config::TOKEN_VAR)
     && t.trim().len() >= 32
   {
     return t.trim().to_string();

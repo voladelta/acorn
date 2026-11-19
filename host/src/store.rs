@@ -201,6 +201,19 @@ impl Store {
     Ok(code)
   }
 
+  /// Whether `code` would still sign in, without burning it.
+  pub fn live(&self, code: &str) -> Result<bool, String> {
+    let hash = sha256(code);
+    let now = now();
+    Ok(
+      self
+        .read()?
+        .codes
+        .iter()
+        .any(|c| same(&c.hash, &hash) && c.expires > now),
+    )
+  }
+
   /// Burns a good code: its person and a new session value.
   pub fn join(&self, code: &str) -> Result<Option<(String, String)>, String> {
     let hash = sha256(code);

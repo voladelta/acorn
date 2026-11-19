@@ -21,6 +21,8 @@ const MOST_VIEW: usize = 2_000_000;
 /// The variable the API key is read from, kept out of every job's
 /// environment.
 pub const KEY_VAR: &str = "DEEPSEEK_API_KEY";
+/// The web server's token, when its host hands one in (`acorn-host`).
+pub const TOKEN_VAR: &str = "ACORN_TOKEN";
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -113,9 +115,10 @@ impl Config {
 }
 
 /// The variables Acorn's own keys may be in, kept from every program the
-/// agent runs (`machine`): DeepSeek's, Jev's, and each bridge's.
+/// agent runs (`machine`): DeepSeek's, Jev's, the server's token, and each
+/// bridge's.
 pub fn hidden() -> Vec<&'static str> {
-  let mut all = vec![KEY_VAR, crate::decide::KEY_VAR];
+  let mut all = vec![KEY_VAR, crate::decide::KEY_VAR, TOKEN_VAR];
   all.extend(crate::bridge::all().iter().flat_map(|b| b.secrets()));
   all
 }
@@ -179,6 +182,11 @@ fn run(key: &str, text: &str) -> Result<Effort, String> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn the_server_token_is_kept_from_the_agent() {
+    assert!(hidden().contains(&TOKEN_VAR));
+  }
 
   #[test]
   fn a_budget_is_usd_a_day_or_none() {

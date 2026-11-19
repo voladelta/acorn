@@ -8,7 +8,7 @@ use crate::runner::{self, Plan, Runner};
 use crate::store::{self, Store};
 use axum::body::Body;
 use axum::extract::{Path as UrlPath, Request, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use hyper_util::rt::TokioIo;
 use std::collections::HashMap;
@@ -44,20 +44,46 @@ pub fn app(host: Arc<Host>) -> axum::Router {
     .with_state(host)
 }
 
-async fn preview(UrlPath(_code): UrlPath<String>) -> Response {
-  let body = r#"<!doctype html><meta charset="utf-8"><title>Open Acorn</title><form method="post"><button>Open Acorn</button></form>"#;
-  (
-    StatusCode::OK,
-    [
-      (header::CACHE_CONTROL, "no-store"),
-      (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-    ],
-    body,
-  )
-    .into_response()
+const GONE: &str = "This link was used or has expired. Ask for a new one.\n";
+
+/// The page a join link opens: a button, so a link preview fetching it
+/// doesn't burn the code.
+async fn preview(State(host): State<Arc<Host>>, UrlPath(code): UrlPath<String>) -> Response {
+  let live = tokio::task::spawn_blocking(move || host.store.live(&code)).await;
+  match live {
+    Ok(Ok(true)) => (
+      StatusCode::OK,
+      [
+        (header::CACHE_CONTROL, "no-store"),
+        (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+      ],
+      JOIN_PAGE,
+    )
+      .into_response(),
+    Ok(Ok(false)) => gone(),
+    Ok(Err(e)) => {
+      eprintln!("acorn-host: join: {e}");
+      (StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong.\n").into_response()
+    }
+    Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+  }
 }
 
-async fn join(State(host): State<Arc<Host>>, UrlPath(code): UrlPath<String>) -> Response {
+const JOIN_PAGE: &str = r#"<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Open Acorn</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:16px system-ui,sans-serif}button{font:inherit;padding:.75em 2em;border-radius:.5em;border:1px solid;cursor:pointer}</style><form method="post"><button>Open Acorn</button></form>"#;
+
+fn gone() -> Response {
+  (StatusCode::GONE, [(header::CACHE_CONTROL, "no-store")], GONE).into_response()
+}
+
+async fn join(State(host): State<Arc<Host>>, UrlPath(code): UrlPath<String>, headers: HeaderMap) -> Response {
+  // only the join page's own button: another site can't sign a browser in to
+  // an account of its choosing (browsers send Sec-Fetch-Site; tools don't)
+  if headers
+    .get("sec-fetch-site")
+    .is_some_and(|v| v != "same-origin" && v != "none")
+  {
+    return (StatusCode::FORBIDDEN, "Open the link itself.\n").into_response();
+  }
   let joined = {
     let host = host.clone();
     tokio::task::spawn_blocking(move || host.store.join(&code)).await
@@ -74,11 +100,7 @@ async fn join(State(host): State<Arc<Host>>, UrlPath(code): UrlPath<String>) -> 
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
       res
     }
-    Ok(Ok(None)) => (
-      StatusCode::GONE,
-      "This link was used or has expired. Ask for a new one.\n",
-    )
-      .into_response(),
+    Ok(Ok(None)) => gone(),
     Ok(Err(e)) => {
       eprintln!("acorn-host: join: {e}");
       (StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong.\n").into_response()

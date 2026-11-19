@@ -117,7 +117,7 @@ acorn-host link u1a2b3c4d5 # another link for them (a second device)
 acorn-host users           # id, name, created, up or down
 ```
 
-A link shows a sign-in button, signs in once when pressed, and is good for 7 days. The data dir is `$ACORN_HOST_DIR`, else `~/.acorn-host`; its `config.json` holds `deepseek_api_key` (or set `DEEPSEEK_API_KEY`) and `budget`, USD a day per person (1 by default). Put it behind HTTPS (Caddy, or a Cloudflare Tunnel).
+A link shows a sign-in button (so a chat app's link preview doesn't use it up), signs in once when pressed, and is good for 7 days; another site can't press it for you. The data dir is `$ACORN_HOST_DIR`, else `~/.acorn-host`; its `config.json` holds `deepseek_api_key` (or set `DEEPSEEK_API_KEY`) and `budget`, USD a day per person (1 by default). Put it behind HTTPS (Caddy, or a Cloudflare Tunnel).
 
 Each person's agent can read the DeepSeek key (it is in their server's environment), so for now invite only people you would hand it to, and use a key with little credit. The network is shared, so a service on the machine's localhost with no password of its own is open to every person's agent. The shared network namespace also exposes abstract Unix sockets, including ones used by some X11 and D-Bus setups.
 
