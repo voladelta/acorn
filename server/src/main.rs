@@ -234,7 +234,10 @@ fn token() -> String {
     .truncate(true)
     .mode(0o600)
     .open(&file)
-    .and_then(|mut f| f.write_all(t.as_bytes()));
+    .and_then(|mut f| {
+      f.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+      f.write_all(t.as_bytes())
+    });
   t
 }
 
