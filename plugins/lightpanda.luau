@@ -489,8 +489,10 @@ local function run_goal(goal, opts)
 			did = "TYPE " .. k .. " into " .. describe(el)
 		elseif op == "SELECT" and el then
 			local o = el.options[tonumber(target:match(":(%d+)$"))]
-			run_tool("selectOption", { selector = sel, value = o.value })
-			did = "SELECT " .. string.format("%q", o.text) .. " in " .. describe(el)
+			if o then
+				run_tool("selectOption", { selector = sel, value = o.value })
+				did = "SELECT " .. string.format("%q", o.text) .. " in " .. describe(el)
+			end
 		elseif op == "SUBMIT" and last then
 			run_tool("press", { key = "Enter", selector = last.sel })
 			did = "SUBMIT " .. last.what
@@ -500,7 +502,8 @@ local function run_goal(goal, opts)
 		elseif op == "WAIT" then
 			pcall(run_tool, "waitForState", { state = "networkalmostidle", timeout = 3000 })
 			did = "WAIT"
-		else
+		end
+		if not did then
 			status = "stopped: Jev chose " .. op .. " with no usable target"
 			break
 		end
