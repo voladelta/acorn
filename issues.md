@@ -9,6 +9,7 @@
 - **Fix:** On Linux, scan `/proc/<pid>/environ` (filtered by UID) instead of spawning `ps -wwE`.
 
 ### 1.2 UTF-8 byte-index panic in Telegram `@mention` stripping
+- **Status:** Fixed in #6.
 - **Location:** `bridges/telegram/src/lib.rs:492-500`
 - **Problem:** `text.to_lowercase().find(&name)` computes a byte offset in the lowercased string and passes it to `out.replace_range(at..at + name.len(), "")` on the original string. Characters whose lowercase changes UTF-8 byte length (e.g. `İ` 2 bytes -> `i\u{307}` 3 bytes) corrupt the string or panic on an invalid char boundary / out-of-bounds range.
 - **Fix:** Match `@<username>` case-insensitively on ASCII bytes directly against the original string (Telegram usernames are ASCII `[A-Za-z0-9_]`), so byte offsets remain valid in `text`.
@@ -19,6 +20,7 @@
 - **Fix:** Make the `SIGKILL` grace timer a `tokio::time::Sleep` arm inside the existing `tokio::select!` loop, guarded by `timed_out` and the group still existing (`alive(-pid)`), not by `status.is_none()`: the current SIGKILL also takes down background jobs in the group that ignore SIGTERM after the shell itself exits, and that must keep working.
 
 ### 1.4 Integer overflow / underflow / `Duration` panics on external inputs
+- **Status:** Fixed in #6.
 - **`server/src/main.rs:283-294`:** `?after=18446744073709551615` (`u64::MAX`) overflows `after + 1` (panics that request in debug; wraps to `0` in release, which has no `overflow-checks`). Use `saturating_add`/`saturating_sub`.
 - **`bridges/telegram/src/html.rs:80-86`:** `let room = PIECE - if code { open.len() + 8 } else { 0 };` underflows if a fenced code block's opening line exceeds ~3,492 bytes, and mixes byte length (`open.len()`) with char count (`PIECE`). Use `saturating_sub` with a floor and consistent units.
 - **`core/src/timers.rs:182`:** `now + duration(&after)?` uses unchecked `i64` addition even though `duration()` uses `checked_mul`/`checked_add`. Use `now.checked_add(...)`.
@@ -27,19 +29,23 @@
 
 ### 1.5 Size and pixel caps checked after full allocation/decode (OOM / decompression-bomb hazard)
 - **`core/src/luau.rs:854-861`:** `__view` calls `std::fs::read(&file)` before checking `bytes.len() > VIEW_BYTES` (unlike `send_file` and `machine::text`, which check `metadata()` first). Check `metadata().is_file()` and `metadata().len() <= VIEW_BYTES` before reading.
+  - **Status:** Fixed in #6.
 - **`core/src/memory/images.rs:161-172`:** `fitted()` calls `image::load_from_memory(bytes)` *before* checking `(w as u64) * (h as u64) <= PIXELS`, so that check never guards the decode. `image` 0.25's default `Limits` (512 MiB `max_alloc`) still bounds a decompression bomb, so this is low severity; inspect dimensions first via `ImageReader::into_dimensions()` or set explicit `image::Limits`.
 - **`bridges/telegram/src/api.rs:162-183`:** `download()` has no streaming size cap when `file_size` is absent, and ignores `cancel` during the HTTP GET and `res.bytes().await`.
 
 ### 1.6 Missing RAII guards on shared state across `.await` / panics
 - **`core/src/ai/agent.rs:257-313`:** `pace::hold` / `pace::free` is tracked with a manual `bool` (`asking`). Any panic or early future drop permanently leaks `room.busy > 0`, starving yielding/import calls for the rest of the process lifetime. Wrap in a `Drop` guard like `pace::Seat` and `cache::Flight`.
+  - **Status:** Fixed in #6.
 - **`core/src/chat/mod.rs:312-323`:** `Engine::writing` sets `chat.held = Some(Vec::new())` and only drains it after `write().await`. If `write()` panics or is cancelled, `chat.held` remains `Some(...)`, silently buffering subsequent `chat.hold(...)` callbacks.
 
 ### 1.7 Cancellation ignored in Telegram reconnect sleeps
+- **Status:** Fixed in #6.
 - **Location:** `bridges/telegram/src/lib.rs:189-192`, `bridges/telegram/src/lib.rs:240-245`
 - **Problem:** `tokio::time::sleep(wait).await` does not `select!` on `self.stop.cancelled()` (unlike `rooms::sweeper`), so shutdown can stall during backoff: up to 5 minutes on the error path (line 244), `POLL / 2` on the conflict path (line 240).
 - **Fix:** Select on `self.stop.cancelled()` in both sleep sites.
 
 ### 1.8 Unhandled `nil` dereference in `plugins/lightpanda.luau`
+- **Status:** Fixed in #6.
 - **Location:** `plugins/lightpanda.luau:490-493`
 - **Problem:** If Jev returns a `SELECT` target without a `:index` suffix, `el.options[nil]` evaluates to `nil` and `o.value` raises an uncaught Luau runtime error.
 - **Fix:** Guard `if o then ...` and fall through to the unusable-target branch when `o` is `nil`.
@@ -49,10 +55,12 @@
 ## 2. Security & Data Integrity
 
 ### 2.1 TOCTOU world-readable window on secrets and `0o600` files
+- **Status:** Fixed in #6.
 - **`server/src/main.rs:229-235`:** `std::fs::write(&file, &t)` creates `server-token` with default umask (typically `0o644`) before calling `set_permissions(..., 0o600)`. Use `OpenOptions::new().mode(0o600)` at creation time (matching `host/src/runner.rs:262`).
 - **`core/src/machine.rs:645-653`:** `commit()` creates its temp file with default umask and writes full contents before applying `was.permissions().mode()`, briefly exposing `0o600` files like `config.json` during edits. Set permissions via `OpenOptionsExt::mode` when creating the temp file.
 
 ### 2.2 Unquoted shell argument in `plugins/github.luau`
+- **Status:** Fixed in #6.
 - **Location:** `plugins/github.luau:50-59`
 - **Problem:** `path` is shell-quoted with `quote(path)`, but `method` is interpolated raw into `GH .. " api -X " .. method .. " " .. quote(path)`.
 - **Note:** The model already has `sh`, so this is a correctness/robustness issue rather than privilege escalation.
@@ -64,14 +72,17 @@
 - **Fix:** Apply `self.redact(...)` to `Kind::Mind` entries and (where practical) buffered delta output when `self.secrets` is non-empty.
 
 ### 2.4 Open-redirect pattern & missing `Secure` cookie flag in `acorn-server`
+- **Status:** Redirect fixed in #6; `Secure` cookie option still open.
 - **Location:** `server/src/main.rs:243-252`
 - **Problem:** `Redirect::to(req.uri().path())` allows protocol-relative redirects (`//evil.com/?token=...`) if the token is known (low severity: whoever holds the token already has full access). Additionally, the `acorn_token` cookie omits `; Secure` even when deployed behind HTTPS.
 - **Fix:** Collapse/reject leading `//` in redirect paths and provide a `--secure` option (or detect HTTPS) to set `; Secure` on the cookie.
 
 ### 2.5 Non-atomic writes and concurrent file races
 - **`core/src/assistant/store.rs:149-155`:** `assistants.json` is written directly with `std::fs::write`, while `saved()` reads without holding `FILING`. Concurrent readers (e.g. `/api/hello`) can observe truncated JSON and silently fall back to an empty list. Write via temp file + rename.
+  - **Status:** Fixed in #6.
 - **`bridges/telegram/src/rooms.rs:116-123` vs `168-178`:** `sweep()` reads `<id>.jsonl`, filters old lines, and renames `<id>.part` over it without locking against concurrent `heard()` appends, risking silent loss of messages received mid-sweep.
 - **`core/src/extend.rs:83-93`:** `put()` names its temp file using only `std::process::id()`, so concurrent `extend` calls in the same process for the same skill/plugin collide on the same `.tmp` file.
+  - **Status:** Fixed in #6.
 - **`core/src/timers.rs:192-206, 221-229`:** In-memory `BOOK` is mutated before `save(&book)?`; a failed save leaves in-memory timers out of sync with `timers.json`.
 
 ### 2.6 No session expiration or revocation in `acorn-host`
@@ -79,6 +90,7 @@
 - **Problem:** `Session::created` is stored in `host.json` but never checked for expiration, and there is no CLI command to revoke a compromised device session or disable a user.
 
 ### 2.7 Unescaped `"` in Telegram HTML code-block language attribute
+- **Status:** Fixed in #6.
 - **Location:** `bridges/telegram/src/html.rs:132-135`
 - **Problem:** `escape(lang)` escapes `&`, `<`, `>` but not `"` (unlike `<a href>` on line 220), so a fence info string containing `"` breaks `class="language-..."` and forces plain-text fallback.
 
@@ -98,6 +110,7 @@
 - **Fix:** Use `BTreeSet<u64>` for $O(\log N)$ insert/remove while keeping `first(JOBS - 1, side)` $O(\text{JOBS}) = O(1)$.
 
 ### 3.3 Repeated heap allocations in `names::is_name` (and `names::random`)
+- **Status:** Fixed in #6.
 - **Location:** `core/src/names.rs:32-49`
 - **Problem:** Every `is_name` call splits `ADJS` and `NOUNS` and allocates 256 capitalized `String`s; every `random` call collects both lists into fresh `Vec<&str>`s (unlike `web/src/names.ts`, which precomputes `adjs` and `Set(nouns)` once).
 - **Fix:** Cache the capitalized adjective list and noun `HashSet` in `LazyLock` statics.
@@ -126,5 +139,7 @@
 ### 4.4 Minor cleanup items
 - **Workspace dependency version skew:** `core/Cargo.toml` depends on `sha2 = "0.11"` while `host/Cargo.toml` depends on `sha2 = "0.10"`, pulling both trees into `Cargo.lock`.
 - **Redundant `select!` in `host/src/runner.rs:193-196`:** Both arms simply call `child.wait()`.
+  - **Status:** Fixed in #6.
 - **Dead calculation in `core/src/timers.rs:404-412`:** `Cron::next_ms` truncates `ms` to the minute and then takes `.max(exact)`, which always equals `exact`.
+  - **Status:** Fixed in #6.
 - **Monolithic `core/src/luau.rs` (2,512 lines):** ~1,080 lines of production code and ~1,430 lines of inline tests; splitting tool bindings and tests into submodules (`luau/mod.rs`, `luau/tools.rs`, `luau/tests.rs`) would improve navigability.
