@@ -3,6 +3,9 @@
 //! An agent's name: a common adjective and noun, capitalized, joined
 //! (FireAnt; older ones Fire-Ant): 16,384; one taken is drawn again.
 
+use std::collections::HashSet;
+use std::sync::LazyLock;
+
 const ADJS: &str = "
 red blue green yellow orange purple pink brown black white gray silver golden
 amber azure bronze copper jade lemon lime mint navy peach plum ruby violet
@@ -28,23 +31,23 @@ toucan trout tuna turkey turtle walrus wasp whale wolf wombat yak zebra apple
 banana bagel cookie mango melon muffin noodle pancake pepper potato pretzel
 radish taco waffle";
 
+static ADJECTIVES: LazyLock<Vec<String>> = LazyLock::new(|| ADJS.split_whitespace().map(word).collect());
+static NOUN_LIST: LazyLock<Vec<String>> = LazyLock::new(|| NOUNS.split_whitespace().map(word).collect());
+static NOUN_SET: LazyLock<HashSet<&'static str>> = LazyLock::new(|| NOUN_LIST.iter().map(String::as_str).collect());
+
 #[cfg(feature = "engine")]
 pub fn random() -> String {
   use rand::seq::IndexedRandom;
-  let adjs: Vec<&str> = ADJS.split_whitespace().collect();
-  let nouns: Vec<&str> = NOUNS.split_whitespace().collect();
   let mut rng = rand::rng();
-  word(adjs.choose(&mut rng).unwrap()) + &word(nouns.choose(&mut rng).unwrap())
+  ADJECTIVES.choose(&mut rng).unwrap().clone() + NOUN_LIST.choose(&mut rng).unwrap()
 }
 
 /// Whether a text is a name, old or new.
 pub fn is_name(s: &str) -> bool {
-  let words = |list: &str| list.split_whitespace().map(word).collect::<Vec<_>>();
-  let (adjs, nouns) = (words(ADJS), words(NOUNS));
-  adjs.iter().any(|a| {
+  ADJECTIVES.iter().any(|a| {
     s.strip_prefix(a.as_str())
       .map(|r| r.strip_prefix('-').unwrap_or(r))
-      .is_some_and(|r| nouns.iter().any(|n| n == r))
+      .is_some_and(|r| NOUN_SET.contains(r))
   })
 }
 
@@ -62,5 +65,9 @@ mod tests {
     let n = super::random();
     assert!(super::is_name(&n));
     assert!(!super::is_name("Fire-Ant") && super::is_name("Red-Ant"));
+    assert!(super::is_name("RedAnt"));
+    for bad in ["", "redAnt", "Redant", "Red--Ant", "RedAnts"] {
+      assert!(!super::is_name(bad), "{bad}");
+    }
   }
 }
