@@ -298,7 +298,10 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
       pace::hold(MODEL, &own, &step.why);
       asking = true;
     }
-    let wait = after.filter(|&s| s > 0.0).unwrap_or_else(|| 2f64.powi(k as i32 - 1));
+    let wait = after
+      .filter(|&s| s.is_finite() && s > 0.0)
+      .unwrap_or_else(|| 2f64.powi(k as i32 - 1))
+      .min(300.0);
     on(Event::Entry {
       kind: Kind::Mind,
       text: format!("The AI service is busy: asking again in {wait} s."),

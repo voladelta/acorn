@@ -288,9 +288,13 @@ async fn events(State(s): State<Server>, Query(q): Query<HashMap<String, String>
   }
   let log = s.log.lock().unwrap();
   let last = log.last();
-  let lost = !ours || after + 1 < log.first;
-  let from = if ours { (after + 1).max(log.first) } else { last + 1 };
-  let skip = (from - log.first) as usize;
+  let lost = !ours || after.saturating_add(1) < log.first;
+  let from = if ours {
+    after.saturating_add(1).max(log.first)
+  } else {
+    last.saturating_add(1)
+  };
+  let skip = from.saturating_sub(log.first) as usize;
   let events: Vec<&str> = log.events.iter().skip(skip).map(String::as_str).collect();
   let body = format!(
     "{{\"epoch\":{},\"seq\":{},\"lost\":{lost},\"events\":[{}]}}",

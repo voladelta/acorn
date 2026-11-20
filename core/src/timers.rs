@@ -179,7 +179,9 @@ pub fn tool(chat: &str, name: &str, input: &Value) -> Result<String, String> {
       let next = match (str("at"), str("in")) {
         (at, after) if !at.is_empty() && !after.is_empty() => return Err("Give at or in, not both.".into()),
         (at, _) if !at.is_empty() => moment(&at)?,
-        (_, after) if !after.is_empty() => now + duration(&after)?,
+        (_, after) if !after.is_empty() => now
+          .checked_add(duration(&after)?)
+          .ok_or("That timer is too far away.")?,
         _ => match &cron {
           Some(cron) => cron.next_ms(now).ok_or("That cron line never comes due.")?,
           None => return Err("Say when: at a time, in a while, or repeat on a cron line.".into()),

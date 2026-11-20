@@ -77,7 +77,9 @@ fn cut(block: &str) -> Vec<String> {
     }
     false => (String::new(), block.to_string()),
   };
-  let room = PIECE - if code { open.len() + 8 } else { 0 };
+  let room = PIECE
+    .saturating_sub(if code { open.chars().count() + 8 } else { 0 })
+    .max(1);
   let mut parts: Vec<String> = Vec::new();
   let mut cur = String::new();
   for line in body.lines() {
@@ -288,6 +290,13 @@ mod tests {
     }
     let lines: usize = parts.iter().map(|p| p.matches("let x").count()).sum();
     assert_eq!(lines, 400);
+  }
+
+  #[test]
+  fn a_long_fence_leaves_room_for_progress() {
+    let open = format!("```{}", "é".repeat(4000));
+    let parts = pieces(&format!("{open}\nxy\n```"));
+    assert_eq!(parts, vec![format!("{open}\nx\n```"), format!("{open}\ny\n```")]);
   }
 
   #[test]
