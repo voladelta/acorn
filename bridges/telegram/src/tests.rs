@@ -91,6 +91,17 @@ async fn api(answer: fn(&str, &Value) -> Option<Value>) -> (Bot, Asked) {
             }
           };
           let path = head.split_whitespace().nth(1).unwrap_or_default().to_string();
+          if path.starts_with("/file/huge/") {
+            // 21 MB, its length unsaid
+            let _ = sock.write_all(b"HTTP/1.1 200 X\r\nconnection: close\r\n\r\n").await;
+            let _ = sock.write_all(&vec![0; 21 << 20]).await;
+            return;
+          }
+          if path.starts_with("/file/slow/") {
+            let _ = sock.write_all(b"HTTP/1.1 200 X\r\nconnection: close\r\n\r\nIM").await;
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            return;
+          }
           let (code, reply) = if path.starts_with("/file/") {
             (200, "IMG".to_string())
           } else {
@@ -124,6 +135,52 @@ fn plain(method: &str, _: &Value) -> Option<Value> {
     "getFile" => Some(json!({"file_id": "f", "file_size": 3, "file_path": "photos/1.jpg"})),
     _ => None,
   }
+}
+
+/// A file whose size getFile doesn't say, at the path its id names.
+fn unsized_file(method: &str, body: &Value) -> Option<Value> {
+  match method {
+    "getFile" => Some(json!({"file_id": "f", "file_path": format!("{}/1.bin", body["file_id"].as_str().unwrap())})),
+    _ => None,
+  }
+}
+
+#[tokio::test]
+async fn a_download_is_capped_as_it_comes_and_stops_with_the_bridge() {
+  let (bot, _asked) = api(unsized_file).await;
+  let stop = CancellationToken::new();
+  assert_eq!(bot.download("photos", &stop).await.unwrap(), b"IMG");
+  let over = bot.download("huge", &stop).await.unwrap_err();
+  assert!(
+    matches!(&over, api::Fail::Refused(why) if why.contains("20 MB")),
+    "{over}"
+  );
+  let stopping = stop.clone();
+  tokio::spawn(async move {
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    stopping.cancel();
+  });
+  let began = std::time::Instant::now();
+  assert_eq!(bot.download("slow", &stop).await, Err(api::Fail::Stopped));
+  assert!(began.elapsed() < Duration::from_secs(10));
+}
+
+#[tokio::test]
+async fn a_message_heard_during_a_sweep_is_kept() {
+  let (tg, _heard, _asked, _dir) = tg(plain, Some(OWNER)).await;
+  tg.clone().update(&added(-100, OWNER)).await;
+  let now = Local::now().timestamp();
+  let hearing = tg.clone();
+  let heard = std::thread::spawn(move || {
+    for k in 0..300 {
+      rooms::heard(&hearing, -100, &group(-100, 9, &format!("m{k}"), now)["message"], false);
+    }
+  });
+  while !heard.is_finished() {
+    rooms::sweep(&tg, now);
+  }
+  heard.join().unwrap();
+  assert_eq!(rooms::lines(&tg, -100).len(), 300);
 }
 
 async fn tg(

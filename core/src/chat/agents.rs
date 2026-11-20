@@ -27,14 +27,15 @@ fn thread_head(asks: &str) -> String {
   format!("## With {asks} (there, user is {asks}, who asked, and unii is you)")
 }
 
-/// An agent: its effort (none: the run's), what it does, what streams,
-/// its tool calls awaiting their results, the view its calls get, its
-/// replies so far.
+/// An agent: its effort (none: the run's), what it does, what streams
+/// (and its end kept back, `Chat::tail`), its tool calls awaiting their
+/// results, the view its calls get, its replies so far.
 pub struct Agent {
   pub name: String,
   effort: Option<Effort>,
   doing: Doing,
   pub(super) live: Vec<Live>,
+  pub(super) tail: String,
   pub(super) calls: Vec<(String, String)>,
   view: Vec<Block>,
   replies: Vec<String>,
@@ -62,6 +63,7 @@ impl Agent {
       effort,
       doing: Doing::Idle,
       live: vec![],
+      tail: String::new(),
       calls: vec![],
       view,
       replies: vec![],

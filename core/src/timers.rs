@@ -202,7 +202,12 @@ pub fn tool(chat: &str, name: &str, input: &Value) -> Result<String, String> {
         repeat,
       };
       book.timers.push(timer.clone());
-      save(&book)?;
+      // one not saved isn't set: the book stays as timers.json has it
+      if let Err(err) = save(&book) {
+        book.timers.pop();
+        book.last -= 1;
+        return Err(err);
+      }
       drop(book);
       CHANGED.notify_one();
       Ok(format!("Set: {}", line(&timer, now)))
@@ -225,7 +230,10 @@ pub fn tool(chat: &str, name: &str, input: &Value) -> Result<String, String> {
         return Err(format!("No timer #{id} here; list_timers names them."));
       };
       let gone = book.timers.remove(k);
-      save(&book)?;
+      if let Err(err) = save(&book) {
+        book.timers.insert(k, gone);
+        return Err(err);
+      }
       drop(book);
       CHANGED.notify_one();
       Ok(format!("Cancelled: {}", line(&gone, now)))

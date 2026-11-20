@@ -82,7 +82,8 @@ impl Log {
 
 /// The server: its events, told as they come; which run of it this is
 /// (`epoch`: its numbers start anew each run, so a window polling with
-/// another run's knows it missed all since); its token.
+/// another run's knows it missed all since); its token, and whether its
+/// cookie is for HTTPS only (`--secure`).
 #[derive(Clone)]
 struct Server {
   epoch: u64,
@@ -90,6 +91,7 @@ struct Server {
   tick: watch::Receiver<u64>,
   said: Arc<watch::Sender<u64>>,
   token: Arc<String>,
+  secure: bool,
 }
 
 impl Server {
@@ -110,6 +112,7 @@ async fn serve() {
   let mut args = std::env::args().skip(1);
   let mut addr = std::env::var("ACORN_ADDR").unwrap_or_else(|_| "127.0.0.1:8484".into());
   let mut unix: Option<PathBuf> = None;
+  let mut secure = false;
   let mut web = std::env::var("ACORN_WEB")
     .map(PathBuf::from)
     .unwrap_or_else(|_| "web/dist".into());
@@ -118,8 +121,9 @@ async fn serve() {
       "--addr" => addr = args.next().expect("--addr HOST:PORT"),
       "--web" => web = args.next().expect("--web DIR").into(),
       "--unix" => unix = Some(args.next().expect("--unix PATH").into()),
+      "--secure" => secure = true,
       _ => {
-        eprintln!("usage: acorn-server [--addr HOST:PORT | --unix PATH] [--web DIR]");
+        eprintln!("usage: acorn-server [--addr HOST:PORT | --unix PATH] [--web DIR] [--secure]");
         std::process::exit(2);
       }
     }
@@ -144,6 +148,7 @@ async fn serve() {
     tick,
     said: Arc::new(said),
     token: Arc::new(token()),
+    secure,
   };
 
   acorn_telegram::add();
@@ -243,16 +248,25 @@ fn token() -> String {
   t
 }
 
+/// The cookie a good token sets.
+fn cookie(token: &str, secure: bool) -> String {
+  let secure = if secure { "; Secure" } else { "" };
+  format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure}")
+}
+
 /// Every request shows the token: a link's `?token=` sets the cookie and
 /// leads on without it; else the cookie must hold it.
 async fn guard(State(s): State<Server>, req: Request, next: Next) -> Response {
   let query = req.uri().query().unwrap_or("");
   if let Some(t) = query.split('&').find_map(|kv| kv.strip_prefix("token=")) {
     if same(t, &s.token) {
-      let cookie = format!(
-        "{COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000",
-        s.token
-      );
+      // behind HTTPS (`--secure`, or a proxy that says so) the cookie is
+      // never sent in the clear
+      let https = req
+        .headers()
+        .get("x-forwarded-proto")
+        .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"https"));
+      let cookie = cookie(&s.token, s.secure || https);
       let path = format!("/{}", req.uri().path().trim_start_matches('/'));
       let mut res = Redirect::to(&path).into_response();
       res.headers_mut().insert(header::SET_COOKIE, cookie.parse().unwrap());

@@ -136,6 +136,9 @@ pub struct Chat {
   wait: Vec<Span>,
   halt: CancellationToken,
   live: Vec<Live>,
+  /// The end of what streams kept back, not shown yet: it may begin a
+  /// secret (`veil`).
+  tail: String,
   calls: Vec<(String, String)>,
   eye: Eye,
   batch: Option<Batch>,
@@ -150,7 +153,8 @@ pub struct Chat {
   /// When a wipe waiting on a held purge is woken (ms; 0: none).
   wake: i64,
   /// Secrets purged by their text: written `[purged]` in whatever is
-  /// logged after (`push`). Kept in memory only, never on disk.
+  /// logged (`push`) or streams (`veil`) after. Kept in memory only,
+  /// never on disk.
   secrets: Vec<String>,
 }
 
@@ -176,6 +180,30 @@ impl Drop for Guard<'_> {
   }
 }
 
+/// What may be shown of a stream as `text` comes: each secret whole in it
+/// `[purged]`, and its end kept back in `tail` while it may begin one (a
+/// secret can come in pieces).
+fn veil(secrets: &[String], tail: &mut String, text: &str) -> String {
+  tail.push_str(text);
+  let mut out = String::new();
+  while let Some((at, len)) = secrets
+    .iter()
+    .filter_map(|s| tail.find(s.as_str()).map(|at| (at, s.len())))
+    .min()
+  {
+    out.push_str(&tail[..at]);
+    out.push_str("[purged]");
+    tail.drain(..at + len);
+  }
+  let most = secrets.iter().map(String::len).max().unwrap_or(0);
+  let keep = (tail.len().saturating_sub(most)..tail.len())
+    .filter(|&k| tail.is_char_boundary(k))
+    .find(|&k| secrets.iter().any(|s| s.starts_with(&tail[k..])))
+    .unwrap_or(tail.len());
+  out.extend(tail.drain(..keep));
+  out
+}
+
 impl Engine {
   /// A chat opened (`hub`), its events to `events`.
   fn start(id: String, me: Assistant, with: Option<Assistant>, events: hub::Heard) -> Result<Arc<Engine>> {
@@ -199,6 +227,7 @@ impl Engine {
         wait: Vec::new(),
         halt: CancellationToken::new(),
         live: Vec::new(),
+        tail: String::new(),
         calls: Vec::new(),
         eye: Eye::default(),
         batch: None,
@@ -313,16 +342,27 @@ impl Engine {
   /// A post's logging, after the chat's earlier ones, holding its other
   /// logging (`hold`) till it ends, so a long post's pages stay together.
   async fn writing<T>(&self, write: impl AsyncFnOnce() -> T) -> T {
+    /// The steps held, run as the logging ends: dropped too, so a post
+    /// cut short (its future dropped, or a panic, which runs none) leaves
+    /// no later step waiting on it.
+    struct Release<'a>(&'a Engine);
+    impl Drop for Release<'_> {
+      fn drop(&mut self) {
+        let mut chat = self.0.lock();
+        let held = chat.held.take().unwrap_or_default();
+        chat.mem.open = 0;
+        if std::thread::panicking() {
+          return;
+        }
+        for step in held {
+          step(&mut chat);
+        }
+      }
+    }
     let _turn = self.writes.lock().await;
     self.lock().held = Some(Vec::new());
-    let out = write().await;
-    let mut chat = self.lock();
-    let held = chat.held.take().unwrap_or_default();
-    chat.mem.open = 0;
-    for step in held {
-      step(&mut chat);
-    }
-    out
+    let _release = Release(self);
+    write().await
   }
 
   /// The work a quit cut goes on, told so: each agent, and the turn by a
@@ -427,6 +467,18 @@ impl Chat {
       }
       last = Some(at);
     }
+    // what streams now may hold it too
+    let streams: Vec<Option<String>> = std::iter::once(None)
+      .chain(self.agents.keys().cloned().map(Some))
+      .collect();
+    for agent in streams {
+      let was = self.live_of(agent.as_deref()).clone();
+      let live = self.redacted(was.clone());
+      if live != was {
+        self.live_of(agent.as_deref()).clone_from(&live);
+        self.all(Event::Live { agent, live });
+      }
+    }
     self.seen.clear();
     self.show();
     self.pump();
@@ -445,6 +497,16 @@ impl Chat {
       .secrets
       .iter()
       .fold(text.to_string(), |t, s| t.replace(s.as_str(), "[purged]"))
+  }
+
+  /// What streams, as shown: each secret in it `[purged]`.
+  fn redacted(&self, mut live: Vec<Live>) -> Vec<Live> {
+    if !self.secrets.is_empty() {
+      for l in &mut live {
+        l.text = self.redact(&l.text);
+      }
+    }
+    live
   }
 
   /// An event to the app.
@@ -555,5 +617,51 @@ impl Chat {
 
   pub(crate) fn this(&self) -> Weak<Engine> {
     self.this.clone()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::veil;
+
+  /// A stream's pieces as shown, and what is still kept back.
+  fn shown(secrets: &[&str], pieces: &[&str]) -> (String, String) {
+    let secrets: Vec<String> = secrets.iter().map(|s| s.to_string()).collect();
+    let mut tail = String::new();
+    let out = pieces.iter().map(|p| veil(&secrets, &mut tail, p)).collect();
+    (out, tail)
+  }
+
+  #[test]
+  fn a_secret_streaming_in_pieces_is_never_shown() {
+    let key = ["sk-12345678"];
+    let purged = ("The key is [purged], kept.".to_string(), String::new());
+    assert_eq!(shown(&key, &["The key is sk-12345678, kept."]), purged);
+    assert_eq!(shown(&key, &["The key is sk-", "1234", "5678, kept."]), purged);
+    let each: Vec<String> = "The key is sk-12345678, kept.".chars().map(String::from).collect();
+    let each: Vec<&str> = each.iter().map(String::as_str).collect();
+    assert_eq!(shown(&key, &each), purged);
+    // nothing of it shows while it comes
+    let (out, tail) = shown(&key, &["is sk-1234"]);
+    assert_eq!((out.as_str(), tail.as_str()), ("is ", "sk-1234"));
+  }
+
+  #[test]
+  fn what_only_began_like_a_secret_is_shown_once_it_differs() {
+    let key = ["sk-12345678"];
+    assert_eq!(shown(&key, &["ask-", "12 more"]).0, "ask-12 more");
+    assert_eq!(
+      shown(&key, &["sk-1sk-1234", "5678"]),
+      ("sk-1[purged]".to_string(), String::new())
+    );
+    // a secret that ends as it begins, whole: purged, not half kept back
+    assert_eq!(
+      shown(&["abcd-abcd"], &["abcd-abcd"]),
+      ("[purged]".to_string(), String::new())
+    );
+    assert_eq!(
+      shown(&["12345678", "péché-péché"], &["x péché-p", "éché 1234", "5678é"]),
+      ("x [purged] [purged]é".to_string(), String::new())
+    );
   }
 }

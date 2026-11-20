@@ -13,6 +13,7 @@ const USAGE: &str = "usage:
   acorn-host serve [--addr 127.0.0.1:8080] [--public URL] [--data DIR] [--server PATH] [--web DIR] [--no-sandbox]
   acorn-host invite <name> [--public URL] [--data DIR]   a new person, and their join link
   acorn-host link <user-id> [--public URL] [--data DIR]  another join link (a second device)
+  acorn-host signout <user-id> [--data DIR]              sign them out of every device; their unused links die too
   acorn-host users [--data DIR]                          id, name, created, whether their server is up";
 
 struct Args {
@@ -81,6 +82,10 @@ fn main() {
       let code = st.link(id).unwrap_or_else(|e| fail(e));
       println!("{public}/join/{code}");
     }
+    ("signout", [id]) => match st.signout(id).unwrap_or_else(|e| fail(e)) {
+      Some(n) => println!("{id}: signed out of {n} device{}", if n == 1 { "" } else { "s" }),
+      None => fail(format!("no person {id} (see `acorn-host users`)")),
+    },
     ("users", []) => {
       let book = st.read().unwrap_or_else(|e| fail(e));
       for p in book.people {
