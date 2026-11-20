@@ -12,6 +12,8 @@ test('attachments report skipped files and preserve an empty selection', async (
   Object.defineProperty(large, 'size', { value: (50 << 20) + 1 });
   await store.addPics([large]);
   assert.match(store.get().toast!, /large.png: exceeds the 50 MB/);
+  await store.addPics([new File(['text'], 'a.txt', { type: 'text/plain' }), large]);
+  assert.match(store.get().toast!, /a.txt: unsupported file type.*large.png: exceeds the 50 MB/);
   assert.equal(store.get().pics, before);
   store.note(null);
 });
