@@ -491,9 +491,13 @@ impl Tg {
   /// A message with the bot's @name taken out.
   fn unnamed(&self, text: &str) -> String {
     let Some(me) = self.me.get() else { return text.into() };
-    let name = format!("@{}", me.username.to_lowercase());
+    let name = format!("@{}", me.username);
     let mut out = text.to_string();
-    if let Some(at) = text.to_lowercase().find(&name) {
+    if let Some(at) = text
+      .as_bytes()
+      .windows(name.len())
+      .position(|s| s.eq_ignore_ascii_case(name.as_bytes()))
+    {
       out.replace_range(at..at + name.len(), "");
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")
