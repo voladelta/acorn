@@ -56,7 +56,7 @@ use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -352,7 +352,7 @@ pub struct Memory {
   agents: HashMap<String, u64>,
   pub view: View,
   pub seen: View,
-  ready: [Vec<Vec<u64>>; 2],
+  ready: [Vec<BTreeSet<u64>>; 2],
   pub busy: HashMap<u64, usize>,
   sides: HashMap<u64, usize>,
   pub paused: bool,
@@ -645,7 +645,7 @@ impl Memory {
   pub fn first(&self, k: usize, side: usize) -> u64 {
     self.ready[side]
       .first()
-      .and_then(|q| q.get(k))
+      .and_then(|q| q.iter().nth(k))
       .copied()
       .unwrap_or(self.count)
   }
@@ -655,17 +655,13 @@ impl Memory {
     let side = self.side(part);
     let levels = &mut self.ready[side];
     if levels.len() <= part.l as usize {
-      levels.resize(part.l as usize + 1, Vec::new());
+      levels.resize(part.l as usize + 1, BTreeSet::new());
     }
     let queue = &mut levels[part.l as usize];
-    let at = queue.partition_point(|&i| i < part.i);
-    let here = queue.get(at) == Some(&part.i);
-    match (on, here) {
-      (true, false) => queue.insert(at, part.i),
-      (false, true) => {
-        queue.remove(at);
-      }
-      _ => {}
+    if on {
+      queue.insert(part.i);
+    } else {
+      queue.remove(&part.i);
     }
   }
 

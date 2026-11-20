@@ -100,12 +100,14 @@
 ## 3. Performance & Async Runtime Hygiene
 
 ### 3.1 Blocking I/O and heavy synchronous work on Tokio async workers
+- **Status:** Fixed in #10.
 - **`server/src/main.rs:154`:** `tokio::spawn(async { hub::open_all() })` runs blocking SQLite/FS opens directly on an async worker instead of `spawn_blocking`.
 - **`server/src/main.rs:289-301`:** `events()` holds the global `s.log` mutex while copying and `join(",")`-ing up to 256 MB (`KEEP_BYTES`) of JSON strings, blocking `Server::tell` and `/api/hello`.
 - **`host/src/proxy.rs:128-137`:** `forward()` runs synchronous `host.store.read()` (disk read + JSON parse) on every proxied HTTP request (unlike `preview` and `join`, which use `spawn_blocking`). Cache `Book` by mtime/inode or offload reads.
 - **`core/src/luau.rs:768-808, 854`, `core/src/ocr.rs:76-78`, `core/src/facts.rs:111-113, 137`:** `__read`/`__write`/`__edit` (up to 100 MB + `fs::sync_all()`), `ocr::read` (up to 100 MB `fs::read`), and `facts::remember`/`forget` (SQLite `VACUUM` + WAL checkpoint) all run synchronously inside async tool handlers.
 
 ### 3.2 $O(N^2)$ compaction queue removal on large imports
+- **Status:** Fixed in #10.
 - **Location:** `core/src/memory/mod.rs:654-670`
 - **Problem:** `self.ready[side]` stores ready indices in sorted `Vec<u64>`s and removes compacted items via `queue.remove(at)`. Draining from the front during a 50k-message import performs ~1.25 billion element shifts.
 - **Fix:** Use `BTreeSet<u64>` for $O(\log N)$ insert/remove while keeping `first(JOBS - 1, side)` $O(\text{JOBS}) = O(1)$.
@@ -117,6 +119,7 @@
 - **Fix:** Cache the capitalized adjective list and noun `HashSet` in `LazyLock` statics.
 
 ### 3.4 Unbounded in-memory caches in long-running processes
+- **Status:** Fixed in #10.
 - **`core/src/machine.rs:68`:** `SEEN` grows indefinitely over the process lifetime.
 - **`web/src/model.ts:49-54`:** `whole`, `nodes`, `minds`, and `pages` never prune evicted entries in long-running browser tabs.
 

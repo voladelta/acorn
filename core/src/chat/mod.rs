@@ -115,7 +115,8 @@ pub(super) enum Phase {
 /// sent, wait: messages given and waiting; live: what streams; calls: tool
 /// calls awaiting their results, in order; spend: what the running turn's
 /// requests used; held: steps held while a post logs (None: none); seen:
-/// the parts the app was told of; compactions: the summaries' calls;
+/// the parts the app was told of; shown: the last view's parts;
+/// compactions: the summaries' calls;
 /// found: the sessions a look found to import, and the import the turn
 /// asked for (`then`), begun as it ends; reply: what a thread's turn
 /// answers its asker; cut_in: the user cut in on the turn's call (its
@@ -140,6 +141,7 @@ pub struct Chat {
   batch: Option<Batch>,
   held: Option<Vec<Held>>,
   seen: HashSet<Seg>,
+  shown: HashSet<Seg>,
   compactions: Vec<(Handle, Part, Served)>,
   found: Vec<import::Session>,
   then: Option<import::Want>,
@@ -202,6 +204,7 @@ impl Engine {
         batch: None,
         held: None,
         seen: HashSet::new(),
+        shown: HashSet::new(),
         compactions: Vec::new(),
         found: Vec::new(),
         then: None,

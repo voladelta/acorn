@@ -4,8 +4,8 @@
 //! `Command` (a person's act, or a read of the chat); the engine answers
 //! with `Event`s, the chat as the agent sees it: the view's parts as
 //! blocks, from the turn on each message whole, then what streams. Each
-//! message and summary is told once (`Event::Know`), before any part that
-//! shows it.
+//! message and summary is told (`Event::Know`) before any part that shows
+//! it, and again once a part shows it anew (`chat::view`).
 
 use crate::{Kind, Spend};
 use serde::{Deserialize, Serialize};

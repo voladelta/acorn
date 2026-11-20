@@ -74,8 +74,14 @@ fn form(fields: &[(&str, String)], name: &str, bytes: &[u8]) -> (String, Vec<u8>
 
 /// A file's text, recognized page by page (`pages`).
 pub async fn read(path: &Path, cancel: &CancellationToken) -> Result<String, String> {
-  let (name, bytes) = load(path)?;
-  let (kind, body) = form(&[("purpose", purpose(path, &bytes).to_string())], &name, &bytes);
+  // the file is read, and its body built, off the async workers
+  let file = path.to_path_buf();
+  let (kind, body) = tokio::task::spawn_blocking(move || {
+    let (name, bytes) = load(&file)?;
+    Ok(form(&[("purpose", purpose(&file, &bytes).to_string())], &name, &bytes))
+  })
+  .await
+  .unwrap_or_else(|e| Err(e.to_string()))?;
   let got = web::api(URL, &kind, body, TIMEOUT, cancel).await;
   let got = got
     .and_then(failed)

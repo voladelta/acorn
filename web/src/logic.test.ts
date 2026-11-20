@@ -107,3 +107,48 @@ test('a chat resynced asks for all it shows', () => {
   const zoomed = resync(act(empty(), { t: 'open', seg: [0, 4] }).m).cmds;
   assert.deepEqual(zoomed, ['Attach', { Zoom: [0, 4] }], 'an open block of many, its halves asked anew');
 });
+
+test('what the view no longer shows is dropped', () => {
+  const node = (text: string) => ({ text, to: '2026-10-26T10:00:00.000Z' });
+  let m: Model = empty();
+  m = hear(m, { Know: { whole: [[0, entry('user', 'a')], [1, entry('acorn', 'b')]], nodes: [] } }).m;
+  m = hear(m, { View: { parts: [[0, 1], [1, 1]], turn: 0 } }).m;
+  m = hear(m, { Entry: { agent: null, id: null, entry: entry('mind', 'hm') } }).m;
+  assert.deepEqual([m.whole.size, m.minds.size], [2, 1], 'the view as it is shown is all kept');
+  // the two summed, then the block opened, and a half of it
+  m = hear(m, { Know: { whole: [], nodes: [[[0, 2], node('ab')], [[4, 4], node('efgh')], [[8, 1], node('i')]] } }).m;
+  m = hear(m, { Know: { whole: [[8, entry('user', 'i')]], nodes: [] } }).m;
+  m = hear(m, { View: { parts: [[0, 2], [4, 4], [8, 1]], turn: 8 } }).m;
+  assert.deepEqual([[...m.whole.keys()], [...m.nodes.keys()], m.minds.size], [[8], ['0+2', '4+4', '8+1'], 0]);
+  m = act(act(m, { t: 'open', seg: [4, 4] }).m, { t: 'open', seg: [4, 2] }).m;
+  m = hear(m, { Know: { whole: [[4, entry('user', 'e')]], nodes: [[[4, 2], node('ef')], [[6, 2], node('gh')], [[4, 1], node('e')], [[5, 1], node('f')]] } }).m;
+  m = act(m, { t: 'shut', seg: [4, 4] }).m;
+  const kept = hear(m, { View: { parts: [[0, 2], [4, 4], [8, 1]], turn: 8 } }).m;
+  assert.ok(kept.nodes === m.nodes && kept.whole === m.whole && kept.open === m.open, 'a view that drops nothing keeps what is known as it is');
+  assert.ok(kept.nodes.has('5+1') && kept.whole.has(4), 'a block shut by hand keeps what it opens to');
+  // the view sums on: the halves, and the blocks opened under them, go
+  m = hear(m, { Know: { whole: [], nodes: [[[0, 8], node('a-h')]] } }).m;
+  m = hear(m, { View: { parts: [[0, 8], [8, 1]], turn: 8 } }).m;
+  assert.deepEqual([[...m.whole.keys()], [...m.nodes.keys()], m.open.size], [[8], ['0+8', '8+1'], 0]);
+  // the overview's tops are kept while it shows
+  m = act(m, { t: 'fold', on: true }).m;
+  m = hear(m, { Know: { whole: [], nodes: [[[0, 16], node('all')]] } }).m;
+  m = hear(m, { Root: { parts: [[0, 16]] } }).m;
+  m = hear(m, { View: { parts: [[0, 8], [8, 1]], turn: 8 } }).m;
+  assert.ok(m.nodes.has('0+16') && m.nodes.has('0+8'));
+  m = hear(act(m, { t: 'home' }).m, { View: { parts: [[0, 8], [8, 1]], turn: 8 } }).m;
+  assert.ok(!m.nodes.has('0+16'), 'and go once it is left');
+});
+
+test('the page of an agent done is dropped once left', () => {
+  const state = (agents: string[]) => ({ State: { busy: true, wait: 'None' as const, agents, goal: null, importing: null, today: null } });
+  let m = hear(empty(), state(['RedAnt', 'BlueOwl'])).m;
+  m = act(m, { t: 'goto', name: 'RedAnt' }).m;
+  m = act(m, { t: 'goto', name: 'BlueOwl' }).m;
+  assert.deepEqual([...m.pages.keys()], ['RedAnt', 'BlueOwl'], 'agents at work keep their pages');
+  m = hear(m, state([])).m;
+  assert.deepEqual([...m.pages.keys()], ['BlueOwl'], 'the one shown stays, so it can be left');
+  const left = act(m, { t: 'goto', name: null });
+  assert.equal(left.m.pages.size, 0);
+  assert.deepEqual(act(left.m, { t: 'goto', name: 'BlueOwl' }).cmds, [{ Agent: 'BlueOwl' }], 'shown again, asked for again');
+});

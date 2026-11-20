@@ -4,8 +4,10 @@
 //! message after them, and a running import's messages as the fewest
 //! blocks of the tree that hold them, so no view ever gets the raw
 //! history; a block opened gets its halves. Each message and summary is
-//! told once, before a part that shows it; a summary not built yet, once
-//! built.
+//! told before a part that shows it, and not again while a view shows it;
+//! a summary not built yet, once built. A window may drop what it no
+//! longer shows (web/src/model.ts `prune`), so a part new to the view, a
+//! block's halves and the overview's tops are told again each time.
 
 use super::{Chat, Engine, Eye, Phase};
 use crate::memory::{self, Part, local_time};
@@ -82,8 +84,18 @@ impl Chat {
     parts.extend((from..cover.0).map(|k| (k, 1)));
     parts.extend((from.max(cover.1)..count).map(|k| (k, 1)));
     parts.sort_by_key(|s| s.0);
+    let was = std::mem::replace(&mut self.shown, parts.iter().copied().collect());
+    let new: Vec<Seg> = parts.iter().copied().filter(|p| !was.contains(p)).collect();
+    self.retell(&new);
     self.teach(&parts);
     self.all(Event::View { parts, turn: from });
+  }
+
+  /// Parts a window may have dropped: `teach` tells them again.
+  fn retell(&mut self, parts: &[Seg]) {
+    for part in parts {
+      self.seen.remove(part);
+    }
   }
 
   /// What the app lacks of parts, told before the parts themselves.
@@ -143,6 +155,7 @@ impl Chat {
   pub(super) fn zoom(&mut self, (id, n): Seg) {
     if n > 1 && self.mem.part(id, n).is_some() {
       let parts = vec![(id, n / 2), (id + n / 2, n / 2)];
+      self.retell(&parts);
       self.teach(&parts);
       self.all(Event::Zoom { seg: (id, n), parts });
     }
@@ -154,6 +167,7 @@ impl Chat {
       .into_iter()
       .map(|p| (p.span().0, p.n()))
       .collect();
+    self.retell(&parts);
     self.teach(&parts);
     self.all(Event::Root { parts });
   }

@@ -45,6 +45,8 @@ use tower_http::services::{ServeDir, ServeFile};
 /// Events kept for polls that come late: at most so many, and bytes.
 const KEEP: usize = 20_000;
 const KEEP_BYTES: usize = 256 << 20;
+/// A poll's events of more bytes than this are joined off the async workers.
+const BIG_BODY: usize = 1 << 20;
 /// The most bytes of a command: a message with its files (50 MB each at
 /// most, in base64).
 const CMD_BYTES: usize = 160 << 20;
@@ -57,7 +59,7 @@ const COOKIE: &str = "acorn_token";
 struct Log {
   /// The number of the first kept.
   first: u64,
-  events: VecDeque<String>,
+  events: VecDeque<Arc<str>>,
   bytes: usize,
 }
 
@@ -68,7 +70,7 @@ impl Log {
 
   fn push(&mut self, json: String) -> u64 {
     self.bytes += json.len();
-    self.events.push_back(json);
+    self.events.push_back(json.into());
     while self.events.len() > KEEP || self.bytes > KEEP_BYTES {
       let Some(old) = self.events.pop_front() else { break };
       self.bytes -= old.len();
@@ -153,7 +155,7 @@ async fn serve() {
       teller.tell(&chat, &ev);
     }
   });
-  tokio::spawn(async { hub::open_all() });
+  tokio::task::spawn_blocking(hub::open_all);
 
   let app = Router::new()
     .route("/api/hello", get(hello))
@@ -292,22 +294,35 @@ async fn events(State(s): State<Server>, Query(q): Query<HashMap<String, String>
     let mut tick = s.tick.clone();
     let _ = tokio::time::timeout(WAIT, tick.wait_for(|&last| last > after)).await;
   }
-  let log = s.log.lock().unwrap();
-  let last = log.last();
-  let lost = !ours || after.saturating_add(1) < log.first;
-  let from = if ours {
-    after.saturating_add(1).max(log.first)
-  } else {
-    last.saturating_add(1)
+  // the lock is held to share the events, not to copy them
+  let (last, lost, events) = {
+    let log = s.log.lock().unwrap();
+    let last = log.last();
+    let lost = !ours || after.saturating_add(1) < log.first;
+    let from = if ours {
+      after.saturating_add(1).max(log.first)
+    } else {
+      last.saturating_add(1)
+    };
+    let skip = from.saturating_sub(log.first) as usize;
+    let events: Vec<Arc<str>> = log.events.iter().skip(skip).cloned().collect();
+    (last, lost, events)
   };
-  let skip = from.saturating_sub(log.first) as usize;
-  let events: Vec<&str> = log.events.iter().skip(skip).map(String::as_str).collect();
-  let body = format!(
-    "{{\"epoch\":{},\"seq\":{},\"lost\":{lost},\"events\":[{}]}}",
-    s.epoch,
-    last,
-    events.join(",")
-  );
+  let (epoch, bytes) = (s.epoch, events.iter().map(|e| e.len()).sum::<usize>());
+  let join = move || {
+    format!(
+      "{{\"epoch\":{epoch},\"seq\":{last},\"lost\":{lost},\"events\":[{}]}}",
+      events.join(",")
+    )
+  };
+  let body = if bytes > BIG_BODY {
+    match tokio::task::spawn_blocking(join).await {
+      Ok(body) => body,
+      Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+  } else {
+    join()
+  };
   ([(header::CONTENT_TYPE, "application/json")], body).into_response()
 }
 

@@ -114,7 +114,7 @@ mod imp {
         }
       }
     });
-    RUNTIME.spawn(async { hub::open_all() });
+    RUNTIME.spawn_blocking(hub::open_all);
     Some(heard)
   }
 

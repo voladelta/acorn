@@ -110,6 +110,31 @@ async fn files_change_only_as_read() {
   assert!(caught.text.ends_with("read \"nope\" (failed)]"), "{}", caught.text);
 }
 
+/// A file tool ends within the call that made it: it waits on nothing,
+/// so it runs where Luau can't yield (a sort's order, a metamethod), and
+/// never changes a file after its call failed.
+#[tokio::test(flavor = "multi_thread")]
+async fn file_tools_run_where_luau_cant_wait() {
+  let dir = tempfile::tempdir().unwrap();
+  let cwd = dir.path();
+  std::fs::write(cwd.join("f.txt"), "one\n").unwrap();
+  let out = go(
+    cwd,
+    "local got = {}\n\
+     table.sort({1, 2}, function(a, b)\n\
+       got.read = read('f.txt')\n\
+       got.wrote = write('g.txt', 'hey')\n\
+       got.edit = edit('f.txt', 'one', '1')\n\
+       return a < b\n\
+     end)\n\
+     print(got.read, got.wrote)",
+  )
+  .await;
+  assert!(!out.fail && out.text.starts_with("one\n\t3\n"), "{}", out.text);
+  assert_eq!(std::fs::read_to_string(cwd.join("g.txt")).unwrap(), "hey");
+  assert_eq!(std::fs::read_to_string(cwd.join("f.txt")).unwrap(), "1\n");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_loop_runs_out_of_time_and_the_globals_stay() {
   let dir = tempfile::tempdir().unwrap();
