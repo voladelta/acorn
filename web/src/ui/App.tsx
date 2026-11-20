@@ -49,7 +49,7 @@ export function App() {
         onDragOver={(e: DragEvent) => e.preventDefault()}
         onDrop={(e: DragEvent) => {
           e.preventDefault();
-          void store.addPics(e.dataTransfer?.files ?? []);
+          void store.addPics(e.dataTransfer?.files ?? []).catch(e => store.note(String(e)));
         }}
       >
         <Side />

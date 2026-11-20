@@ -256,7 +256,14 @@ function reach(down: string | null) {
 export async function addPics(files: Iterable<File>) {
   const pics: Pic[] = [];
   for (const f of files) {
-    if (!attachable(f.type) || f.size > MOST) continue;
+    if (!attachable(f.type)) {
+      note(`${f.name}: unsupported file type.`);
+      continue;
+    }
+    if (f.size > MOST) {
+      note(`${f.name}: exceeds the 50 MB attachment limit.`);
+      continue;
+    }
     const b64 = await new Promise<string>((ok, no) => {
       const r = new FileReader();
       r.onload = () => ok(String(r.result).replace(/^data:[^,]*,/, ''));
