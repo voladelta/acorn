@@ -15,7 +15,8 @@
 - **Fix:** Match `@<username>` case-insensitively on ASCII bytes directly against the original string (Telegram usernames are ASCII `[A-Za-z0-9_]`), so byte offsets remain valid in `text`.
 
 ### 1.3 PID-reuse kill race on shell command timeout
-- **Location:** `core/src/machine.rs:185-192`
+- **Status:** Fixed in #8.
+- **Location:** `core/src/machine.rs:185-192` (before the fix)
 - **Problem:** When a command times out, `shell()` sends `SIGTERM` to `-pid` and spawns a detached task that sleeps `GRACE` (3 s) and unconditionally calls `signal(-pid, libc::SIGKILL)`. If the child exits immediately on `SIGTERM` and is reaped, that task still sends `SIGKILL` 3 seconds later—potentially to a reused PID/PGID.
 - **Fix:** Make the `SIGKILL` grace timer a `tokio::time::Sleep` arm inside the existing `tokio::select!` loop, guarded by `timed_out` and the group still existing (`alive(-pid)`), not by `status.is_none()`: the current SIGKILL also takes down background jobs in the group that ignore SIGTERM after the shell itself exits, and that must keep working.
 

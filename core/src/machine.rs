@@ -34,6 +34,9 @@ use tokio_util::sync::CancellationToken;
 const MAX_TIMEOUT_MS: f64 = 600_000.0;
 /// From SIGTERM to SIGKILL, as a command times out.
 const GRACE: Duration = Duration::from_secs(3);
+/// How often a timed out command's group is looked at, to end the call
+/// once it is empty.
+const GROUP_POLL: Duration = Duration::from_millis(20);
 /// The longest a process amid an exec is waited for to show its
 /// environment (`marked_pids`).
 #[cfg(target_os = "linux")]
@@ -127,9 +130,13 @@ impl Ran {
 
 /// Runs a command with `bash -c` in `workdir`, in its own process group,
 /// every process marked ACORN_RUN, its streams kept apart. On its timeout
-/// (ms, at most MAX_TIMEOUT_MS) it gets SIGTERM, then SIGKILL after GRACE.
+/// (ms, at most MAX_TIMEOUT_MS) the group gets SIGTERM, then SIGKILL after
+/// GRACE if any of it is left (the shell, or a job it started).
 /// It ends when the shell has exited and its streams have closed, or GRACE
 /// after the shell exited, whatever still holds them (a job left running).
+/// Timed out, it ends no sooner than its group is empty or got that
+/// SIGKILL: no signal is sent after it returns, when the group's id may
+/// name another.
 /// A stop kills the group and ends the wait at once.
 pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: CancellationToken) -> Result<Ran, String> {
   let timeout = timeout.min(MAX_TIMEOUT_MS);
@@ -203,7 +210,7 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
           signal(-pid, libc::SIGKILL);
         }
       }
-      () = tokio::time::sleep(Duration::from_millis(20)), if settled => {}
+      () = tokio::time::sleep(GROUP_POLL), if settled => {}
       () = cancel.cancelled() => {
         if group(pid, &exited) {
           signal(-pid, libc::SIGKILL);
@@ -228,9 +235,9 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
   })
 }
 
-/// A command's process group, killed if its run is dropped before it ends
-/// (a program gave the call up), so nothing it started runs on; 0 once it
-/// ended.
+/// A command's process group, with whether its shell exited: killed, if
+/// still there, when its run is dropped before it ends (a program gave the
+/// call up), so nothing it started runs on; 0 once it ended.
 struct Reap(i32, Arc<AtomicBool>);
 
 impl Drop for Reap {
@@ -827,7 +834,7 @@ mod tests {
   #[test]
   fn shell_timeout_escalates_to_sigkill_for_shell_and_group() {
     let t = std::time::Instant::now();
-    let fast = run("sleep 5", 100.0);
+    let fast = run("sleep 5 | sleep 5", 100.0);
     assert!(fast.timed_out && fast.code() == 128 + libc::SIGTERM);
     assert!(t.elapsed() < GRACE, "exiting on SIGTERM settles without waiting GRACE");
 
@@ -840,11 +847,16 @@ mod tests {
     );
     assert!(bg.timed_out);
     let pid: i32 = bg.tails().0.trim().parse().unwrap();
+    // killed, it may wait a moment to be reaped
+    #[cfg(target_os = "linux")]
+    let dead = || zombie(Path::new(&format!("/proc/{pid}")));
+    #[cfg(not(target_os = "linux"))]
+    let dead = || !alive(pid);
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    while alive(pid) && std::time::Instant::now() < deadline {
+    while !dead() && std::time::Instant::now() < deadline {
       std::thread::sleep(Duration::from_millis(10));
     }
-    let gone = !alive(pid);
+    let gone = dead();
     if !gone {
       signal(pid, libc::SIGKILL);
     }
