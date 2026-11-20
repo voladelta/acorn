@@ -32,12 +32,15 @@
 - **`core/src/luau.rs:854-861`:** `__view` calls `std::fs::read(&file)` before checking `bytes.len() > VIEW_BYTES` (unlike `send_file` and `machine::text`, which check `metadata()` first). Check `metadata().is_file()` and `metadata().len() <= VIEW_BYTES` before reading.
   - **Status:** Fixed in #6.
 - **`core/src/memory/images.rs:161-172`:** `fitted()` calls `image::load_from_memory(bytes)` *before* checking `(w as u64) * (h as u64) <= PIXELS`, so that check never guards the decode. `image` 0.25's default `Limits` (512 MiB `max_alloc`) still bounds a decompression bomb, so this is low severity; inspect dimensions first via `ImageReader::into_dimensions()` or set explicit `image::Limits`.
+  - **Status:** Fixed in #11: dimensions are read from the header first; an image over `PIXELS` goes as is, undecoded.
 - **`bridges/telegram/src/api.rs:162-183`:** `download()` has no streaming size cap when `file_size` is absent, and ignores `cancel` during the HTTP GET and `res.bytes().await`.
+  - **Status:** Fixed in #11: `Content-Length` and the bytes as they stream are held to `FILE_BYTES`, and `cancel` ends the download.
 
 ### 1.6 Missing RAII guards on shared state across `.await` / panics
 - **`core/src/ai/agent.rs:257-313`:** `pace::hold` / `pace::free` is tracked with a manual `bool` (`asking`). Any panic or early future drop permanently leaks `room.busy > 0`, starving yielding/import calls for the rest of the process lifetime. Wrap in a `Drop` guard like `pace::Seat` and `cache::Flight`.
   - **Status:** Fixed in #6.
 - **`core/src/chat/mod.rs:312-323`:** `Engine::writing` sets `chat.held = Some(Vec::new())` and only drains it after `write().await`. If `write()` panics or is cancelled, `chat.held` remains `Some(...)`, silently buffering subsequent `chat.hold(...)` callbacks.
+  - **Status:** Fixed in #11: a `Drop` guard (`Release`) takes `chat.held` however the post ends.
 
 ### 1.7 Cancellation ignored in Telegram reconnect sleeps
 - **Status:** Fixed in #6.
@@ -68,12 +71,13 @@
 - **Fix:** Quote `method` with `quote(method)` (or validate against `^[A-Z]+$`).
 
 ### 2.3 Purged secrets bypass redaction in streaming deltas and thinking entries
+- **Status:** Fixed in #11: `Kind::Mind` entries are redacted; deltas pass through `veil`, which keeps back an end that may begin a secret, so one split across deltas is never shown; what already streams is redacted at the purge.
 - **Location:** `core/src/chat/turns.rs:479-515`
 - **Problem:** `Chat::purge_text` records purged secrets in `self.secrets` so `Chat::push` redacts future logged messages, but `AiEvent::Delta` and `Kind::Mind` entries are emitted directly via `self.all(...)` without passing through `self.redact(...)`.
 - **Fix:** Apply `self.redact(...)` to `Kind::Mind` entries and (where practical) buffered delta output when `self.secrets` is non-empty.
 
 ### 2.4 Open-redirect pattern & missing `Secure` cookie flag in `acorn-server`
-- **Status:** Redirect fixed in #6; `Secure` cookie option still open.
+- **Status:** Redirect fixed in #6; `Secure` cookie fixed in #11 (`--secure`, or `X-Forwarded-Proto: https`).
 - **Location:** `server/src/main.rs:243-252`
 - **Problem:** `Redirect::to(req.uri().path())` allows protocol-relative redirects (`//evil.com/?token=...`) if the token is known (low severity: whoever holds the token already has full access). Additionally, the `acorn_token` cookie omits `; Secure` even when deployed behind HTTPS.
 - **Fix:** Collapse/reject leading `//` in redirect paths and provide a `--secure` option (or detect HTTPS) to set `; Secure` on the cookie.
@@ -82,11 +86,14 @@
 - **`core/src/assistant/store.rs:149-155`:** `assistants.json` is written directly with `std::fs::write`, while `saved()` reads without holding `FILING`. Concurrent readers (e.g. `/api/hello`) can observe truncated JSON and silently fall back to an empty list. Write via temp file + rename.
   - **Status:** Fixed in #6.
 - **`bridges/telegram/src/rooms.rs:116-123` vs `168-178`:** `sweep()` reads `<id>.jsonl`, filters old lines, and renames `<id>.part` over it without locking against concurrent `heard()` appends, risking silent loss of messages received mid-sweep.
+  - **Status:** Fixed in #11: appends, the sweep's rewrite, `forget` and `moved` share one lock (`FILING`).
 - **`core/src/extend.rs:83-93`:** `put()` names its temp file using only `std::process::id()`, so concurrent `extend` calls in the same process for the same skill/plugin collide on the same `.tmp` file.
   - **Status:** Fixed in #6.
 - **`core/src/timers.rs:192-206, 221-229`:** In-memory `BOOK` is mutated before `save(&book)?`; a failed save leaves in-memory timers out of sync with `timers.json`.
+  - **Status:** Fixed in #11: a failed save undoes the change to `BOOK`.
 
 ### 2.6 No session expiration or revocation in `acorn-host`
+- **Status:** Fixed in #11: a session ends a year after it was made (`SESSION_SECS`, the cookie's `Max-Age`), and `acorn-host signout <user-id>` revokes a person's sessions and unused links.
 - **Location:** `host/src/store.rs:41-46`
 - **Problem:** `Session::created` is stored in `host.json` but never checked for expiration, and there is no CLI command to revoke a compromised device session or disable a user.
 

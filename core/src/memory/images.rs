@@ -160,15 +160,24 @@ struct Fitted {
 /// larger one goes as is).
 fn fitted(bytes: &[u8]) -> Result<Fitted> {
   let kind = image_kind(bytes).context(IMAGES_ARE)?;
+  // its size is read off its header: one over PIXELS is never decoded
+  let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes))
+    .with_guessed_format()
+    .ok()
+    .and_then(|r| r.into_dimensions().ok())
+    .context(IMAGES_ARE)?;
+  let as_is = Fitted {
+    kind,
+    small: None,
+    size: (w, h),
+  };
+  if (w as u64) * (h as u64) > PIXELS {
+    return Ok(as_is);
+  }
   let img = image::load_from_memory(bytes).context(IMAGES_ARE)?;
-  let (w, h) = (img.width(), img.height());
   let k = (FIT / w.max(h) as f64).min(1.0);
-  if !((k < 1.0 || bytes.len() > IMAGE) && (w as u64) * (h as u64) <= PIXELS) {
-    return Ok(Fitted {
-      kind,
-      small: None,
-      size: (w, h),
-    });
+  if !(k < 1.0 || bytes.len() > IMAGE) {
+    return Ok(as_is);
   }
   let small = img.resize_exact(
     ((w as f64 * k).round() as u32).max(1),
@@ -237,6 +246,26 @@ mod tests {
     let small = image::load_from_memory(&fitted.small.unwrap()).unwrap();
     assert!(small.width() > 0);
     assert_eq!(small.height(), 1);
+  }
+
+  #[test]
+  fn an_image_over_the_pixels_goes_as_is_undecoded() {
+    let mut png = Vec::new();
+    image::RgbImage::new(2, 2)
+      .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+      .unwrap();
+    // its header says 40000 x 40000, over PIXELS; its data is for 2 x 2,
+    // so a decode would fail
+    png[16..20].copy_from_slice(&40000u32.to_be_bytes());
+    png[20..24].copy_from_slice(&40000u32.to_be_bytes());
+    let crc = png[12..29].iter().fold(!0u32, |crc, &b| {
+      (0..8).fold(crc ^ b as u32, |c, _| (c >> 1) ^ (0xEDB8_8320 & (c & 1).wrapping_neg()))
+    });
+    png[29..33].copy_from_slice(&(!crc).to_be_bytes());
+    assert!(image::load_from_memory(&png).is_err());
+    let fitted = fitted(&png).unwrap();
+    assert_eq!(fitted.size, (40000, 40000));
+    assert!(fitted.small.is_none());
   }
 
   #[test]

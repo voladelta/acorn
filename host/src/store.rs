@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 /// How long a join code is good for.
 pub const CODE_SECS: u64 = 7 * 24 * 3600;
+/// How long a session signs its device in: as long as its cookie lasts.
+pub const SESSION_SECS: u64 = 365 * 24 * 3600;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Book {
@@ -43,6 +45,13 @@ pub struct Session {
   pub hash: String,
   pub user: String,
   pub created: u64,
+}
+
+impl Session {
+  /// Whether it still signs its device in at `now`.
+  pub fn live(&self, now: u64) -> bool {
+    now < self.created.saturating_add(SESSION_SECS)
+  }
 }
 
 pub fn now() -> u64 {
@@ -144,6 +153,7 @@ impl Store {
     let out = f(&mut book);
     let now = now();
     book.codes.retain(|c| c.expires > now);
+    book.sessions.retain(|s| s.live(now));
     let text = serde_json::to_string_pretty(&book).map_err(|e| e.to_string())?;
     let tmp = self.dir.join(format!("host.json.{}", std::process::id()));
     std::fs::OpenOptions::new()
@@ -234,15 +244,30 @@ impl Store {
       Some((user, session))
     })
   }
+
+  /// Signs a person out of every device, their unused join codes gone
+  /// too: how many sessions ended (None: no such person). `link` lets
+  /// them back in.
+  pub fn signout(&self, id: &str) -> Result<Option<usize>, String> {
+    self.change(|book| {
+      book.people.iter().any(|p| p.id == id).then(|| {
+        let before = book.sessions.len();
+        book.sessions.retain(|s| s.user != id);
+        book.codes.retain(|c| c.user != id);
+        before - book.sessions.len()
+      })
+    })
+  }
 }
 
-/// Whose session `value` is, in `book`.
+/// Whose session `value` is, in `book`, if it hasn't expired.
 pub fn who(book: &Book, value: &str) -> Option<String> {
   let hash = sha256(value);
+  let now = now();
   // every one compared, so the time doesn't tell which matched
   let mut found = None;
   for s in &book.sessions {
-    if same(&s.hash, &hash) {
+    if same(&s.hash, &hash) && s.live(now) {
       found = Some(s.user.clone());
     }
   }
@@ -253,4 +278,42 @@ pub fn who(book: &Book, value: &str) -> Option<String> {
 pub fn make_dir(dir: &Path) -> Result<(), String> {
   std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
   std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("{}: {e}", dir.display()))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_session_ends_with_its_year_or_a_signout() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = Store::new(dir.path());
+    let (id, code) = st.invite("Mom").unwrap();
+    let (other, other_code) = st.invite("Dad").unwrap();
+    let (_, session) = st.join(&code).unwrap().unwrap();
+    let (_, others) = st.join(&other_code).unwrap().unwrap();
+    assert_eq!(who(&st.read().unwrap(), &session), Some(id.clone()));
+
+    // a session older than its cookie signs no one in, and is dropped
+    st.change(|book| book.sessions[0].created = now() - SESSION_SECS)
+      .unwrap();
+    let book = st.read().unwrap();
+    assert_eq!(who(&book, &session), None);
+    assert_eq!(book.sessions.len(), 1, "the next change dropped it");
+    assert_eq!(who(&book, &others), Some(other.clone()));
+
+    // signed out: every device of theirs, and the links not yet used
+    let (_, session) = st.join(&st.link(&id).unwrap()).unwrap().unwrap();
+    let unused = st.link(&id).unwrap();
+    assert_eq!(st.signout(&id).unwrap(), Some(1));
+    let book = st.read().unwrap();
+    assert_eq!(who(&book, &session), None);
+    assert!(!st.live(&unused).unwrap());
+    assert_eq!(who(&book, &others), Some(other), "no one else's");
+    assert_eq!(st.signout("u000000000").unwrap(), None);
+    assert!(
+      st.join(&st.link(&id).unwrap()).unwrap().is_some(),
+      "a new link lets them back in"
+    );
+  }
 }

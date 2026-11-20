@@ -113,7 +113,12 @@ pub fn heard(tg: &Tg, room: i64, msg: &Value, edited: bool) {
   }
 }
 
+/// Held by whatever changes a room's file, so the sweep's rewrite loses
+/// no message heard meanwhile.
+static FILING: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 fn append(tg: &Tg, room: i64, line: &Line) -> std::io::Result<()> {
+  let _filing = FILING.lock();
   std::fs::create_dir_all(dir(tg))?;
   let mut f = std::fs::OpenOptions::new()
     .create(true)
@@ -133,11 +138,13 @@ pub fn lines(tg: &Tg, room: i64) -> Vec<Line> {
 
 /// A room's messages erased.
 pub fn forget(tg: &Tg, room: i64) {
+  let _filing = FILING.lock();
   let _ = std::fs::remove_file(file(tg, room));
 }
 
 /// A room's messages under its new id.
 pub fn moved(tg: &Tg, from: i64, to: i64) {
+  let _filing = FILING.lock();
   let _ = std::fs::rename(file(tg, from), file(tg, to));
 }
 
@@ -161,6 +168,7 @@ pub fn sweep(tg: &Tg, now: i64) {
     else {
       continue;
     };
+    let _filing = FILING.lock();
     if !allowed.contains(&id) {
       let _ = std::fs::remove_file(&path);
       continue;

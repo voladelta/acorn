@@ -167,18 +167,33 @@ impl Bot {
     let path = got["file_path"]
       .as_str()
       .ok_or_else(|| Fail::Refused("no file path".into()))?;
-    let res = self
-      .client
-      .get(format!("{}/{path}", self.files))
-      .timeout(Duration::from_secs(120))
-      .send()
-      .await
-      .and_then(|r| r.error_for_status())
-      .map_err(|e| Fail::Down(format!("download: {}", e.without_url())))?;
-    let bytes = res
-      .bytes()
-      .await
-      .map_err(|e| Fail::Down(format!("download: {}", e.without_url())))?;
-    Ok(bytes.to_vec())
+    let down = |e: reqwest::Error| Fail::Down(format!("download: {}", e.without_url()));
+    let over = || Fail::Refused("over 20 MB, the most a bot may download".into());
+    let get = async {
+      let mut res = self
+        .client
+        .get(format!("{}/{path}", self.files))
+        .timeout(Duration::from_secs(120))
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(down)?;
+      if res.content_length().is_some_and(|s| s > FILE_BYTES) {
+        return Err(over());
+      }
+      // getFile may not say the size: the bytes are counted as they come
+      let mut bytes = Vec::new();
+      while let Some(chunk) = res.chunk().await.map_err(down)? {
+        if (bytes.len() + chunk.len()) as u64 > FILE_BYTES {
+          return Err(over());
+        }
+        bytes.extend_from_slice(&chunk);
+      }
+      Ok(bytes)
+    };
+    tokio::select! {
+        got = get => got,
+        _ = cancel.cancelled() => Err(Fail::Stopped),
+    }
   }
 }

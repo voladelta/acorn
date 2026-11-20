@@ -12,7 +12,7 @@
 //! (every call's, or why there was none) sent to its asker; one that
 //! asked for an import begins it.
 
-use super::{Chat, Engine, Phase, Span};
+use super::{Chat, Engine, Phase, Span, veil};
 use crate::ai::{self, Event as AiEvent};
 use crate::memory::{self, Msg, Part};
 use crate::wire::{Event, Live, live_push};
@@ -476,7 +476,24 @@ impl Chat {
       self.asks(&ev);
     }
     match ev {
-      AiEvent::Delta { kind, text, fresh } => {
+      AiEvent::Delta { kind, mut text, fresh } => {
+        if !self.secrets.is_empty() || !self.tail_of(agent).is_empty() {
+          let mut tail = std::mem::take(self.tail_of(agent));
+          let last = self.live_of(agent).last().map(|l| l.kind);
+          if let Some(last) = last.filter(|&last| (fresh || last != kind) && !tail.is_empty()) {
+            // what was kept back of the part before began no secret
+            let text = std::mem::take(&mut tail);
+            live_push(self.live_of(agent), last, &text, false);
+            self.all(Event::Delta {
+              agent: agent.map(str::to_string),
+              kind: last,
+              text,
+              fresh: false,
+            });
+          }
+          text = veil(&self.secrets, &mut tail, &text);
+          *self.tail_of(agent) = tail;
+        }
         live_push(self.live_of(agent), kind, &text, fresh);
         self.all(Event::Delta {
           agent: agent.map(str::to_string),
@@ -500,7 +517,7 @@ impl Chat {
       } => {
         let entry = crate::wire::Entry {
           kind: Kind::Mind,
-          text,
+          text: self.redact(&text),
           date: memory::iso_now(),
           images: vec![],
           spend: None,
@@ -529,10 +546,17 @@ impl Chat {
     self.set_live(agent, waiting);
   }
 
-  fn live_of(&mut self, agent: Option<&str>) -> &mut Vec<Live> {
+  pub(super) fn live_of(&mut self, agent: Option<&str>) -> &mut Vec<Live> {
     match agent.and_then(|name| self.agents.get_mut(name)) {
       Some(a) => &mut a.live,
       None => &mut self.live,
+    }
+  }
+
+  fn tail_of(&mut self, agent: Option<&str>) -> &mut String {
+    match agent.and_then(|name| self.agents.get_mut(name)) {
+      Some(a) => &mut a.tail,
+      None => &mut self.tail,
     }
   }
 
@@ -593,6 +617,8 @@ impl Chat {
 
   /// What streams for the chat (agent: None) or an agent, set and told.
   pub(super) fn set_live(&mut self, agent: Option<&str>, live: Vec<Live>) {
+    let live = self.redacted(live);
+    self.tail_of(agent).clear();
     self.live_of(agent).clone_from(&live);
     self.all(Event::Live {
       agent: agent.map(str::to_string),

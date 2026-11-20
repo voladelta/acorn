@@ -99,7 +99,7 @@ The window runs in a browser as an Octane page (`web/`: Vite, Base UI and shadcn
 cargo run --release -p acorn-server
 ```
 
-Open the link it prints (`http://127.0.0.1:8484/?token=...`): the token becomes a cookie, and every request needs it, since the agent runs commands there. The token is kept in `$ACORN_DIR/server-token`, unless `ACORN_TOKEN` is set. `--addr HOST:PORT` (or `ACORN_ADDR`) listens elsewhere; on anything but localhost, put it behind HTTPS. `--unix PATH` listens on a Unix socket instead. `--web DIR` (or `ACORN_WEB`) serves another build.
+Open the link it prints (`http://127.0.0.1:8484/?token=...`): the token becomes a cookie, and every request needs it, since the agent runs commands there. The token is kept in `$ACORN_DIR/server-token`, unless `ACORN_TOKEN` is set. `--addr HOST:PORT` (or `ACORN_ADDR`) listens elsewhere; on anything but localhost, put it behind HTTPS, with `--secure` so the cookie is sent over HTTPS only (a proxy's `X-Forwarded-Proto: https` does the same). `--unix PATH` listens on a Unix socket instead. `--web DIR` (or `ACORN_WEB`) serves another build.
 
 The server and the desktop app both hear every chat, so don't run both on the same `$ACORN_DIR` at once.
 
@@ -114,10 +114,11 @@ cargo build --release -p acorn-server -p acorn-host
 acorn-host serve --public https://acorn.example.com   # [--addr 127.0.0.1:8080] [--data DIR] [--web DIR]
 acorn-host invite Mom      # a new person: prints https://acorn.example.com/join/<code>
 acorn-host link u1a2b3c4d5 # another link for them (a second device)
+acorn-host signout u1a2b3c4d5 # sign them out of every device (a lost one); a new link lets them back in
 acorn-host users           # id, name, created, up or down
 ```
 
-A link shows a sign-in button (so a chat app's link preview doesn't use it up), signs in once when pressed, and is good for 7 days; another site can't press it for you. The data dir is `$ACORN_HOST_DIR`, else `~/.acorn-host`; its `config.json` holds `deepseek_api_key` (or set `DEEPSEEK_API_KEY`) and `budget`, USD a day per person (1 by default). Put it behind HTTPS (Caddy, or a Cloudflare Tunnel).
+A link shows a sign-in button (so a chat app's link preview doesn't use it up), signs in once when pressed, and is good for 7 days; another site can't press it for you. A device stays signed in for a year, or till `signout`. The data dir is `$ACORN_HOST_DIR`, else `~/.acorn-host`; its `config.json` holds `deepseek_api_key` (or set `DEEPSEEK_API_KEY`) and `budget`, USD a day per person (1 by default). Put it behind HTTPS (Caddy, or a Cloudflare Tunnel).
 
 Each person's agent can read the DeepSeek key (it is in their server's environment), so for now invite only people you would hand it to, and use a key with little credit. The network is shared, so a service on the machine's localhost with no password of its own is open to every person's agent. The shared network namespace also exposes abstract Unix sockets, including ones used by some X11 and D-Bus setups.
 
