@@ -133,7 +133,7 @@ pub fn html(md: &str) -> String {
       }
       let class = match lang.trim() {
         "" => String::new(),
-        lang => format!(" class=\"language-{}\"", escape(lang)),
+        lang => format!(" class=\"language-{}\"", escape(lang).replace('"', "&quot;")),
       };
       out.push_str(&format!(
         "<pre><code{class}>{}</code></pre>\n",
@@ -260,6 +260,10 @@ mod tests {
 
   #[test]
   fn markup_that_doesnt_close_stays_as_written() {
+    assert_eq!(
+      html("```a\"b&c\nx\n```"),
+      "<pre><code class=\"language-a&quot;b&amp;c\">x</code></pre>"
+    );
     assert_eq!(html("snake_case_name and 2*3*4"), "snake_case_name and 2*3*4");
     assert_eq!(html("a **b"), "a **b");
     assert_eq!(html("[x](javascript:alert)"), "[x](javascript:alert)");
