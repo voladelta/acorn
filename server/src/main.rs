@@ -248,7 +248,8 @@ async fn guard(State(s): State<Server>, req: Request, next: Next) -> Response {
         "{COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000",
         s.token
       );
-      let mut res = Redirect::to(req.uri().path()).into_response();
+      let path = format!("/{}", req.uri().path().trim_start_matches('/'));
+      let mut res = Redirect::to(&path).into_response();
       res.headers_mut().insert(header::SET_COOKIE, cookie.parse().unwrap());
       return res;
     }
