@@ -256,7 +256,7 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
     .map_or_else(|| MODEL.to_string(), |import| format!("{MODEL} {import}"));
   let mut asking = None;
   let mut k = 1;
-  let step = loop {
+  loop {
     if cancel.is_cancelled() {
       break fail("stopped", &[], Halt::Lost);
     }
@@ -308,8 +308,7 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
     });
     let jitter = rand::random::<f64>() * 0.5;
     nap(Duration::from_secs_f64(wait + jitter), cancel).await;
-  };
-  step
+  }
 }
 
 /// A request sent: the wait its response asked for (retry-after, s), its
