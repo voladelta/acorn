@@ -252,7 +252,8 @@ function reach(down: string | null) {
 }
 
 /** Files join those waiting, read as base64: images, videos, sounds and
- * PDFs, each of 50 MB at most. */
+ * PDFs, each of 50 MB at most. Those skipped, or that fail to read, are
+ * told in one note; the rest still join. */
 export async function addPics(files: Iterable<File>) {
   const pics: Pic[] = [];
   const skipped: string[] = [];
@@ -265,12 +266,18 @@ export async function addPics(files: Iterable<File>) {
       skipped.push(`${f.name}: exceeds the 50 MB attachment limit.`);
       continue;
     }
-    const b64 = await new Promise<string>((ok, no) => {
-      const r = new FileReader();
-      r.onload = () => ok(String(r.result).replace(/^data:[^,]*,/, ''));
-      r.onerror = () => no(r.error);
-      r.readAsDataURL(f);
-    });
+    let b64: string;
+    try {
+      b64 = await new Promise<string>((ok, no) => {
+        const r = new FileReader();
+        r.onload = () => ok(String(r.result).replace(/^data:[^,]*,/, ''));
+        r.onerror = () => no(r.error);
+        r.readAsDataURL(f);
+      });
+    } catch (err) {
+      skipped.push(`${f.name}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
     pics.push({ b64, url: URL.createObjectURL(f), name: f.name, image: f.type.startsWith('image/') });
   }
   if (pics.length) set({ pics: [...ui.pics, ...pics] });

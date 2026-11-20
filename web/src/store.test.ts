@@ -18,7 +18,7 @@ test('attachments report skipped files and preserve an empty selection', async (
   store.note(null);
 });
 
-test('attachments read supported files and propagate reader failures', async () => {
+test('attachments read supported files and report reader failures', async () => {
   const original = globalThis.FileReader;
   let fail = false;
   class Reader {
@@ -38,8 +38,27 @@ test('attachments read supported files and propagate reader failures', async () 
     assert.equal(store.get().pics.at(-1)?.name, 'picture.png');
     store.dropPic(store.get().pics.length - 1);
     fail = true;
-    await assert.rejects(store.addPics([new File(['hello'], 'broken.pdf', { type: 'application/pdf' })]), /Could not read attachment/);
+    await store.addPics([new File(['hello'], 'broken.pdf', { type: 'application/pdf' })]);
+    assert.match(store.get().toast!, /broken.pdf: Could not read attachment/);
     assert.equal(store.get().pics.length, 0);
+    // a failure mid-batch keeps the files read and reports the rest
+    class Mixed extends Reader {
+      readAsDataURL() {
+        fail = !fail;
+        super.readAsDataURL();
+      }
+    }
+    globalThis.FileReader = Mixed as unknown as typeof FileReader;
+    fail = true;
+    await store.addPics([
+      new File(['a'], 'a.png', { type: 'image/png' }),
+      new File(['b'], 'b.png', { type: 'image/png' }),
+      new File(['c'], 'c.txt', { type: 'text/plain' }),
+    ]);
+    assert.deepEqual(store.get().pics.map((p) => p.name), ['a.png']);
+    assert.match(store.get().toast!, /b.png: Could not read attachment.*c.txt: unsupported file type/);
+    store.dropPic(0);
+    store.note(null);
   } finally {
     globalThis.FileReader = original;
   }
