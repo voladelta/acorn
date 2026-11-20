@@ -187,7 +187,10 @@ impl Tg {
         Err(Fail::Stopped) => return,
         Err(Fail::Down(why)) => {
           eprintln!("acorn: telegram: {why}");
-          tokio::time::sleep(wait).await;
+          tokio::select! {
+            _ = self.stop.cancelled() => return,
+            _ = tokio::time::sleep(wait) => {}
+          }
           wait = (wait * 2).min(Duration::from_secs(300));
         }
         Err(why) => {
@@ -237,11 +240,17 @@ impl Tg {
               me.username
             ));
           }
-          tokio::time::sleep(Duration::from_secs(POLL / 2)).await;
+          tokio::select! {
+            _ = self.stop.cancelled() => return,
+            _ = tokio::time::sleep(Duration::from_secs(POLL / 2)) => {}
+          }
         }
         Err(why) => {
           eprintln!("acorn: telegram: {why}");
-          tokio::time::sleep(wait).await;
+          tokio::select! {
+            _ = self.stop.cancelled() => return,
+            _ = tokio::time::sleep(wait) => {}
+          }
           wait = (wait * 2).min(Duration::from_secs(300));
         }
       }
