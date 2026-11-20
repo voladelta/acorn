@@ -255,8 +255,16 @@ function reach(down: string | null) {
  * PDFs, each of 50 MB at most. */
 export async function addPics(files: Iterable<File>) {
   const pics: Pic[] = [];
+  const skipped: string[] = [];
   for (const f of files) {
-    if (!attachable(f.type) || f.size > MOST) continue;
+    if (!attachable(f.type)) {
+      skipped.push(`${f.name}: unsupported file type.`);
+      continue;
+    }
+    if (f.size > MOST) {
+      skipped.push(`${f.name}: exceeds the 50 MB attachment limit.`);
+      continue;
+    }
     const b64 = await new Promise<string>((ok, no) => {
       const r = new FileReader();
       r.onload = () => ok(String(r.result).replace(/^data:[^,]*,/, ''));
@@ -266,6 +274,7 @@ export async function addPics(files: Iterable<File>) {
     pics.push({ b64, url: URL.createObjectURL(f), name: f.name, image: f.type.startsWith('image/') });
   }
   if (pics.length) set({ pics: [...ui.pics, ...pics] });
+  if (skipped.length) note(skipped.join(' '));
 }
 
 export function dropPic(k: number) {

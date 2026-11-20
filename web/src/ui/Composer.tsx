@@ -150,7 +150,7 @@ export function Composer() {
           hidden
           onChange={(e: Event) => {
             const input = e.currentTarget as HTMLInputElement;
-            void store.addPics(input.files ?? []);
+            void store.addPics(input.files ?? []).catch(e => store.note(String(e)));
             input.value = '';
           }}
         />
@@ -173,7 +173,7 @@ export function Composer() {
             const pics = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
             if (pics.length) {
               if (!e.clipboardData?.getData('text')) e.preventDefault();
-              void store.addPics(pics);
+              void store.addPics(pics).catch(e => store.note(String(e)));
             }
           }}
         />
