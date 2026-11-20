@@ -34,6 +34,10 @@ use tokio_util::sync::CancellationToken;
 const MAX_TIMEOUT_MS: f64 = 600_000.0;
 /// From SIGTERM to SIGKILL, as a command times out.
 const GRACE: Duration = Duration::from_secs(3);
+/// The longest a process amid an exec is waited for to show its
+/// environment (`marked_pids`).
+#[cfg(target_os = "linux")]
+const EXEC_WAIT: Duration = Duration::from_millis(20);
 /// The bytes of each of a command's streams kept: their tail.
 pub const OUTPUT_BYTES: usize = 64_000;
 /// The most of a stream its spill file keeps.
@@ -300,6 +304,76 @@ fn signal(pid: i32, sig: i32) {
   }
 }
 
+/// The processes of this user's whose environment holds `mark`
+/// (`KEY=VALUE`), but for this one. A process amid an exec shows no
+/// environment for a moment: one that shows none is read again for up
+/// to EXEC_WAIT, unless it is a zombie, which never has one.
+#[cfg(target_os = "linux")]
+fn marked_pids(mark: &str) -> Vec<i32> {
+  // SAFETY: getuid has no preconditions.
+  let uid = unsafe { libc::getuid() };
+  let me = std::process::id() as i32;
+  let Ok(entries) = fs::read_dir("/proc") else {
+    return Vec::new();
+  };
+  let mut pids = Vec::new();
+  for entry in entries.flatten() {
+    let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<i32>().ok()) else {
+      continue;
+    };
+    let dir = entry.path();
+    if pid == me || !fs::metadata(&dir).is_ok_and(|m| m.uid() == uid) {
+      continue;
+    }
+    let since = std::time::Instant::now();
+    let env = loop {
+      // one that may not be read cannot be told, and is left
+      let Ok(env) = fs::read(dir.join("environ")) else {
+        break Vec::new();
+      };
+      if !env.is_empty() || since.elapsed() >= EXEC_WAIT || zombie(&dir) {
+        break env;
+      }
+      std::thread::sleep(Duration::from_millis(1));
+    };
+    if env.split(|&b| b == 0).any(|kv| kv == mark.as_bytes()) {
+      pids.push(pid);
+    }
+  }
+  pids
+}
+
+/// Whether a process (by its /proc dir) is a zombie, or gone.
+#[cfg(target_os = "linux")]
+fn zombie(dir: &Path) -> bool {
+  let stat = fs::read_to_string(dir.join("stat")).unwrap_or_default();
+  // its state follows its name, which is in the last parentheses
+  stat
+    .rsplit_once(')')
+    .is_none_or(|(_, rest)| rest.trim_start().starts_with(['Z', 'X']))
+}
+
+/// Processes owned by this user whose environment carries `mark`
+/// (`KEY=VALUE`), excluding this process itself.
+#[cfg(not(target_os = "linux"))]
+fn marked_pids(mark: &str) -> Vec<i32> {
+  // SAFETY: getuid has no preconditions.
+  let uid = unsafe { libc::getuid() }.to_string();
+  let me = std::process::id() as i32;
+  let Ok(ps) = std::process::Command::new("ps")
+    .args(["-wwE", "-U", &uid, "-o", "pid=,command="])
+    .output()
+  else {
+    return Vec::new();
+  };
+  String::from_utf8_lossy(&ps.stdout)
+    .lines()
+    .filter(|l| l.contains(mark))
+    .filter_map(|l| l.split_whitespace().next().and_then(|p| p.parse::<i32>().ok()))
+    .filter(|&pid| pid > 0 && pid != me)
+    .collect()
+}
+
 /// As Acorn quits: kills every shell's process group (a job still in it
 /// dies), then any process that left its group (ACORN_RUN), so none is
 /// left orphaned.
@@ -309,22 +383,9 @@ pub fn end() {
       signal(-pid, libc::SIGKILL);
     }
   }
-  // SAFETY: getuid has no preconditions.
-  let uid = unsafe { libc::getuid() }.to_string();
-  let Ok(ps) = std::process::Command::new("ps")
-    .args(["-wwE", "-U", &uid, "-o", "pid=,command="])
-    .output()
-  else {
-    return;
-  };
   let mark = format!("ACORN_RUN={}", *RUN);
-  for line in String::from_utf8_lossy(&ps.stdout)
-    .lines()
-    .filter(|l| l.contains(&mark))
-  {
-    if let Some(pid) = line.split_whitespace().next().and_then(|p| p.parse().ok()) {
-      signal(pid, libc::SIGKILL);
-    }
+  for pid in marked_pids(&mark) {
+    signal(pid, libc::SIGKILL);
   }
 }
 
@@ -739,5 +800,63 @@ mod tests {
     let shut = run("exec >&- 2>&-; sleep 3", 300.0);
     assert!(shut.timed_out && shut.code() == 128 + libc::SIGTERM);
     assert_eq!(run("kill -USR1 $$", 10_000.0).code(), 128 + libc::SIGUSR1);
+  }
+
+  #[test]
+  fn marked_pids_finds_detached_child_by_env() {
+    use std::os::unix::process::CommandExt as _;
+    let token = format!("{:016x}", rand::random::<u64>());
+    let mark = format!("ACORN_RUN={token}");
+    let mut child = std::process::Command::new("sleep")
+      .arg("60")
+      .env("ACORN_RUN", &token)
+      .stdin(std::process::Stdio::null())
+      .stdout(std::process::Stdio::null())
+      .stderr(std::process::Stdio::null())
+      .process_group(0)
+      .spawn()
+      .unwrap();
+    let pid = child.id() as i32;
+    let found = marked_pids(&mark);
+    let prefix_miss = marked_pids(&format!("ACORN_RUN={token}x"));
+    let key_miss = marked_pids(&format!("OTHER_ACORN_RUN={token}"));
+    signal(pid, libc::SIGKILL);
+    let _ = child.wait();
+    assert!(found.contains(&pid), "expected pid {pid} in {found:?}");
+    assert!(!prefix_miss.contains(&pid));
+    assert!(!key_miss.contains(&pid));
+  }
+
+  #[cfg(target_os = "linux")]
+  #[test]
+  fn a_job_that_left_its_shells_group_is_still_marked() {
+    let ran = run("setsid sleep 60 >/dev/null 2>&1 & echo $!", 10_000.0);
+    let pid: i32 = ran.tails().0.trim().parse().unwrap();
+    // SAFETY: getpgid only reads.
+    let left = || unsafe { libc::getpgid(pid) } == pid;
+    let t = std::time::Instant::now();
+    // the job takes a moment to leave the group
+    while !left() && t.elapsed() < Duration::from_secs(5) {
+      std::thread::sleep(Duration::from_millis(1));
+    }
+    let (left, found) = (left(), marked_pids(&format!("ACORN_RUN={}", *RUN)));
+    signal(pid, libc::SIGKILL);
+    assert!(left, "setsid gives the job its own group");
+    assert!(found.contains(&pid), "expected pid {pid} in {found:?}");
+  }
+
+  #[cfg(target_os = "linux")]
+  #[test]
+  fn a_zombie_is_told_from_a_process_that_runs() {
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dir = PathBuf::from(format!("/proc/{}", child.id()));
+    let t = std::time::Instant::now();
+    while !zombie(&dir) && t.elapsed() < Duration::from_secs(5) {
+      std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(zombie(&dir), "exited and not yet waited for");
+    assert!(!zombie(Path::new("/proc/self")));
+    child.wait().unwrap();
+    assert!(zombie(&dir), "gone");
   }
 }

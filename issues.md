@@ -2,8 +2,9 @@
 
 ## 1. Bugs & Crash Risks
 
-### 1.1 Linux orphan-process cleanup is broken (`ps -wwE` is BSD/macOS-only)
-- **Location:** `core/src/machine.rs:313-328`
+### 1.1 ~~Linux orphan-process cleanup is broken (`ps -wwE` is BSD/macOS-only)~~ (fixed)
+- **Status:** Fixed in [#5](https://github.com/voladelta/acorn/pull/5): on Linux `machine::end()` reads `/proc/<pid>/environ` (`marked_pids`).
+- **Location:** `core/src/machine.rs:313-328` (before the fix)
 - **Problem:** `machine::end()` invokes `ps -wwE -U <uid> -o pid=,command=` to find processes carrying `ACORN_RUN=...`. On Linux (`procps-ng`), `-E` is rejected (`error: unsupported SysV option`), so `end()` silently fails to reap detached processes (e.g., browsers or background jobs) when a standalone `acorn-server` exits on Linux. (Under `acorn-host`, bwrap's PID namespace and `--die-with-parent` already take such processes down.)
 - **Fix:** On Linux, scan `/proc/<pid>/environ` (filtered by UID) instead of spawning `ps -wwE`.
 
@@ -13,7 +14,7 @@
 - **Fix:** Match `@<username>` case-insensitively on ASCII bytes directly against the original string (Telegram usernames are ASCII `[A-Za-z0-9_]`), so byte offsets remain valid in `text`.
 
 ### 1.3 PID-reuse kill race on shell command timeout
-- **Location:** `core/src/machine.rs:181-188`
+- **Location:** `core/src/machine.rs:185-192`
 - **Problem:** When a command times out, `shell()` sends `SIGTERM` to `-pid` and spawns a detached task that sleeps `GRACE` (3 s) and unconditionally calls `signal(-pid, libc::SIGKILL)`. If the child exits immediately on `SIGTERM` and is reaped, that task still sends `SIGKILL` 3 seconds later—potentially to a reused PID/PGID.
 - **Fix:** Make the `SIGKILL` grace timer a `tokio::time::Sleep` arm inside the existing `tokio::select!` loop, guarded by `timed_out` and the group still existing (`alive(-pid)`), not by `status.is_none()`: the current SIGKILL also takes down background jobs in the group that ignore SIGTERM after the shell itself exits, and that must keep working.
 
@@ -49,7 +50,7 @@
 
 ### 2.1 TOCTOU world-readable window on secrets and `0o600` files
 - **`server/src/main.rs:229-235`:** `std::fs::write(&file, &t)` creates `server-token` with default umask (typically `0o644`) before calling `set_permissions(..., 0o600)`. Use `OpenOptions::new().mode(0o600)` at creation time (matching `host/src/runner.rs:262`).
-- **`core/src/machine.rs:584-592`:** `commit()` creates its temp file with default umask and writes full contents before applying `was.permissions().mode()`, briefly exposing `0o600` files like `config.json` during edits. Set permissions via `OpenOptionsExt::mode` when creating the temp file.
+- **`core/src/machine.rs:645-653`:** `commit()` creates its temp file with default umask and writes full contents before applying `was.permissions().mode()`, briefly exposing `0o600` files like `config.json` during edits. Set permissions via `OpenOptionsExt::mode` when creating the temp file.
 
 ### 2.2 Unquoted shell argument in `plugins/github.luau`
 - **Location:** `plugins/github.luau:50-59`
@@ -102,7 +103,7 @@
 - **Fix:** Cache the capitalized adjective list and noun `HashSet` in `LazyLock` statics.
 
 ### 3.4 Unbounded in-memory caches in long-running processes
-- **`core/src/machine.rs:64`:** `SEEN` grows indefinitely over the process lifetime.
+- **`core/src/machine.rs:68`:** `SEEN` grows indefinitely over the process lifetime.
 - **`web/src/model.ts:49-54`:** `whole`, `nodes`, `minds`, and `pages` never prune evicted entries in long-running browser tabs.
 
 ---
