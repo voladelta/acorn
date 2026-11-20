@@ -136,17 +136,17 @@
 - **Problem:** `bunx tsc --noEmit` in `web/` fails with 11 errors: 2 for missing `@types/node` in `src/logic.test.ts`, 4 for missing `@octanejs/shadcn/base-ui/*` declarations in `src/ui/`, and 5 inside `node_modules` (`@octanejs/lucide` importing untyped `@lucide/icons/icons/*`, `@octanejs/markdown` importing `./markdown-hooks.tsrx`), and `web/package.json` has no `typecheck` or `lint` script.
 
 ### 4.3 ~~Silent attachment drops and unhandled promise rejections in web client~~ (fixed)
-- **Status:** Fixed in this PR.
+- **Status:** Fixed in #9.
 - **Location:** `web/src/store.ts:256-269`, `web/src/ui/App.tsx:52`, `web/src/ui/Composer.tsx:153, 176`
 - **Problem:** `addPics()` silently skips unsupported MIME types or files over 50 MB with no user toast via `note(...)`, and callers invoke `void store.addPics(...)` without catching `FileReader` rejections.
 
 ### 4.4 ~~Minor cleanup items~~ (fixed)
-- **Status:** Fixed in this PR.
+- **Status:** Fixed in #9.
 - **Workspace dependency version skew:** `core/Cargo.toml` depends on `sha2 = "0.11"` while `host/Cargo.toml` depends on `sha2 = "0.10"`, pulling both trees into `Cargo.lock`.
-  - **Status:** Fixed in this PR.
+  - **Status:** Fixed in #9: `host` now uses `sha2 0.11`; `sha2 0.10` remains only as a transitive desktop dependency (`nsh-*`, `ed25519-dalek`).
 - **Redundant `select!` in `host/src/runner.rs:193-196`:** Both arms simply call `child.wait()`.
   - **Status:** Fixed in #6.
 - **Dead calculation in `core/src/timers.rs:404-412`:** `Cron::next_ms` truncates `ms` to the minute and then takes `.max(exact)`, which always equals `exact`.
   - **Status:** Fixed in #6.
 - **Monolithic `core/src/luau.rs` (2,512 lines):** ~1,080 lines of production code and ~1,430 lines of inline tests; splitting tool bindings and tests into submodules (`luau/mod.rs`, `luau/tools.rs`, `luau/tests.rs`) would improve navigability.
-  - **Status:** Fixed in this PR.
+  - **Status:** Fixed in #9.
