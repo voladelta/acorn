@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write as _;
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -583,7 +583,11 @@ fn commit(t: &Target, content: &str, was: Option<&fs::Metadata>) -> Result<PathB
   let name = t.key.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
   let temp = dir.join(format!(".{name}.{:016x}.tmp", rand::random::<u64>()));
   let written = (|| {
-    let mut f = fs::File::create(&temp)?;
+    let mut f = fs::OpenOptions::new()
+      .write(true)
+      .create_new(true)
+      .mode(was.map_or(0o666, |m| m.permissions().mode()))
+      .open(&temp)?;
     f.write_all(content.as_bytes())?;
     if let Some(m) = was {
       f.set_permissions(fs::Permissions::from_mode(m.permissions().mode()))?;
