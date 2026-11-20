@@ -51,7 +51,7 @@ local function via_gh(method, path, opts)
 	if opts.query and next(opts.query) then
 		path ..= (if path:find("?", 1, true) then "&" else "?") .. query_string(opts.query)
 	end
-	local cmd = GH .. " api -X " .. method .. " " .. quote(path)
+	local cmd = GH .. " api -X " .. quote(method) .. " " .. quote(path)
 	if opts.json ~= nil then
 		-- json.encode writes one line, so it can't hold the closing delimiter.
 		cmd ..= " --input - <<'ACORN_JSON'\n" .. json.encode(opts.json) .. "\nACORN_JSON"
