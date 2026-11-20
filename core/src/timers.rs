@@ -14,7 +14,7 @@
 
 use crate::chat::hub;
 use crate::config;
-use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -404,12 +404,7 @@ impl Cron {
 
   /// Its first time after `ms`, here.
   fn next_ms(&self, ms: i64) -> Option<i64> {
-    let after = Local
-      .timestamp_millis_opt(ms)
-      .single()?
-      .with_second(0)?
-      .with_nanosecond(0)?;
-    let after = after.max(Local.timestamp_millis_opt(ms).single()?);
+    let after = Local.timestamp_millis_opt(ms).single()?;
     self.next(&after).map(|t| t.timestamp_millis())
   }
 }

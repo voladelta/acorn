@@ -76,7 +76,7 @@ impl Runner {
     let mut wait = FIRST_WAIT;
     while !*stop.borrow() {
       let began = Instant::now();
-      match self.run(&plan, &mut stop).await {
+      match self.run(&plan).await {
         Ok(status) => eprintln!("acorn-host: {}'s server ended: {status}", self.id),
         Err(e) => eprintln!("acorn-host: {}'s server: {e}", self.id),
       }
@@ -96,7 +96,7 @@ impl Runner {
   }
 
   /// One run, until it exits.
-  async fn run(&self, plan: &Plan, stop: &mut watch::Receiver<bool>) -> Result<String, String> {
+  async fn run(&self, plan: &Plan) -> Result<String, String> {
     let acorn = self.home.join(".acorn");
     let sock_dir = self.run.join("sock");
     crate::store::make_dir(&self.home)?;
@@ -190,10 +190,7 @@ impl Runner {
       };
       *self.pid.lock().unwrap() = child.or(outer);
     }
-    let status = tokio::select! {
-      s = child.wait() => s.map_err(|e| e.to_string())?,
-      _ = stop.changed() => child.wait().await.map_err(|e| e.to_string())?,
-    };
+    let status = child.wait().await.map_err(|e| e.to_string())?;
     *self.pid.lock().unwrap() = None;
     *self.outer.lock().unwrap() = None;
     Ok(status.to_string())
