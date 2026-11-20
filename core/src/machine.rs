@@ -67,8 +67,34 @@ static RUN: LazyLock<String> = LazyLock::new(|| format!("{:016x}", rand::random:
 /// shell already exited.
 static SHELLS: LazyLock<Mutex<HashMap<i32, Arc<AtomicBool>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// What each caller (by its dir) last saw of each file (by its real path).
-static SEEN: LazyLock<Mutex<HashMap<(PathBuf, PathBuf), Seen>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// The most files `SEEN` keeps.
+const SEEN_MOST: usize = 8192;
+
+/// What each caller (by its dir) last saw of each file (by its real path):
+/// the SEEN_MOST seen last. A file dropped counts as never read, so its
+/// caller reads it again before it writes over or edits it.
+static SEEN: LazyLock<Mutex<Sights>> = LazyLock::new(|| Mutex::new(Sights::default()));
+
+/// Files as seen, each with when (`tick`: a count of sights).
+#[derive(Default)]
+struct Sights {
+  files: HashMap<(PathBuf, PathBuf), (Seen, u64)>,
+  tick: u64,
+}
+
+impl Sights {
+  /// A file seen; over `most`, the older half is dropped.
+  fn see(&mut self, key: (PathBuf, PathBuf), s: Seen, most: usize) {
+    self.tick += 1;
+    self.files.insert(key, (s, self.tick));
+    if self.files.len() > most {
+      let mut ticks: Vec<u64> = self.files.values().map(|(_, t)| *t).collect();
+      let mid = ticks.len() / 2;
+      let (_, &mut oldest_kept, _) = ticks.select_nth_unstable(mid);
+      self.files.retain(|_, (_, t)| *t >= oldest_kept);
+    }
+  }
+}
 
 /// Held while a write or edit checks and changes a file.
 static WRITING: Mutex<()> = Mutex::new(());
@@ -489,11 +515,13 @@ fn probe(key: &Path) -> Result<Option<fs::Metadata>, String> {
 }
 
 fn seen(cwd: &Path, key: &Path) -> Option<Seen> {
-  SEEN.lock().get(&(cwd.to_path_buf(), key.to_path_buf())).cloned()
+  let sights = SEEN.lock();
+  let (s, _) = sights.files.get(&(cwd.to_path_buf(), key.to_path_buf()))?;
+  Some(s.clone())
 }
 
 fn see(cwd: &Path, key: &Path, s: Seen) {
-  SEEN.lock().insert((cwd.to_path_buf(), key.to_path_buf()), s);
+  SEEN.lock().see((cwd.to_path_buf(), key.to_path_buf()), s, SEEN_MOST);
 }
 
 /// A text file as a program reads it (luau's `read`): whole, or `limit`
@@ -919,5 +947,25 @@ mod tests {
     assert!(!zombie(Path::new("/proc/self")));
     child.wait().unwrap();
     assert!(zombie(&dir), "gone");
+  }
+
+  #[test]
+  fn the_files_seen_longest_ago_are_dropped() {
+    let key = |k: usize| (PathBuf::from("/dir"), PathBuf::from(format!("/dir/{k}")));
+    let mut sights = Sights::default();
+    for k in 0..8 {
+      sights.see(key(k), Seen::Absent, 8);
+    }
+    sights.see(key(0), Seen::Present("v".into()), 8); // seen again: now the newest
+    assert_eq!(sights.files.len(), 8);
+    sights.see(key(8), Seen::Absent, 8);
+    assert!(sights.files.len() <= 8, "kept within its bound");
+    assert!(sights.files.contains_key(&key(0)) && sights.files.contains_key(&key(8)));
+    assert!(!sights.files.contains_key(&key(1)), "the oldest go first");
+    for k in 9..1000 {
+      sights.see(key(k), Seen::Absent, 8);
+    }
+    assert!(sights.files.len() <= 8);
+    assert!(sights.files.contains_key(&key(999)));
   }
 }

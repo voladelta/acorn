@@ -125,15 +125,19 @@ async fn forward(State(host): State<Arc<Host>>, mut req: Request) -> Response {
   let Some(value) = session(&req) else {
     return denied();
   };
-  let book = match host.store.read() {
-    Ok(book) => book,
-    Err(e) => {
+  // the book is read from disk, and the session hashed, off the async workers
+  let whose = {
+    let host = host.clone();
+    tokio::task::spawn_blocking(move || host.store.read().map(|book| store::who(&book, &value))).await
+  };
+  let user = match whose {
+    Ok(Ok(Some(user))) => user,
+    Ok(Ok(None)) => return denied(),
+    Ok(Err(e)) => {
       eprintln!("acorn-host: {e}");
       return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-  };
-  let Some(user) = store::who(&book, &value) else {
-    return denied();
+    Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
   };
   let runner = host.runner(&user);
 
