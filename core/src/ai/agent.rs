@@ -254,7 +254,7 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
     .yields
     .as_ref()
     .map_or_else(|| MODEL.to_string(), |import| format!("{MODEL} {import}"));
-  let mut asking = false;
+  let mut asking = None;
   let mut k = 1;
   let step = loop {
     if cancel.is_cancelled() {
@@ -263,7 +263,7 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
     if let Some(why) = crate::chat::over_budget() {
       break fail(&why, &[], Halt::Capped);
     }
-    let waits: Vec<&str> = match (&ask.yields, asking) {
+    let waits: Vec<&str> = match (&ask.yields, asking.is_some()) {
       (None, _) => vec![],
       (Some(_), true) => vec![MODEL],
       (Some(_), false) => vec![MODEL, &own],
@@ -291,12 +291,11 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
       };
     }
     k += 1;
-    if !asking && own != MODEL && pace::held(&own) {
+    if asking.is_none() && own != MODEL && pace::held(&own) {
       continue;
     }
-    if !asking {
-      pace::hold(MODEL, &own, &step.why);
-      asking = true;
+    if asking.is_none() {
+      asking = Some(pace::hold(MODEL, &own, &step.why));
     }
     let wait = after
       .filter(|&s| s.is_finite() && s > 0.0)
@@ -310,9 +309,6 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
     let jitter = rand::random::<f64>() * 0.5;
     nap(Duration::from_secs_f64(wait + jitter), cancel).await;
   };
-  if asking {
-    pace::free(MODEL, &own);
-  }
   step
 }
 
