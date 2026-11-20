@@ -34,6 +34,9 @@ use tokio_util::sync::CancellationToken;
 const MAX_TIMEOUT_MS: f64 = 600_000.0;
 /// From SIGTERM to SIGKILL, as a command times out.
 const GRACE: Duration = Duration::from_secs(3);
+/// How often a timed out command's group is looked at, to end the call
+/// once it is empty.
+const GROUP_POLL: Duration = Duration::from_millis(20);
 /// The longest a process amid an exec is waited for to show its
 /// environment (`marked_pids`).
 #[cfg(target_os = "linux")]
@@ -127,9 +130,13 @@ impl Ran {
 
 /// Runs a command with `bash -c` in `workdir`, in its own process group,
 /// every process marked ACORN_RUN, its streams kept apart. On its timeout
-/// (ms, at most MAX_TIMEOUT_MS) it gets SIGTERM, then SIGKILL after GRACE.
+/// (ms, at most MAX_TIMEOUT_MS) the group gets SIGTERM, then SIGKILL after
+/// GRACE if any of it is left (the shell, or a job it started).
 /// It ends when the shell has exited and its streams have closed, or GRACE
 /// after the shell exited, whatever still holds them (a job left running).
+/// Timed out, it ends no sooner than its group is empty or got that
+/// SIGKILL: no signal is sent after it returns, when the group's id may
+/// name another.
 /// A stop kills the group and ends the wait at once.
 pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: CancellationToken) -> Result<Ran, String> {
   let timeout = timeout.min(MAX_TIMEOUT_MS);
@@ -150,8 +157,8 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
   }
   let mut child = cmd.spawn().map_err(|err| err.to_string())?;
   let pid = child.id().map_or(0, |p| p as i32);
-  let mut reap = Reap(pid);
   let exited = Arc::new(AtomicBool::new(false));
+  let mut reap = Reap(pid, exited.clone());
   SHELLS.lock().insert(pid, exited.clone());
   let (out, err) = (
     Arc::new(Mutex::new(Stream::default())),
@@ -169,8 +176,14 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
   tokio::pin!(expiry);
   let drain = tokio::time::sleep(Duration::MAX / 4);
   tokio::pin!(drain);
-  let (mut timed_out, mut closed, mut status) = (false, false, None);
-  while !(closed && status.is_some()) {
+  let kill = tokio::time::sleep(Duration::MAX / 4);
+  tokio::pin!(kill);
+  let (mut timed_out, mut killed, mut closed, mut status) = (false, false, false, None);
+  loop {
+    let settled = closed && status.is_some();
+    if settled && (!timed_out || killed || !group(pid, &exited)) {
+      break;
+    }
     tokio::select! {
       _ = &mut streams, if !closed => closed = true,
       got = &mut wait, if status.is_none() => {
@@ -181,17 +194,27 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
         }
         drain.as_mut().reset(tokio::time::Instant::now() + GRACE);
       }
-      () = &mut drain, if status.is_some() => closed = true,
+      () = &mut drain, if status.is_some() && !closed => closed = true,
       () = &mut expiry, if !timed_out => {
         timed_out = true;
-        signal(-pid, libc::SIGTERM);
-        tokio::spawn(async move {
-          tokio::time::sleep(GRACE).await;
-          signal(-pid, libc::SIGKILL);
-        });
+        if group(pid, &exited) {
+          signal(-pid, libc::SIGTERM);
+          kill.as_mut().reset(tokio::time::Instant::now() + GRACE);
+        } else {
+          killed = true;
+        }
       }
+      () = &mut kill, if timed_out && !killed => {
+        killed = true;
+        if group(pid, &exited) {
+          signal(-pid, libc::SIGKILL);
+        }
+      }
+      () = tokio::time::sleep(GROUP_POLL), if settled => {}
       () = cancel.cancelled() => {
-        signal(-pid, libc::SIGKILL);
+        if group(pid, &exited) {
+          signal(-pid, libc::SIGKILL);
+        }
         reap.0 = 0;
         if status.is_none() {
           let _ = wait.await;
@@ -212,14 +235,16 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
   })
 }
 
-/// A command's process group, killed if its run is dropped before it ends
-/// (a program gave the call up), so nothing it started runs on; 0 once it
-/// ended.
-struct Reap(i32);
+/// A command's process group, with whether its shell exited: killed, if
+/// still there, when its run is dropped before it ends (a program gave the
+/// call up), so nothing it started runs on; 0 once it ended.
+struct Reap(i32, Arc<AtomicBool>);
 
 impl Drop for Reap {
   fn drop(&mut self) {
-    signal(-self.0, libc::SIGKILL);
+    if self.0 != 0 && group(self.0, &self.1) {
+      signal(-self.0, libc::SIGKILL);
+    }
   }
 }
 
@@ -804,6 +829,38 @@ mod tests {
     let shut = run("exec >&- 2>&-; sleep 3", 300.0);
     assert!(shut.timed_out && shut.code() == 128 + libc::SIGTERM);
     assert_eq!(run("kill -USR1 $$", 10_000.0).code(), 128 + libc::SIGUSR1);
+  }
+
+  #[test]
+  fn shell_timeout_escalates_to_sigkill_for_shell_and_group() {
+    let t = std::time::Instant::now();
+    let fast = run("sleep 5 | sleep 5", 100.0);
+    assert!(fast.timed_out && fast.code() == 128 + libc::SIGTERM);
+    assert!(t.elapsed() < GRACE, "exiting on SIGTERM settles without waiting GRACE");
+
+    let stubborn = run("trap '' TERM; exec sleep 60", 100.0);
+    assert!(stubborn.timed_out && stubborn.code() == 128 + libc::SIGKILL);
+
+    let bg = run(
+      "(trap '' TERM; exec sleep 60 >/dev/null 2>&1) & echo $!; sleep 10",
+      100.0,
+    );
+    assert!(bg.timed_out);
+    let pid: i32 = bg.tails().0.trim().parse().unwrap();
+    // killed, it may wait a moment to be reaped
+    #[cfg(target_os = "linux")]
+    let dead = || zombie(Path::new(&format!("/proc/{pid}")));
+    #[cfg(not(target_os = "linux"))]
+    let dead = || !alive(pid);
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !dead() && std::time::Instant::now() < deadline {
+      std::thread::sleep(Duration::from_millis(10));
+    }
+    let gone = dead();
+    if !gone {
+      signal(pid, libc::SIGKILL);
+    }
+    assert!(gone, "background job ignoring SIGTERM should be killed after GRACE");
   }
 
   #[test]
