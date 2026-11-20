@@ -759,6 +759,19 @@ fn split(v: &Value) -> Result<decide::Split, String> {
   }
 }
 
+/// A tool's work on the disk, done as its call is made. On the runtime's
+/// workers their other tasks move to another thread meanwhile. It isn't
+/// handed to a blocking thread: the call would have to wait, which Luau
+/// can't everywhere (a sort's order, a metamethod), and the work would go
+/// on after a call given up.
+fn blocking<T>(f: impl FnOnce() -> T) -> T {
+  use tokio::runtime::{Handle, RuntimeFlavor};
+  match Handle::try_current().map(|h| h.runtime_flavor()) {
+    Ok(RuntimeFlavor::MultiThread) => tokio::task::block_in_place(f),
+    _ => f(),
+  }
+}
+
 /// The Mac's tools and the web's, as globals of the VM, in `cwd`.
 fn tools(lua: &Lua, cwd: &Path, run: &Arc<Mutex<Run>>) -> mlua::Result<()> {
   let g = lua.globals();
@@ -770,7 +783,7 @@ fn tools(lua: &Lua, cwd: &Path, run: &Arc<Mutex<Run>>) -> mlua::Result<()> {
       async move {
         let (offset, limit) = (opt::<usize>(&opts, "offset")?, opt::<usize>(&opts, "limit")?);
         let call = Call::start(&r, "read", &path);
-        call.end(&lua, machine::text(&dir, &path, offset, limit))
+        call.end(&lua, blocking(|| machine::text(&dir, &path, offset, limit)))
       }
     })?,
   )?;
@@ -783,7 +796,8 @@ fn tools(lua: &Lua, cwd: &Path, run: &Arc<Mutex<Run>>) -> mlua::Result<()> {
         let content = content.to_str()?.to_string();
         let call = Call::start(&r, "write", &path);
         let bytes = content.len();
-        let got = machine::write(&dir, &json!({"file_path": path, "content": content}));
+        let input = json!({"file_path": path, "content": content});
+        let got = blocking(|| machine::write(&dir, &input));
         call.end(&lua, got.map(|_| bytes))
       }
     })?,
@@ -802,7 +816,7 @@ fn tools(lua: &Lua, cwd: &Path, run: &Arc<Mutex<Run>>) -> mlua::Result<()> {
             "replace_all": opt::<bool>(&opts, "all")?.unwrap_or(false),
           });
           let call = Call::start(&r, "edit", &path);
-          call.end(&lua, machine::edit(&dir, &input))
+          call.end(&lua, blocking(|| machine::edit(&dir, &input)))
         }
       },
     )?,
@@ -851,22 +865,18 @@ fn tools(lua: &Lua, cwd: &Path, run: &Arc<Mutex<Run>>) -> mlua::Result<()> {
           if r.lock().imgs.len() >= PICS {
             return Err(format!("view {path}: at most {PICS} images a call"));
           }
-          let meta = std::fs::metadata(&file).map_err(|e| format!("view {path}: {e}"))?;
-          if !meta.is_file() {
-            return Err(format!("view {path}: not a regular file"));
-          }
-          if meta.len() > VIEW_BYTES as u64 {
-            return Err(format!(
-              "view {path}: {} bytes, over {} MB",
-              meta.len(),
-              VIEW_BYTES >> 20
-            ));
-          }
-          let bytes = std::fs::read(&file).map_err(|e| format!("view {path}: {e}"))?;
-          let (img, (w, h)) = tokio::task::spawn_blocking(move || image_for_model(&bytes))
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| format!("view {path}: {e}"))?;
+          let (img, (w, h)) = blocking(|| {
+            let meta = std::fs::metadata(&file).map_err(|e| e.to_string())?;
+            if !meta.is_file() {
+              return Err("not a regular file".to_string());
+            }
+            if meta.len() > VIEW_BYTES as u64 {
+              return Err(format!("{} bytes, over {} MB", meta.len(), VIEW_BYTES >> 20));
+            }
+            let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+            image_for_model(&bytes).map_err(|e| e.to_string())
+          })
+          .map_err(|e| format!("view {path}: {e}"))?;
           r.lock().imgs.push(img);
           Ok(format!("{path}: {w}×{h}, attached: you see it after this call"))
         }
@@ -1194,6 +1204,31 @@ mod tests {
       caught.text
     );
     assert!(caught.text.ends_with("read \"nope\" (failed)]"), "{}", caught.text);
+  }
+
+  /// A file tool ends within the call that made it: it waits on nothing,
+  /// so it runs where Luau can't yield (a sort's order, a metamethod), and
+  /// never changes a file after its call failed.
+  #[tokio::test(flavor = "multi_thread")]
+  async fn file_tools_run_where_luau_cant_wait() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    std::fs::write(cwd.join("f.txt"), "one\n").unwrap();
+    let out = go(
+      cwd,
+      "local got = {}\n\
+       table.sort({1, 2}, function(a, b)\n\
+         got.read = read('f.txt')\n\
+         got.wrote = write('g.txt', 'hey')\n\
+         got.edit = edit('f.txt', 'one', '1')\n\
+         return a < b\n\
+       end)\n\
+       print(got.read, got.wrote)",
+    )
+    .await;
+    assert!(!out.fail && out.text.starts_with("one\n\t3\n"), "{}", out.text);
+    assert_eq!(std::fs::read_to_string(cwd.join("g.txt")).unwrap(), "hey");
+    assert_eq!(std::fs::read_to_string(cwd.join("f.txt")).unwrap(), "1\n");
   }
 
   #[tokio::test(flavor = "multi_thread")]

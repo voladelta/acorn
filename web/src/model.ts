@@ -8,7 +8,9 @@
 // or what the turn waits on. An agent's page is its log, kept live. A
 // thread opens with its caption. The only act that changes anything is a
 // message; the rest look. A model is never changed in place: each field
-// changed is new, so what draws from the rest is kept.
+// changed is new, so what draws from the rest is kept. What no page can
+// show any more is dropped (`prune`, `tidy`), so a window open for long
+// holds the chat shown, not all it ever showed.
 
 import * as call from './call.ts';
 import type { Call } from './call.ts';
@@ -113,10 +115,10 @@ export function hear(m: Model, ev: Event): Then {
     for (const [seg, node] of ev.Know.nodes) nodes.set(key(seg), node);
     n = { ...m, whole, nodes };
   } else if ('View' in ev) {
-    n = { ...m, parts: ev.View.parts, turn: ev.View.turn };
+    n = prune({ ...m, parts: ev.View.parts, turn: ev.View.turn });
     if (m.fold) cmds.push('Root');
   } else if ('Root' in ev) {
-    if (m.fold) n = { ...m, fold: { parts: ev.Root.parts } };
+    if (m.fold) n = prune({ ...m, fold: { parts: ev.Root.parts } });
   } else if ('Entry' in ev) {
     const { agent, id, entry } = ev.Entry;
     if (agent !== null) {
@@ -135,7 +137,7 @@ export function hear(m: Model, ev: Event): Then {
   } else if ('Live' in ev) {
     n = withLive(m, ev.Live.agent, () => ev.Live.live);
   } else if ('State' in ev) {
-    n = { ...m, state: ev.State };
+    n = tidy({ ...m, state: ev.State });
   } else if ('Agent' in ev) {
     const { name, log } = ev.Agent;
     if (log) {
@@ -193,7 +195,51 @@ export function act(m: Model, a: Act): Then {
       n = m.fold ? { ...m, page: null, open: new Map(), fold: null } : m.page === null ? m : { ...m, page: null };
       break;
   }
-  return { m: n, cmds, notes: [] };
+  return { m: tidy(n), cmds, notes: [] };
+}
+
+/** The model without what no page can show any more: the summaries,
+ * messages and blocks opened that are neither a part of the view or of
+ * the overview nor under a block opened or shut by hand, and the thoughts
+ * before the turn. Its engine tells a summary or message again once it
+ * shows again: as a view's new part, a block's half, the overview's top. */
+function prune(m: Model): Model {
+  const nodes = new Map<string, Node>();
+  const whole = new Map<number, Entry>();
+  const open = new Map<string, boolean>();
+  const keep = (id: number, n: number) => {
+    const k = key([id, n]);
+    const node = m.nodes.get(k);
+    if (node) nodes.set(k, node);
+    const on = m.open.get(k);
+    if (on !== undefined) open.set(k, on);
+    if (n === 1) {
+      const entry = m.whole.get(id);
+      if (entry) whole.set(id, entry);
+    } else if (on !== undefined) {
+      keep(id, n / 2);
+      keep(id + n / 2, n / 2);
+    }
+  };
+  for (const [id, n] of m.parts) keep(id, n);
+  for (const [id, n] of m.fold?.parts ?? []) keep(id, n);
+  const minds = new Map([...m.minds].filter(([id]) => id >= m.turn));
+  // each a part of what was: as many left, none dropped
+  const less = <K, V>(was: Map<K, V>, left: Map<K, V>) => (left.size === was.size ? was : left);
+  const n = { nodes: less(m.nodes, nodes), whole: less(m.whole, whole), open: less(m.open, open), minds: less(m.minds, minds) };
+  const same = n.nodes === m.nodes && n.whole === m.whole && n.open === m.open && n.minds === m.minds;
+  return same ? m : { ...m, ...n };
+}
+
+/** The model without the pages of agents done that aren't shown: one
+ * shown again is asked for again. */
+function tidy(m: Model): Model {
+  const at = agents(m);
+  const gone = [...m.pages.keys()].filter((name) => name !== m.page && !at.includes(name));
+  if (!gone.length) return m;
+  const pages = new Map(m.pages);
+  for (const name of gone) pages.delete(name);
+  return { ...m, pages };
 }
 
 /** All the chat shown asks its engine anew, as events were lost or asks

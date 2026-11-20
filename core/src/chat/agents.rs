@@ -309,14 +309,23 @@ impl Engine {
           chat,
           msg,
         };
-        crate::facts::remember(&me, fact).map_or_else(|err| Out::fail(format!("Not kept: {err}")), Out::ok)
+        // SQLite, and a vacuum of its file, off the async workers
+        match tokio::task::spawn_blocking(move || crate::facts::remember(&me, fact)).await {
+          Ok(Ok(said)) => Out::ok(said),
+          Ok(Err(err)) => Out::fail(format!("Not kept: {err}")),
+          Err(err) => Out::fail(format!("Not kept: {err}")),
+        }
       }
       "forget" => {
         let me = self.lock().me.id.clone();
         let Some(id) = number(&input["id"]) else {
           return Out::fail("Give id: the fact's number.");
         };
-        crate::facts::forget(&me, id).map_or_else(|err| Out::fail(format!("Not forgotten: {err}")), Out::ok)
+        match tokio::task::spawn_blocking(move || crate::facts::forget(&me, id)).await {
+          Ok(Ok(said)) => Out::ok(said),
+          Ok(Err(err)) => Out::fail(format!("Not forgotten: {err}")),
+          Err(err) => Out::fail(format!("Not forgotten: {err}")),
+        }
       }
       "purge" | "unpurge" => {
         let (mut chat, back) = (self.lock(), name == "unpurge");
