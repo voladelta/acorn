@@ -150,8 +150,8 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
   }
   let mut child = cmd.spawn().map_err(|err| err.to_string())?;
   let pid = child.id().map_or(0, |p| p as i32);
-  let mut reap = Reap(pid);
   let exited = Arc::new(AtomicBool::new(false));
+  let mut reap = Reap(pid, exited.clone());
   SHELLS.lock().insert(pid, exited.clone());
   let (out, err) = (
     Arc::new(Mutex::new(Stream::default())),
@@ -169,8 +169,14 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
   tokio::pin!(expiry);
   let drain = tokio::time::sleep(Duration::MAX / 4);
   tokio::pin!(drain);
-  let (mut timed_out, mut closed, mut status) = (false, false, None);
-  while !(closed && status.is_some()) {
+  let kill = tokio::time::sleep(Duration::MAX / 4);
+  tokio::pin!(kill);
+  let (mut timed_out, mut killed, mut closed, mut status) = (false, false, false, None);
+  loop {
+    let settled = closed && status.is_some();
+    if settled && (!timed_out || killed || !group(pid, &exited)) {
+      break;
+    }
     tokio::select! {
       _ = &mut streams, if !closed => closed = true,
       got = &mut wait, if status.is_none() => {
@@ -181,17 +187,27 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
         }
         drain.as_mut().reset(tokio::time::Instant::now() + GRACE);
       }
-      () = &mut drain, if status.is_some() => closed = true,
+      () = &mut drain, if status.is_some() && !closed => closed = true,
       () = &mut expiry, if !timed_out => {
         timed_out = true;
-        signal(-pid, libc::SIGTERM);
-        tokio::spawn(async move {
-          tokio::time::sleep(GRACE).await;
-          signal(-pid, libc::SIGKILL);
-        });
+        if group(pid, &exited) {
+          signal(-pid, libc::SIGTERM);
+          kill.as_mut().reset(tokio::time::Instant::now() + GRACE);
+        } else {
+          killed = true;
+        }
       }
+      () = &mut kill, if timed_out && !killed => {
+        killed = true;
+        if group(pid, &exited) {
+          signal(-pid, libc::SIGKILL);
+        }
+      }
+      () = tokio::time::sleep(Duration::from_millis(20)), if settled => {}
       () = cancel.cancelled() => {
-        signal(-pid, libc::SIGKILL);
+        if group(pid, &exited) {
+          signal(-pid, libc::SIGKILL);
+        }
         reap.0 = 0;
         if status.is_none() {
           let _ = wait.await;
@@ -215,11 +231,13 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
 /// A command's process group, killed if its run is dropped before it ends
 /// (a program gave the call up), so nothing it started runs on; 0 once it
 /// ended.
-struct Reap(i32);
+struct Reap(i32, Arc<AtomicBool>);
 
 impl Drop for Reap {
   fn drop(&mut self) {
-    signal(-self.0, libc::SIGKILL);
+    if self.0 != 0 && group(self.0, &self.1) {
+      signal(-self.0, libc::SIGKILL);
+    }
   }
 }
 
@@ -804,6 +822,33 @@ mod tests {
     let shut = run("exec >&- 2>&-; sleep 3", 300.0);
     assert!(shut.timed_out && shut.code() == 128 + libc::SIGTERM);
     assert_eq!(run("kill -USR1 $$", 10_000.0).code(), 128 + libc::SIGUSR1);
+  }
+
+  #[test]
+  fn shell_timeout_escalates_to_sigkill_for_shell_and_group() {
+    let t = std::time::Instant::now();
+    let fast = run("sleep 5", 100.0);
+    assert!(fast.timed_out && fast.code() == 128 + libc::SIGTERM);
+    assert!(t.elapsed() < GRACE, "exiting on SIGTERM settles without waiting GRACE");
+
+    let stubborn = run("trap '' TERM; exec sleep 60", 100.0);
+    assert!(stubborn.timed_out && stubborn.code() == 128 + libc::SIGKILL);
+
+    let bg = run(
+      "(trap '' TERM; exec sleep 60 >/dev/null 2>&1) & echo $!; sleep 10",
+      100.0,
+    );
+    assert!(bg.timed_out);
+    let pid: i32 = bg.tails().0.trim().parse().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while alive(pid) && std::time::Instant::now() < deadline {
+      std::thread::sleep(Duration::from_millis(10));
+    }
+    let gone = !alive(pid);
+    if !gone {
+      signal(pid, libc::SIGKILL);
+    }
+    assert!(gone, "background job ignoring SIGTERM should be killed after GRACE");
   }
 
   #[test]
