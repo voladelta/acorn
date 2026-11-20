@@ -171,8 +171,8 @@ fn fitted(bytes: &[u8]) -> Result<Fitted> {
     });
   }
   let small = img.resize_exact(
-    (w as f64 * k).round() as u32,
-    (h as f64 * k).round() as u32,
+    ((w as f64 * k).round() as u32).max(1),
+    ((h as f64 * k).round() as u32).max(1),
     image::imageops::FilterType::Lanczos3,
   );
   let mut out = Vec::new();
@@ -226,6 +226,18 @@ pub fn image_add(dir: &Path, bytes: &[u8]) -> Result<String> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_thin_image_keeps_both_dimensions() {
+    let mut png = Vec::new();
+    image::RgbImage::new(10000, 1)
+      .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+      .unwrap();
+    let fitted = fitted(&png).unwrap();
+    let small = image::load_from_memory(&fitted.small.unwrap()).unwrap();
+    assert!(small.width() > 0);
+    assert_eq!(small.height(), 1);
+  }
 
   #[test]
   fn a_file_is_known_by_its_first_bytes() {

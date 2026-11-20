@@ -145,6 +145,14 @@ async fn tg(
 
 const OWNER: i64 = 42;
 
+#[tokio::test]
+async fn mentions_are_removed_at_the_original_byte_offset() {
+  let (tg, _heard, _asked, _dir) = tg(plain, Some(OWNER)).await;
+  assert_eq!(tg.unnamed("İ @AcOrN_BoT hello"), "İ hello");
+  assert_eq!(tg.unnamed("İ hello"), "İ hello");
+  assert_eq!(tg.unnamed(""), "");
+}
+
 fn dm(from: i64, text: &str) -> Value {
   json!({"message": {"message_id": 7, "date": 1, "chat": {"id": from, "type": "private"}, "from": {"id": from, "first_name": "Linh", "username": "linh"}, "text": text}})
 }

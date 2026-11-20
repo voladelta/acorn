@@ -187,7 +187,10 @@ impl Tg {
         Err(Fail::Stopped) => return,
         Err(Fail::Down(why)) => {
           eprintln!("acorn: telegram: {why}");
-          tokio::time::sleep(wait).await;
+          tokio::select! {
+            _ = self.stop.cancelled() => return,
+            _ = tokio::time::sleep(wait) => {}
+          }
           wait = (wait * 2).min(Duration::from_secs(300));
         }
         Err(why) => {
@@ -237,11 +240,17 @@ impl Tg {
               me.username
             ));
           }
-          tokio::time::sleep(Duration::from_secs(POLL / 2)).await;
+          tokio::select! {
+            _ = self.stop.cancelled() => return,
+            _ = tokio::time::sleep(Duration::from_secs(POLL / 2)) => {}
+          }
         }
         Err(why) => {
           eprintln!("acorn: telegram: {why}");
-          tokio::time::sleep(wait).await;
+          tokio::select! {
+            _ = self.stop.cancelled() => return,
+            _ = tokio::time::sleep(wait) => {}
+          }
           wait = (wait * 2).min(Duration::from_secs(300));
         }
       }
@@ -491,9 +500,13 @@ impl Tg {
   /// A message with the bot's @name taken out.
   fn unnamed(&self, text: &str) -> String {
     let Some(me) = self.me.get() else { return text.into() };
-    let name = format!("@{}", me.username.to_lowercase());
+    let name = format!("@{}", me.username);
     let mut out = text.to_string();
-    if let Some(at) = text.to_lowercase().find(&name) {
+    if let Some(at) = text
+      .as_bytes()
+      .windows(name.len())
+      .position(|s| s.eq_ignore_ascii_case(name.as_bytes()))
+    {
       out.replace_range(at..at + name.len(), "");
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")

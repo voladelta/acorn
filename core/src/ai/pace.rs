@@ -47,7 +47,7 @@ pub fn held(key: &str) -> bool {
 
 /// A request asks `model` again, holding `own`, its model's room or its
 /// import's; the model's first says why.
-pub fn hold(model: &str, own: &str, why: &str) {
+pub fn hold(model: &str, own: &str, why: &str) -> Hold {
   let mut rooms = ROOMS.lock();
   let room = rooms.entry(model.to_string()).or_default();
   room.asking += 1;
@@ -55,10 +55,25 @@ pub fn hold(model: &str, own: &str, why: &str) {
     eprintln!("{model}: {}: its requests ask again", crate::clip::head(why, 300));
   }
   rooms.entry(own.to_string()).or_default().busy += 1;
+  Hold {
+    model: model.to_string(),
+    own: own.to_string(),
+  }
+}
+
+pub struct Hold {
+  model: String,
+  own: String,
+}
+
+impl Drop for Hold {
+  fn drop(&mut self) {
+    free(&self.model, &self.own);
+  }
 }
 
 /// ... and lets go of it, answered or not: the last frees those waiting.
-pub fn free(model: &str, own: &str) {
+fn free(model: &str, own: &str) {
   let mut rooms = ROOMS.lock();
   if let Some(room) = rooms.get_mut(own) {
     room.busy -= 1;
@@ -224,6 +239,23 @@ pub async fn fly(model: &str, yields: bool, cancel: &CancellationToken) -> Optio
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_dropped_hold_frees_its_room_even_on_panic() {
+    let model = "pace-test-hold";
+    let own = "pace-test-hold-import";
+    let result = std::panic::catch_unwind(|| {
+      let _hold = hold(model, own, "busy");
+      assert!(held(own));
+      panic!("cut");
+    });
+    assert!(result.is_err());
+    assert!(!held(own));
+    assert!(!ROOMS.lock().contains_key(model));
+    let hold = hold(model, own, "busy");
+    drop(hold);
+    assert!(!held(own));
+  }
 
   fn in_flight(model: &str) -> usize {
     SEMS.lock().get(model).map_or(0, |s| s.in_flight)

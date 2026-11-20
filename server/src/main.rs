@@ -31,6 +31,8 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use std::collections::{HashMap, VecDeque};
+use std::io::Write as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -226,13 +228,16 @@ fn token() -> String {
     .expect("random bytes");
   let t: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
   let _ = std::fs::create_dir_all(&acorn_core::config::get().dir);
-  if std::fs::write(&file, &t).is_ok() {
-    #[cfg(unix)]
-    {
-      use std::os::unix::fs::PermissionsExt;
-      let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
-    }
-  }
+  let _ = std::fs::OpenOptions::new()
+    .write(true)
+    .create(true)
+    .truncate(true)
+    .mode(0o600)
+    .open(&file)
+    .and_then(|mut f| {
+      f.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+      f.write_all(t.as_bytes())
+    });
   t
 }
 
@@ -246,7 +251,8 @@ async fn guard(State(s): State<Server>, req: Request, next: Next) -> Response {
         "{COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000",
         s.token
       );
-      let mut res = Redirect::to(req.uri().path()).into_response();
+      let path = format!("/{}", req.uri().path().trim_start_matches('/'));
+      let mut res = Redirect::to(&path).into_response();
       res.headers_mut().insert(header::SET_COOKIE, cookie.parse().unwrap());
       return res;
     }
@@ -288,9 +294,13 @@ async fn events(State(s): State<Server>, Query(q): Query<HashMap<String, String>
   }
   let log = s.log.lock().unwrap();
   let last = log.last();
-  let lost = !ours || after + 1 < log.first;
-  let from = if ours { (after + 1).max(log.first) } else { last + 1 };
-  let skip = (from - log.first) as usize;
+  let lost = !ours || after.saturating_add(1) < log.first;
+  let from = if ours {
+    after.saturating_add(1).max(log.first)
+  } else {
+    last.saturating_add(1)
+  };
+  let skip = from.saturating_sub(log.first) as usize;
   let events: Vec<&str> = log.events.iter().skip(skip).map(String::as_str).collect();
   let body = format!(
     "{{\"epoch\":{},\"seq\":{},\"lost\":{lost},\"events\":[{}]}}",

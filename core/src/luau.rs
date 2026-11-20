@@ -851,14 +851,18 @@ fn tools(lua: &Lua, cwd: &Path, run: &Arc<Mutex<Run>>) -> mlua::Result<()> {
           if r.lock().imgs.len() >= PICS {
             return Err(format!("view {path}: at most {PICS} images a call"));
           }
-          let bytes = std::fs::read(&file).map_err(|e| format!("view {path}: {e}"))?;
-          if bytes.len() > VIEW_BYTES {
+          let meta = std::fs::metadata(&file).map_err(|e| format!("view {path}: {e}"))?;
+          if !meta.is_file() {
+            return Err(format!("view {path}: not a regular file"));
+          }
+          if meta.len() > VIEW_BYTES as u64 {
             return Err(format!(
               "view {path}: {} bytes, over {} MB",
-              bytes.len(),
+              meta.len(),
               VIEW_BYTES >> 20
             ));
           }
+          let bytes = std::fs::read(&file).map_err(|e| format!("view {path}: {e}"))?;
           let (img, (w, h)) = tokio::task::spawn_blocking(move || image_for_model(&bytes))
             .await
             .map_err(|e| e.to_string())?

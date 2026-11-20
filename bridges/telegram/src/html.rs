@@ -77,7 +77,9 @@ fn cut(block: &str) -> Vec<String> {
     }
     false => (String::new(), block.to_string()),
   };
-  let room = PIECE - if code { open.len() + 8 } else { 0 };
+  let room = PIECE
+    .saturating_sub(if code { open.chars().count() + 8 } else { 0 })
+    .max(1);
   let mut parts: Vec<String> = Vec::new();
   let mut cur = String::new();
   for line in body.lines() {
@@ -131,7 +133,7 @@ pub fn html(md: &str) -> String {
       }
       let class = match lang.trim() {
         "" => String::new(),
-        lang => format!(" class=\"language-{}\"", escape(lang)),
+        lang => format!(" class=\"language-{}\"", escape(lang).replace('"', "&quot;")),
       };
       out.push_str(&format!(
         "<pre><code{class}>{}</code></pre>\n",
@@ -258,6 +260,10 @@ mod tests {
 
   #[test]
   fn markup_that_doesnt_close_stays_as_written() {
+    assert_eq!(
+      html("```a\"b&c\nx\n```"),
+      "<pre><code class=\"language-a&quot;b&amp;c\">x</code></pre>"
+    );
     assert_eq!(html("snake_case_name and 2*3*4"), "snake_case_name and 2*3*4");
     assert_eq!(html("a **b"), "a **b");
     assert_eq!(html("[x](javascript:alert)"), "[x](javascript:alert)");
@@ -288,6 +294,13 @@ mod tests {
     }
     let lines: usize = parts.iter().map(|p| p.matches("let x").count()).sum();
     assert_eq!(lines, 400);
+  }
+
+  #[test]
+  fn a_long_fence_leaves_room_for_progress() {
+    let open = format!("```{}", "é".repeat(4000));
+    let parts = pieces(&format!("{open}\nxy\n```"));
+    assert_eq!(parts, vec![format!("{open}\nx\n```"), format!("{open}\ny\n```")]);
   }
 
   #[test]

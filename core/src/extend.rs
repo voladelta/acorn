@@ -13,6 +13,7 @@ use crate::ai::Spec;
 use crate::{config, luau, skills};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// What the prompts say of growing.
@@ -81,10 +82,12 @@ fn shelve(dir: &Path, from: &Path, kind: &str, name: &str, ext: &str) -> Result<
 
 /// `text` written to `to` whole or not at all.
 fn put(to: &Path, text: &str) -> Result<(), String> {
+  static NEXT: AtomicU64 = AtomicU64::new(0);
   let tmp = to.with_file_name(format!(
-    ".{}.{}.tmp",
+    ".{}.{}.{}.tmp",
     to.file_name().unwrap_or_default().to_string_lossy(),
-    std::process::id()
+    std::process::id(),
+    NEXT.fetch_add(1, Ordering::Relaxed)
   ));
   fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, to)).map_err(|e| {
     let _ = fs::remove_file(&tmp);
