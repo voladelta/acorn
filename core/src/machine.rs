@@ -300,6 +300,63 @@ fn signal(pid: i32, sig: i32) {
   }
 }
 
+/// Processes owned by this user whose environment carries `mark`
+/// (`KEY=VALUE`), excluding this process itself.
+#[cfg(target_os = "linux")]
+fn marked_pids(mark: &str) -> Vec<i32> {
+  // SAFETY: getuid has no preconditions.
+  let uid = unsafe { libc::getuid() };
+  let me = std::process::id() as i32;
+  let needle = mark.as_bytes();
+  let Ok(entries) = fs::read_dir("/proc") else {
+    return Vec::new();
+  };
+  let mut pids = Vec::new();
+  for entry in entries.flatten() {
+    let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<i32>().ok()) else {
+      continue;
+    };
+    if pid <= 0 || pid == me {
+      continue;
+    }
+    let path = entry.path();
+    let Ok(meta) = fs::metadata(&path) else {
+      continue;
+    };
+    if meta.uid() != uid {
+      continue;
+    }
+    let Ok(env) = fs::read(path.join("environ")) else {
+      continue;
+    };
+    if env.split(|&b| b == 0).any(|kv| kv == needle) {
+      pids.push(pid);
+    }
+  }
+  pids
+}
+
+/// Processes owned by this user whose environment carries `mark`
+/// (`KEY=VALUE`), excluding this process itself.
+#[cfg(not(target_os = "linux"))]
+fn marked_pids(mark: &str) -> Vec<i32> {
+  // SAFETY: getuid has no preconditions.
+  let uid = unsafe { libc::getuid() }.to_string();
+  let me = std::process::id() as i32;
+  let Ok(ps) = std::process::Command::new("ps")
+    .args(["-wwE", "-U", &uid, "-o", "pid=,command="])
+    .output()
+  else {
+    return Vec::new();
+  };
+  String::from_utf8_lossy(&ps.stdout)
+    .lines()
+    .filter(|l| l.contains(mark))
+    .filter_map(|l| l.split_whitespace().next().and_then(|p| p.parse::<i32>().ok()))
+    .filter(|&pid| pid > 0 && pid != me)
+    .collect()
+}
+
 /// As Acorn quits: kills every shell's process group (a job still in it
 /// dies), then any process that left its group (ACORN_RUN), so none is
 /// left orphaned.
@@ -309,22 +366,9 @@ pub fn end() {
       signal(-pid, libc::SIGKILL);
     }
   }
-  // SAFETY: getuid has no preconditions.
-  let uid = unsafe { libc::getuid() }.to_string();
-  let Ok(ps) = std::process::Command::new("ps")
-    .args(["-wwE", "-U", &uid, "-o", "pid=,command="])
-    .output()
-  else {
-    return;
-  };
   let mark = format!("ACORN_RUN={}", *RUN);
-  for line in String::from_utf8_lossy(&ps.stdout)
-    .lines()
-    .filter(|l| l.contains(&mark))
-  {
-    if let Some(pid) = line.split_whitespace().next().and_then(|p| p.parse().ok()) {
-      signal(pid, libc::SIGKILL);
-    }
+  for pid in marked_pids(&mark) {
+    signal(pid, libc::SIGKILL);
   }
 }
 
@@ -739,5 +783,30 @@ mod tests {
     let shut = run("exec >&- 2>&-; sleep 3", 300.0);
     assert!(shut.timed_out && shut.code() == 128 + libc::SIGTERM);
     assert_eq!(run("kill -USR1 $$", 10_000.0).code(), 128 + libc::SIGUSR1);
+  }
+
+  #[test]
+  fn marked_pids_finds_detached_child_by_env() {
+    use std::os::unix::process::CommandExt as _;
+    let token = format!("{:016x}", rand::random::<u64>());
+    let mark = format!("ACORN_RUN={token}");
+    let mut child = std::process::Command::new("sleep")
+      .arg("60")
+      .env("ACORN_RUN", &token)
+      .stdin(std::process::Stdio::null())
+      .stdout(std::process::Stdio::null())
+      .stderr(std::process::Stdio::null())
+      .process_group(0)
+      .spawn()
+      .unwrap();
+    let pid = child.id() as i32;
+    let found = marked_pids(&mark);
+    let prefix_miss = marked_pids(&format!("ACORN_RUN={token}x"));
+    let key_miss = marked_pids(&format!("OTHER_ACORN_RUN={token}"));
+    signal(pid, libc::SIGKILL);
+    let _ = child.wait();
+    assert!(found.contains(&pid), "expected pid {pid} in {found:?}");
+    assert!(!prefix_miss.contains(&pid));
+    assert!(!key_miss.contains(&pid));
   }
 }
