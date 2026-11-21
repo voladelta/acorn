@@ -375,7 +375,8 @@ impl Chat {
   /// the goal. The whole ones take half the view's bytes at most, and
   /// start where the last check's did while they fit, else at a quarter:
   /// a goal's checks, one after each turn, then begin alike, and DeepSeek
-  /// reads what they share from its cache.
+  /// reads what they share from its cache. Those not summarized yet go
+  /// whole as a turn's do (`from`): the view has no line of them.
   fn goal_blocks(&mut self, goal: &str) -> Vec<Block> {
     let high = config::get().view;
     let least = self.mem.whole_in(0, high / 2);
@@ -384,6 +385,7 @@ impl Chat {
       _ => self.mem.whole_in(0, high / 4),
     };
     self.checked = Some(at);
+    let at = at.min(self.mem.whole(self.mem.first(0, 0)));
     let tail: String = (at..self.mem.count)
       .filter_map(|i| self.mem.message(i))
       .map(|m| {
@@ -879,5 +881,22 @@ mod tests {
     let from = chat.checked.unwrap();
     assert!(whole(&chat, from) <= high / 4 && whole(&chat, from - 1) > high / 4);
     assert!(last.len() < high);
+    // what no summary is built of yet goes whole, before that too
+    let unbuilt = chat.mem.count;
+    for _ in 0..(high / 3 / 6000) {
+      let id = chat.mem.count;
+      chat
+        .mem
+        .push(vec![Msg::new(Kind::Echo, format!("{id} {}", "w".repeat(6000)))])
+        .unwrap();
+    }
+    let prompt: String = chat.goal_blocks("done").iter().map(|b| b.text.as_str()).collect();
+    assert!(chat.checked.unwrap() > unbuilt);
+    for id in unbuilt..chat.mem.count {
+      assert!(
+        prompt.contains(&format!("\n{}|echo: {id} w", Part::leaf(id).name())),
+        "{id}"
+      );
+    }
   }
 }
