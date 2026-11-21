@@ -519,7 +519,27 @@ mod tests {
       "*/0 * * * *",
       "0 9 * * funday",
     ] {
-      assert!(Cron::parse(bad).is_err(), "{bad:?}");
+      let why = Cron::parse(bad).unwrap_err();
+      assert!(why.contains("No cron"), "{bad:?}: {why}");
+      if bad.split_whitespace().count() != 5 {
+        assert!(
+          why.contains("five fields, minute hour day month weekday"),
+          "{bad:?}: {why}"
+        );
+        assert!(why.contains("0 9 * * 1-5"), "{bad:?}: {why}");
+      } else {
+        let (field, range) = match bad {
+          "60 * * * *" | "5-1 * * * *" | "*/0 * * * *" => (bad.split_whitespace().next().unwrap(), "0 to 59"),
+          "0 24 * * *" => ("24", "0 to 23"),
+          "* * 0 * *" => ("0", "1 to 31"),
+          "0 9 * * funday" => ("funday", "0 to 7"),
+          _ => unreachable!(),
+        };
+        assert!(
+          why.contains(&format!("No cron field {field:?}: from {range}.")),
+          "{bad:?}: {why}"
+        );
+      }
     }
     assert!(Cron::parse("0 9 * * 1-5").is_ok() && Cron::parse("0,30 8-18/2 * jan-mar *").is_ok());
   }
