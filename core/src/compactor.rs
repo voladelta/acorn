@@ -92,7 +92,7 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
     (ask, served)
   };
   let mut lines: Vec<String> = Vec::new();
-  let mut asked = NODE;
+  let mut asked = memory::AIM;
   let mut end = compact(this, part, served, age, ask.clone()).await?;
   while end.ok && !end.text.trim().is_empty() {
     let line = end.text.trim().to_string();

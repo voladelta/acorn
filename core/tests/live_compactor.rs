@@ -129,6 +129,7 @@ async fn which_facts_survive_each_level() {
     began.elapsed().as_secs_f64(),
     count
   );
+  let mut compacted = 0;
   for l in 0..=4u32 {
     let n = 1u64 << l;
     println!("\n--- level {l}: {n} messages a line ---");
@@ -141,6 +142,13 @@ async fn which_facts_survive_each_level() {
         println!("{}: NOT BUILT", part.name());
         continue;
       };
+      if chat
+        .mem
+        .source(part)
+        .is_some_and(|source| source.len() > acorn_core::memory::NODE)
+      {
+        compacted += 1;
+      }
       let facts: Vec<(usize, &str)> = (a..=b)
         .filter(|&id| (1..=16).contains(&id))
         .map(|id| (id as usize, FACTS[id as usize - 1].1))
@@ -179,4 +187,5 @@ async fn which_facts_survive_each_level() {
     })
     .unwrap();
   println!("\ncost: {calls} compaction calls, ${:.4}", micros as f64 / 1e6);
+  println!("{compacted} nodes needed compaction, {} retries", calls - compacted);
 }
