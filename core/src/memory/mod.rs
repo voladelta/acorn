@@ -475,12 +475,14 @@ impl Memory {
     Ok(mem)
   }
 
-  /// A view up to `end` as kept (none: the highest nodes built).
+  /// A view up to `end` as kept (none: the highest nodes built), caching
+  /// every built node past `end` so later `reach` and `merge` see it.
   fn opened(&mut self, high: usize, end: u64, kept: Option<&Kept>) -> View {
     let keys: Option<HashSet<u64>> = kept.map(|k| k.parts.iter().map(|&(l, i)| Part::new(l, i).slot()).collect());
-    let parts: Vec<Part> = roots(end)
+    let parts: Vec<Part> = roots(self.count)
       .into_iter()
       .flat_map(|p| self.down(p, keys.as_ref()))
+      .filter(|p| p.span().1 < end)
       .collect();
     let size = parts.iter().map(|&p| self.size(p)).sum();
     View {
