@@ -49,6 +49,17 @@ fn on_disk(dir: &std::path::Path, text: &str) -> bool {
     })
 }
 
+/// The config's dir, a test's own, set before any read: a memory reads the
+/// view's size from it, never from the ~/.acorn of who runs the tests.
+fn configured() {
+  static SET: std::sync::Once = std::sync::Once::new();
+  SET.call_once(|| {
+    let dir = std::env::temp_dir().join(format!("acorn-memory-test-{}", std::process::id()));
+    // SAFETY: every test starts here, so none reads the environment yet.
+    unsafe { std::env::set_var("ACORN_DIR", &dir) };
+  });
+}
+
 /// Seed a chat with 12 messages (including `SECRET` at id 5) plus a long
 /// multi-page echo, then build its summary tree.
 fn seed(dir: &std::path::Path) -> Memory {
@@ -70,6 +81,7 @@ fn seed(dir: &std::path::Path) -> Memory {
 
 #[test]
 fn persistence_fts_search_and_zoom() {
+  configured();
   let home = tempfile::tempdir().unwrap();
   let dir = home.path().join("chats/main");
 
@@ -120,6 +132,7 @@ fn persistence_fts_search_and_zoom() {
 
 #[test]
 fn purge_unpurge_and_wal_erasure() {
+  configured();
   let home = tempfile::tempdir().unwrap();
   let dir = home.path().join("chats/main");
   let mut mem = seed(&dir);
@@ -182,6 +195,7 @@ fn purge_unpurge_and_wal_erasure() {
 
 #[test]
 fn long_message_purge_and_concurrent_wipe() {
+  configured();
   let home = tempfile::tempdir().unwrap();
   let dir = home.path().join("chats/main");
   let mut mem = Memory::load(&dir).unwrap();
@@ -208,6 +222,7 @@ fn long_message_purge_and_concurrent_wipe() {
 
 #[test]
 fn interrupted_message_and_agent_log() {
+  configured();
   let home = tempfile::tempdir().unwrap();
   let dir = home.path().join("chats/main");
   let mut mem = Memory::load(&dir).unwrap();
@@ -247,6 +262,7 @@ fn interrupted_message_and_agent_log() {
 
 #[test]
 fn legacy_agent_schema_and_view_lines() {
+  configured();
   let home = tempfile::tempdir().unwrap();
 
   // an agent from before efforts were kept: its column added, at the run's
