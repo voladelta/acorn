@@ -68,25 +68,27 @@ export function RowView(props: { row: Row; chat: string; now: number }) {
           <div
             role="button"
             tabIndex={0}
-            class="flex cursor-pointer gap-3 rounded-[10px] bg-muted px-3.5 py-2.5 transition-colors hover:bg-accent"
+            class="group flex cursor-pointer flex-col gap-1 border-b border-border py-3 text-left transition-opacity first:border-t hover:opacity-80 sm:flex-row sm:items-baseline sm:gap-5"
             onClick={() => store.act({ t: 'open', seg: r.seg })}
             onKeyDown={(e: KeyboardEvent) => e.key === 'Enter' && store.act({ t: 'open', seg: r.seg })}
           >
-            <span class="min-w-[38px] text-[11.5px] leading-6 font-semibold text-muted-foreground">{r.seg[1]}</span>
+            <span class="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground sm:w-12">
+              {`${r.seg[1]} msg`}
+            </span>
             {r.call ? (
               <CallHead call={r.call} folded />
             ) : (
-              <span class="flex-1 font-serif text-[15px] leading-[23px]">{r.text}</span>
+              <span class="flex-1 font-serif text-[15.5px] leading-[1.6]">{r.text}</span>
             )}
           </div>
         </Tip>
       );
     case 'box':
       return (
-        <div class="flex flex-col gap-2.5 rounded-xl border-[1.25px] border-border px-2.5 pb-2.5 dark:border-input">
+        <div class="flex flex-col gap-3 border-l border-border pl-4 sm:ml-12 sm:pl-5">
           <button
             type="button"
-            class="cursor-pointer border-b py-1.5 text-left text-xs font-semibold text-muted-foreground"
+            class="cursor-pointer border-b border-border pb-1.5 text-left font-serif text-[13.5px] italic text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => store.act({ t: 'shut', seg: r.seg })}
           >
             {r.text}
@@ -107,28 +109,30 @@ function Message(props: { kind: Kind; who: string; text: string; call: Call | nu
   switch (kind) {
     case 'user':
       return (
-        <div class="max-w-[560px] self-end rounded-[20px] rounded-br-md border-[1.25px] border-foreground/90 px-4 py-2.5 dark:border-foreground/50">
+        <div class="max-w-[85%] self-end rounded-2xl bg-muted px-4 py-2.5 sm:max-w-[540px]">
           <Plain text={text} />
           {pics}
         </div>
       );
     case 'work':
       return (
-        <div class="flex flex-col gap-1 rounded-[14px] border-[1.25px] border-foreground/90 px-5 pt-2.5 pb-3.5 dark:border-foreground/50">
+        <div class="flex flex-col gap-1 border-l-2 border-acorn-accent/60 py-0.5 pl-4">
           <button
             type="button"
-            class="w-fit cursor-pointer text-xs font-semibold text-muted-foreground hover:underline"
+            class="w-fit cursor-pointer text-[11px] font-medium tracking-[0.1em] uppercase text-muted-foreground transition-colors hover:text-foreground hover:underline"
             onClick={() => store.openName(who)}
           >
             {who}
           </button>
-          <Plain text={text} />
+          <div class="font-serif text-[15.5px] leading-[1.65]">
+            <Plain text={text} />
+          </div>
         </div>
       );
     case 'tool': {
       const c = props.call ?? { name: '', head: text, blocks: [] };
       return (
-        <div class="flex flex-col gap-1 rounded-[10px] bg-muted px-3.5 py-2">
+        <div class="flex flex-col gap-1.5 border-l border-border pl-3.5">
           <CallHead call={c} />
           {c.blocks.map((b, k) => {
             const outs = output(b.x);
@@ -155,8 +159,8 @@ function Message(props: { kind: Kind; who: string; text: string; call: Call | nu
       const [said, cut] = cutOff(text);
       return (
         <div class="flex flex-col gap-1">
-          {who ? <span class="text-xs font-bold text-muted-foreground/70">{who}</span> : null}
-          <div class="md text-[14.5px] leading-[23px] italic text-muted-foreground">
+          {who ? <span class="text-[11px] font-medium tracking-[0.08em] uppercase text-muted-foreground/75">{who}</span> : null}
+          <div class="md font-serif text-[14.5px] leading-[1.65] italic text-muted-foreground">
             <Md text={said} />
           </div>
           {cut ? <CutMark /> : null}
@@ -167,7 +171,7 @@ function Message(props: { kind: Kind; who: string; text: string; call: Call | nu
       const [said, cut] = cutOff(text);
       return (
         <div class="flex flex-col">
-          <div class="md text-base leading-[25px]">
+          <div class="md font-serif text-[16.5px] leading-[1.7]">
             <Md text={said} />
           </div>
           {cut ? <CutMark /> : null}
@@ -253,8 +257,8 @@ function CallHead(props: { call: Call; folded?: boolean }) {
 /** Lines in a frame, a name on its top edge. */
 function Framed(props: { name: string | null; children: unknown }) {
   return (
-    <div class="flex flex-col gap-1 overflow-x-auto rounded-md border-[1.25px] border-border px-2.5 py-1.5 dark:border-input">
-      {props.name ? <span class="font-mono text-xs font-semibold">{props.name}</span> : null}
+    <div class="flex flex-col gap-1 overflow-x-auto rounded-lg border border-border bg-muted/50 px-3 py-2">
+      {props.name ? <span class="font-mono text-[11.5px] text-muted-foreground">{props.name}</span> : null}
       {props.children}
     </div>
   );
@@ -267,11 +271,11 @@ function FileOut(props: { out: Out }) {
     const width = String(o.n + o.x.length).length;
     return (
       <Framed name={o.k}>
-        <pre class="font-mono text-[12.5px] leading-[19px]">
+        <pre class="font-mono text-[12px] leading-[19px]">
           {o.x.map((l, k) => (
-            <span key={k}>
+            <span key={k} class="block">
               <span class="text-muted-foreground/70 select-none">{`${String(o.n + k).padStart(width)} `}</span>
-              {`${l}\n`}
+              {l}
             </span>
           ))}
         </pre>
@@ -281,16 +285,23 @@ function FileOut(props: { out: Out }) {
   const width = String(Math.max(1, ...o.x.flat().map((l) => l.n))).length;
   return (
     <Framed name={o.k}>
-      <pre class="font-mono text-[12.5px] leading-[19px]">
+      <pre class="font-mono text-[12px] leading-[19px]">
         {o.x.map((hunk, h) => (
           <span key={h}>
-            {h > 0 ? <span class="text-muted-foreground/70">{`${'⋯'.padStart(width)}\n`}</span> : null}
+            {h > 0 ? <span class="block text-muted-foreground/70">{'⋯'.padStart(width)}</span> : null}
             {hunk.map((l, k) => (
-              <span key={k}>
+              <span
+                key={k}
+                class={
+                  l.s === '+'
+                    ? 'block bg-diff-add-bg text-diff-add'
+                    : l.s === '-'
+                      ? 'block bg-diff-del-bg text-diff-del'
+                      : 'block text-muted-foreground'
+                }
+              >
                 <span class="text-muted-foreground/70 select-none">{`${String(l.n).padStart(width)} `}</span>
-                <span class={l.s === '+' ? 'text-diff-add' : l.s === '-' ? 'text-diff-del' : 'text-muted-foreground'}>
-                  {`${l.s}${l.x}\n`}
-                </span>
+                {`${l.s}${l.x}`}
               </span>
             ))}
           </span>

@@ -18,7 +18,7 @@ import * as store from '../store.ts';
 import { progressShow, useHint, usdShow } from '../text.ts';
 import { Chat } from './Chat.tsx';
 import { Composer } from './Composer.tsx';
-import { Side, SideChip } from './Side.tsx';
+import { MobileAssistants, Side, SideChip } from './Side.tsx';
 import { Tip } from './Tip.tsx';
 
 export function App() {
@@ -63,82 +63,122 @@ export function App() {
   );
 }
 
-/** The sidebar's button (while the sidebar is hidden), the assistant's
- * name (back to its chat) and who it is, an import's progress, whether
- * the server can't be reached. */
+/** Desktop: sidebar toggle (when hidden), assistant name & about, status
+ * badges, overview indicator, and today's cost. Mobile: centered Atelier
+ * assistant switcher pill, with status badges neatly below when active. */
 function Header() {
   const ui = store.useUi();
   const me = store.me(ui);
-  const importing = ui.model.state?.importing ?? null;
+  const s = ui.model.state;
+  const importing = s?.importing ?? null;
+  const today = s?.today && s.today.n > 0 ? s.today : null;
+  const overview = ui.model.fold !== null;
   return (
-    <header class="flex h-[52px] shrink-0 items-center gap-3 border-b px-5">
-      {ui.side ? null : <SideChip />}
-      <button type="button" class="min-w-0 cursor-pointer truncate text-left" onClick={() => store.back()}>
-        <span class="font-brand text-lg font-semibold">{me.name}</span>
-        {me.about ? <span class="text-[13px] text-muted-foreground">{`  ·  ${me.about}`}</span> : null}
-      </button>
-      <span class="flex-1" />
-      {importing ? (
-        <Tip tip="Your past chats going into memory. Ask to pause or resume it." side="bottom">
-          <span class="flex h-8 items-center rounded-lg bg-muted px-3 text-[13.5px] font-medium">{progressShow(importing)}</span>
-        </Tip>
+    <div class="shrink-0">
+      <header class="relative z-20 flex h-[52px] items-center justify-center border-b border-border px-4 md:justify-between md:px-6">
+        <MobileAssistants />
+
+        <div class="hidden min-w-0 items-center gap-3 md:flex">
+          {ui.side ? null : <SideChip />}
+          <button type="button" class="flex min-w-0 cursor-pointer items-baseline gap-2.5 truncate text-left" onClick={() => store.back()}>
+            <span class="font-serif text-[17px] font-medium">{me.name}</span>
+            {me.about ? <span class="truncate text-[12.5px] text-muted-foreground">{me.about}</span> : null}
+          </button>
+        </div>
+
+        <div class="hidden shrink-0 items-center gap-3 md:flex">
+          {overview ? (
+            <button
+              type="button"
+              onClick={() => store.back()}
+              class="cursor-pointer font-serif text-[12px] italic text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Overview
+            </button>
+          ) : null}
+          {importing ? (
+            <Tip tip="Your past chats going into memory. Ask to pause or resume it." side="bottom">
+              <span class="flex h-7 items-center rounded-md bg-muted px-2.5 text-[12.5px] font-medium">{progressShow(importing)}</span>
+            </Tip>
+          ) : null}
+          {ui.down ? (
+            <Tip tip={`${ui.down}\nTrying again; what you send meanwhile comes back to the box.`} side="bottom">
+              <span class="flex h-7 shrink-0 items-center rounded-md bg-foreground px-2.5 text-[12.5px] font-medium text-background">
+                Can't reach the server
+              </span>
+            </Tip>
+          ) : null}
+          {today ? (
+            <Tip tip={`${useHint(today)}\nToday's calls in this chat: replies, summaries, agents. Ask for usage to see more.`} side="bottom">
+              <span class="font-mono text-[11.5px] tabular-nums text-muted-foreground">{`${usdShow(today.usd)} today`}</span>
+            </Tip>
+          ) : null}
+        </div>
+      </header>
+
+      {importing || ui.down || overview ? (
+        <div class="flex flex-wrap items-center justify-center gap-2 border-b border-border bg-muted/40 px-4 py-1.5 text-[12px] md:hidden">
+          {overview ? (
+            <button
+              type="button"
+              onClick={() => store.back()}
+              class="cursor-pointer font-serif italic text-muted-foreground hover:text-foreground"
+            >
+              Overview · tap to return
+            </button>
+          ) : null}
+          {importing ? (
+            <span class="rounded-md bg-muted px-2 py-0.5 font-medium">{progressShow(importing)}</span>
+          ) : null}
+          {ui.down ? (
+            <span class="rounded-md bg-foreground px-2 py-0.5 font-medium text-background">Can't reach the server</span>
+          ) : null}
+        </div>
       ) : null}
-      {ui.down ? (
-        <Tip tip={`${ui.down}\nTrying again; what you send meanwhile comes back to the box.`} side="bottom">
-          <span class="flex h-8 shrink-0 items-center rounded-lg bg-foreground px-3 text-[13.5px] font-medium text-background">
-            Can't reach the server
-          </span>
-        </Tip>
-      ) : null}
-    </header>
+    </div>
   );
 }
 
-/** The note shown, the goal, today's cost, the message box, the tabs. */
+/** Flat bottom writing sheet: toast note, goal, composer, and live tabs. */
 function Footer() {
   const ui = store.useUi();
   const s = ui.model.state;
-  const today = s?.today && s.today.n > 0 ? s.today : null;
   const tabs = model.tabs(ui.model);
   const me = store.me(ui).name;
   return (
-    <footer class="flex shrink-0 justify-center px-5 pt-2 pb-3">
-      <div class="flex w-full max-w-[740px] flex-col gap-2">
+    <footer class="shrink-0 border-t border-border bg-background px-5 pt-2.5 pb-3.5 sm:px-7">
+      <div class="mx-auto flex w-full max-w-[680px] flex-col gap-2">
         {ui.toast ? (
           <button
             type="button"
-            class="cursor-pointer self-center rounded-xl bg-foreground px-4 py-2 text-[13.5px] text-background"
+            class="cursor-pointer self-center rounded-xl bg-foreground px-4 py-2 text-[13px] text-background"
             onClick={() => store.note(null)}
           >
             {ui.toast}
           </button>
         ) : null}
-        <div class="flex items-center gap-3 text-[12.5px] text-muted-foreground">
-          {s?.goal ? (
-            <Tip tip={`${s.goal}\nIt keeps working till a check finds this met. Say so to drop it.`}>
-              <span class="min-w-0 truncate">{`Goal: ${s.goal}`}</span>
-            </Tip>
-          ) : null}
-          <span class="flex-1" />
-          {today ? (
-            <Tip tip={`${useHint(today)}\nToday's calls in this chat: replies, summaries, agents. Ask for usage to see more.`}>
-              <span class="tabular-nums">{`${usdShow(today.usd)} today`}</span>
-            </Tip>
-          ) : null}
-        </div>
+        {s?.goal ? (
+          <Tip tip={`${s.goal}\nIt keeps working till a check finds this met. Say so to drop it.`}>
+            <div class="truncate font-serif text-[12.5px] italic text-muted-foreground">{`Goal: ${s.goal}`}</div>
+          </Tip>
+        ) : null}
         <Composer />
         {tabs.length > 1 ? (
-          <div class="flex flex-wrap gap-4">
+          <div class="flex flex-wrap items-center gap-4 pt-0.5">
             {tabs.map((name) => {
               const on = name === ui.model.page;
               return (
                 <button
                   key={name ?? ''}
                   type="button"
-                  class={cn('cursor-pointer text-[13px]', on ? 'font-semibold text-foreground' : 'text-muted-foreground')}
+                  class={cn(
+                    'flex cursor-pointer items-center gap-1.5 text-[12px] transition-colors',
+                    on ? 'font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
+                  )}
                   onClick={() => store.act({ t: 'goto', name })}
                 >
-                  {`${on ? '●' : '◯'} ${name ?? me}`}
+                  <span class={cn('size-1.5 rounded-full', on ? 'bg-acorn-accent' : 'bg-muted-foreground/45')} />
+                  <span>{name ?? me}</span>
                 </button>
               );
             })}

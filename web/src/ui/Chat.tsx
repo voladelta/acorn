@@ -60,7 +60,7 @@ export function Chat() {
         atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW;
       }}
     >
-      <div ref={inner} class="mx-auto flex w-full max-w-[740px] flex-col gap-3.5 px-5 pt-6 pb-7">
+      <div ref={inner} class="mx-auto flex w-full max-w-[680px] flex-col gap-5 px-5 pt-6 pb-8 sm:px-7">
         {items.map((it) => (
           <Item key={it.key} rows={it.rows} chat={ui.shown} now={ui.now} />
         ))}
@@ -76,7 +76,7 @@ export function Chat() {
 const Item = memo(
   function Item(props: { rows: Row[]; chat: string; now: number }) {
     return (
-      <div class="flex flex-col gap-3.5">
+      <div class="flex flex-col gap-4">
         {props.rows.map((row, k) => (
           <RowView key={k} row={row} chat={props.chat} now={props.now} />
         ))}
