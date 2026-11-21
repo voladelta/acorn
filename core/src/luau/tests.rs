@@ -1175,14 +1175,10 @@ async fn lightpanda_lists_its_tools_and_says_how_to_drive_it() {
 #[tokio::test(flavor = "multi_thread")]
 async fn lightpanda_missing_says_how_to_get_it() {
   let lab = Lab::new();
-  lab.file("lightpanda.luau", &lightpanda_plugin("/nonexistent/lightpanda"));
+  // Nor in ~/.local/bin, which the plugin falls back to.
+  let nowhere = lightpanda_plugin("/nonexistent/lightpanda").replace("$HOME/.local/bin", "/nonexistent");
+  lab.file("lightpanda.luau", &nowhere);
   let out = lab.go("pcall(browser, 'getUrl')").await;
-  // Unless installed in ~/.local/bin, which the plugin falls back to.
-  let home = std::env::var("HOME").unwrap_or_default();
-  if std::path::Path::new(&home).join(".local/bin/lightpanda").exists() {
-    lab.go("browser('close')").await;
-    return;
-  }
   assert!(
     out.text.starts_with("=> false, lightpanda is not installed"),
     "{}",
