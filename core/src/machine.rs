@@ -805,13 +805,13 @@ mod tests {
   fn edits_need_one_match_and_keep_crlf() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    fs::write(cwd.join("f"), "x x\r\ny\r\n").unwrap();
+    fs::write(cwd.join("f"), "x\r\ny\r\nx\r\ny\r\n").unwrap();
     text(cwd, "f", None, None).unwrap();
-    let two = change(cwd, "f", "x", "z", false).unwrap_err();
+    let two = change(cwd, "f", "x\ny", "z\nw", false).unwrap_err();
     assert!(two.contains("old_string matched 2 times in"));
     let all = change(cwd, "f", "x\ny", "z\nw", true).unwrap();
     assert!(all.ends_with("All occurrences were successfully replaced."), "{all}");
-    assert_eq!(fs::read_to_string(cwd.join("f")).unwrap(), "x z\r\nw\r\n");
+    assert_eq!(fs::read_to_string(cwd.join("f")).unwrap(), "z\r\nw\r\nz\r\nw\r\n");
   }
 
   #[test]
@@ -843,6 +843,13 @@ mod tests {
         .0
         .is_some_and(|f| fs::metadata(f).unwrap().len() == 100_000)
     );
+  }
+
+  #[test]
+  fn shell_sees_nothing_of_the_server_token() {
+    unsafe { std::env::set_var(config::TOKEN_VAR, "t0ken") };
+    let ran = run(&format!("echo \"${{{}:-gone}}\"", config::TOKEN_VAR), 10_000.0);
+    assert_eq!(ran.tails().0, "gone\n");
   }
 
   #[test]

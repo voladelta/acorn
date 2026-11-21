@@ -36,7 +36,7 @@ Scared of thunder; Adaptil collar replaced every 30 days.";
 const FILLER: &str = "Use no tools; reply only OK. Context for later, unrelated to my dog: our team's Q3 planning moved to the third floor room 3B, the projector there needs the USB-C dongle from IT, lunch is ordered from the Thai place on 5th, and parking validation is at the front desk until 6 pm.";
 
 /// In a small memory (view 3000), a long record and a skill's use, then
-/// enough else that it compacts: one number of the record recalled
+/// enough else that it compacts: details of the record recalled
 /// exactly from deep in the tree, and the skill, changed meanwhile,
 /// followed as it is now, not as remembered.
 pub fn deep_memory() {
@@ -49,28 +49,46 @@ pub fn deep_memory() {
       "Bullet list. The last line is exactly: SIGNED-OFF: then the word kestrel written in capitals.",
     );
   });
-  l.say("Acorn", "default", RECORD);
+  let record: u64 = l.say("Acorn", "default", RECORD).from.try_into().unwrap();
   let t = l.say(
     "Acorn",
     "default",
     "Write the release notes for v2: dark mode added, a crash on startup fixed.",
   );
   assert!(t.reply.contains("KESTREL"), "the skill followed: {}", t.reply);
-  for k in 1..=10 {
-    l.say("Acorn", "default", &format!("({k}) {FILLER}"));
-  }
-  let chat = l.chat("default");
-  let nodes = one(&chat, "select count(*) from nodes");
-  l.note(&format!("summaries: {nodes}"));
-  assert_ne!(nodes, "0", "memory never compacted, so this proves nothing");
-
-  let t = l.say(
-    "Acorn",
-    "default",
-    "What was the lot number of Biscuit's bordetella vaccine, and her Trupanion policy number?",
-  );
+  let engine = acorn_core::chat::hub::ready("default").expect("Acorn's open chat");
+  let (question, answers) = (1..=10)
+    .find_map(|k| {
+      l.say("Acorn", "default", &format!("({k}) {FILLER}"));
+      let chat = engine.lock();
+      let view = &chat.mem.view;
+      let part = view.parts.get(view.cover(record))?;
+      if part.l == 0 {
+        return None;
+      }
+      let mut visible = chat.share().system;
+      for block in chat.mem.view_blocks(chat.mem.count) {
+        visible.push_str(&block.text);
+      }
+      visible.make_ascii_uppercase();
+      [
+        (
+          "What were Biscuit's bordetella vaccine lot and Trupanion policy number?",
+          ["BD2290", "TP-6610394"],
+        ),
+        (
+          "What were Biscuit's clinic ID and PetLink account number?",
+          ["MG-2219", "PL-44827"],
+        ),
+      ]
+      .into_iter()
+      .find(|(_, answers)| answers.iter().any(|v| !visible.contains(v)))
+      .inspect(|_| l.note(&format!("record {record} compacted into {}", part.name())))
+    })
+    .expect("the record must be merged and at least one requested detail absent from the visible context");
+  let t = l.say("Acorn", "default", question);
   assert!(
-    t.replies.contains("BD2290") && t.replies.contains("TP-6610394"),
+    answers.iter().all(|v| t.replies.contains(v)),
     "recalled exactly: {}",
     t.replies
   );
