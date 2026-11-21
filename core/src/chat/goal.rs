@@ -6,7 +6,6 @@
 
 use super::{Chat, Engine, Phase};
 use crate::ai;
-use crate::memory::{self, Part};
 use crate::{Block, Kind, Served, config};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -15,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 /// turn or a compaction, made the model summarize the chat instead of
 /// answering), asked after the chat (the view, its latest messages whole)
 /// of its goal; unmet, the user's nudge.
-const GOAL: &str = "You check a goal. Below is a chat between a user and an AI assistant: its older messages as summary lines (id+n|text), then its latest messages whole, then the goal the assistant set itself from the user's words. Answer yes if the chat shows the goal fully satisfied now, by evidence in it (tool results, files, outputs), not by the assistant's word alone; else no. Write that one word, nothing else.";
+const GOAL: &str = "You check a goal. Below is a chat between a user and an AI assistant: its older messages as summary lines (id+n|text), then its latest messages whole (id+0|kind: text), then the goal the assistant set itself from the user's words. Answer yes if the chat shows the goal fully satisfied now, by evidence in it (tool results, files, outputs), not by the assistant's word alone; else no. Write that one word, nothing else.";
 const GOAL_ASK: &str = "\nThe goal:\n\n";
 const GOAL_NO: &str = "The goal isn't satisfied yet: keep working. Treat the current workspace, tool results and files as authoritative; inspect them instead of assuming earlier narration is still current. Make concrete progress and verify the result. Before saying the goal is done, gather evidence that the whole of it is achieved.";
 
@@ -24,31 +23,41 @@ impl Engine {
   /// but yes), the user's nudge goes to the turn as their message; met,
   /// the goal ends. A check that fails, a stop, a message (which stops
   /// the check: its answer would be moot) or the goal dropped meanwhile
-  /// end it with no nudge.
+  /// end it with no nudge; so does one come while the nudge waits its
+  /// turn to log (`writing`): it would follow the user's message, and
+  /// tell the assistant to keep working past it.
   pub(super) async fn checked(self: Arc<Self>, call: ai::Call, goal: String, halt: CancellationToken) {
     let end = call.end().await;
-    self
-      .writing(async || {
-        let mut chat = self.lock();
-        chat.phase = Phase::Settling;
-        if !halt.is_cancelled() && chat.mem.goal.as_deref() == Some(goal.as_str()) && chat.wait.is_empty() {
-          if !end.ok {
-            chat.note(format!(
-              "No goal check: {}. The goal stays till it is dropped.",
-              end.text.trim_end_matches('.')
-            ));
-          } else if says_yes(&end.text) {
-            chat.mem.goal = None;
-            chat.save();
-            chat.note("Goal met.");
-          } else {
+    let met = end.ok && says_yes(&end.text);
+    let nudge = {
+      let mut chat = self.lock();
+      chat.phase = Phase::Settling;
+      let on = chat.goes_on(&goal, &halt);
+      if on && !end.ok {
+        chat.note(format!(
+          "No goal check: {}. The goal stays till it is dropped.",
+          end.text.trim_end_matches('.')
+        ));
+      } else if on && met {
+        chat.mem.goal = None;
+        chat.save();
+        chat.note("Goal met.");
+      }
+      chat.change();
+      on && end.ok && !met
+    };
+    if nudge {
+      let me = self.clone();
+      self
+        .writing(async move || {
+          let mut chat = me.lock();
+          if chat.goes_on(&goal, &halt) {
             let span = chat.push(None, Kind::User, GOAL_NO);
             chat.take(span);
           }
-        }
-        chat.change();
-      })
-      .await;
+        })
+        .await;
+    }
   }
 }
 
@@ -60,6 +69,12 @@ fn says_yes(text: &str) -> bool {
 }
 
 impl Chat {
+  /// Whether a check of `goal` still counts: the turn not stopped, the
+  /// goal still set, no message waiting.
+  fn goes_on(&self, goal: &str, halt: &CancellationToken) -> bool {
+    !halt.is_cancelled() && self.mem.goal.as_deref() == Some(goal) && self.wait.is_empty()
+  }
+
   /// The goal, if there is one, asked of the chat's model, without
   /// tools, on the chat as it is now: its check, and the goal checked.
   pub(super) fn check_goal(&mut self) -> Option<(ai::Call, String)> {
@@ -92,12 +107,7 @@ impl Chat {
     let at = at.min(self.mem.whole(self.mem.first(0, 0)));
     let tail: String = (at..self.mem.count)
       .filter_map(|i| self.mem.message(i))
-      .map(|m| {
-        format!(
-          "{}\n",
-          memory::line(Part::leaf(m.i), &format!("{}: {}", m.kind.as_str(), m.text))
-        )
-      })
+      .map(|m| super::turns::whole_line(&m))
       .collect();
     let mut blocks = self.mem.view_blocks(at);
     blocks.push(Block::new(format!("{tail}{GOAL_ASK}{goal}"), true));
@@ -117,35 +127,7 @@ impl Chat {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::memory::Msg;
-
-  #[tokio::test]
-  async fn handoff_skips_a_goal_nudge_superseded_by_a_user_message() {
-    let dir = tempfile::tempdir().unwrap();
-    let engine = crate::chat::tests::open(dir.path());
-    let call = ai::Call::answered("no").await;
-    let halt = {
-      let mut chat = engine.lock();
-      chat.set_goal(Some("finish".into()));
-      chat.phase = Phase::Checking(call.handle.clone());
-      chat.halt.clone()
-    };
-    let writer = engine.writes.lock().await;
-    let check = engine.clone().checked(call, "finish".into(), halt);
-    tokio::pin!(check);
-    assert!(futures_util::poll!(&mut check).is_pending());
-    {
-      let mut chat = engine.lock();
-      let msg = chat.push(None, Kind::User, "wait for my changes");
-      chat.take(msg);
-    }
-    drop(writer);
-    check.await;
-    let chat = engine.lock();
-    assert_eq!(chat.mem.count, 1);
-    assert_eq!(chat.wait.len(), 1);
-    assert_eq!(chat.mem.goal.as_deref(), Some("finish"));
-  }
+  use crate::memory::{self, Msg};
 
   #[test]
   fn yes_is_a_word() {
@@ -233,10 +215,49 @@ mod tests {
     let prompt: String = chat.goal_blocks("done").iter().map(|b| b.text.as_str()).collect();
     assert!(chat.checked.unwrap() > unbuilt);
     for id in unbuilt..chat.mem.count {
-      assert!(
-        prompt.contains(&format!("\n{}|echo: {id} w", Part::leaf(id).name())),
-        "{id}"
-      );
+      assert!(prompt.contains(&format!("\n{id}+0|echo: {id} w")), "{id}");
     }
+  }
+
+  #[tokio::test]
+  async fn the_whole_messages_keep_their_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    let mut chat = engine.lock();
+    chat
+      .mem
+      .push(vec![Msg::new(Kind::Tool, "test a ... ok\ntest b ... FAILED")])
+      .unwrap();
+    let prompt: String = chat.goal_blocks("done").iter().map(|b| b.text.as_str()).collect();
+    assert!(
+      prompt.contains("0+0|tool: test a ... ok\ntest b ... FAILED\n"),
+      "{prompt}"
+    );
+  }
+
+  /// A check that says no, its nudge waiting to log while the user's
+  /// message logs: the user's goes, the nudge doesn't.
+  #[tokio::test]
+  async fn no_nudge_follows_a_message_come_meanwhile() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    engine.lock().mem.goal = Some("done".into());
+    let post = engine.writes.lock().await;
+    let halt = engine.lock().halt.clone();
+    let check = tokio::spawn(engine.clone().checked(ai::Call::ended("no"), "done".into(), halt));
+    while !matches!(engine.lock().phase, Phase::Settling) {
+      tokio::task::yield_now().await;
+    }
+    {
+      let mut chat = engine.lock();
+      let span = chat.push(None, Kind::User, "hold on, stop");
+      chat.take(span);
+    }
+    drop(post);
+    check.await.unwrap();
+    let chat = engine.lock();
+    let last = chat.mem.message(chat.mem.count - 1).unwrap();
+    assert_eq!(last.text, "hold on, stop");
+    assert_eq!(chat.wait.len(), 1);
   }
 }

@@ -227,35 +227,32 @@ pub struct Call {
 }
 
 impl Call {
-  /// A completed call whose inbox has closed, as seen by its chat before
-  /// the turn has processed the result.
-  #[cfg(test)]
-  pub(crate) async fn answered(text: &str) -> Self {
-    let (tx, _) = mpsc::unbounded_channel();
-    let end = End {
-      ok: true,
-      text: text.into(),
-      ..End::default()
-    };
-    let done = tokio::spawn(async move { end });
-    while !done.is_finished() {
-      tokio::task::yield_now().await;
-    }
-    Self {
-      handle: Handle {
-        tx,
-        cancel: CancellationToken::new(),
-      },
-      done,
-    }
-  }
-
   /// Its end (a call that panicked failed).
   pub async fn end(self) -> End {
     self
       .done
       .await
       .unwrap_or_else(|err| End::failed(format!("the call failed: {err}")))
+  }
+}
+
+#[cfg(test)]
+impl Call {
+  /// A call ended already, answering `text`.
+  pub fn ended(text: &str) -> Call {
+    let (tx, _) = mpsc::unbounded_channel();
+    let handle = Handle {
+      tx,
+      cancel: CancellationToken::new(),
+    };
+    let end = End {
+      ok: true,
+      ..End::failed(text)
+    };
+    Call {
+      handle,
+      done: tokio::spawn(async move { end }),
+    }
   }
 }
 

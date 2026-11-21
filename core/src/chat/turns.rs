@@ -27,6 +27,12 @@ pub const TIMER: &str = "timer";
 /// A turn's head, as a summary's is "Compaction:": one prompt serves both.
 const HEAD: &str = "Turn: the user's new message:\n\n";
 
+/// A message whole as a call reads it: `id+0|kind: text`, its images named
+/// (+0: no summary line, which is `id+1`, can be taken for it).
+pub(super) fn whole_line(root: &memory::Root) -> String {
+  format!("{}+0|{}\n", root.i, root.show())
+}
+
 pub(super) fn latest(mem: &memory::Memory, from: u64, end: u64) -> crate::Say {
   let mut say = crate::Say::default();
   for id in from..end {
@@ -36,7 +42,7 @@ pub(super) fn latest(mem: &memory::Memory, from: u64, end: u64) -> crate::Say {
           .text
           .push_str("The chat's latest messages, whole, not summarized yet:\n\n");
       }
-      say.text.push_str(&format!("{id}+0|{}\n", root.show()));
+      say.text.push_str(&whole_line(&root));
       say.imgs.extend(mem.images(id));
     }
   }

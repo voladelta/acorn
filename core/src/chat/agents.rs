@@ -803,7 +803,10 @@ mod tests {
   async fn handoff_restarts_an_agent_told_after_its_call_finished() {
     let dir = tempfile::tempdir().unwrap();
     let engine = crate::chat::tests::open(dir.path());
-    let call = ai::Call::answered("old report").await;
+    let call = ai::Call::ended("old report");
+    while !call.done.is_finished() {
+      tokio::task::yield_now().await;
+    }
     let name = {
       let mut chat = engine.lock();
       let name = chat.mem.agent_new(None).unwrap();
@@ -821,7 +824,7 @@ mod tests {
     // The next request cannot run until we yield.
     assert!(futures_util::poll!(Box::pin(run)).is_pending());
     let chat = engine.lock();
-    assert_eq!(chat.working(), [name.clone()]);
+    assert_eq!(chat.working(), std::slice::from_ref(&name));
     let ask = chat.agent_ask(&name).unwrap();
     assert!(ask.blocks.last().unwrap().text.contains("check the revised input"));
   }
