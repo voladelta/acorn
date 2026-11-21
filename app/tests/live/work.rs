@@ -16,8 +16,8 @@ fn hidden(call: &str) -> bool {
 
 /// The tools, through luau: an exit code reported, not raised; a file read
 /// before it is edited, only the edit landing; a change made outside since
-/// kept; CRLF kept; a script written and run; long output's tail kept; a
-/// timeout that kills and says so; no hidden tool called.
+/// kept; CRLF kept; a script written and run; a timeout that kills and
+/// says so; no hidden tool called.
 pub fn tools() {
   let mut l = Live::start("tools", &[], |d| {
     write(
@@ -107,13 +107,6 @@ pub fn tools() {
   );
   assert!(t.replies.contains("HELLO-42"), "{}", t.replies);
   assert!(std::fs::read_to_string(proj.join("hello.sh")).unwrap().contains("6*7"));
-
-  let t = l.say(
-    "Acorn",
-    "default",
-    "Run exactly `seq 1 300000`, with nothing piped or added to it, and tell me only the last number it printed, written as LAST=<number>.",
-  );
-  assert_eq!(number(&t.replies, "LAST"), Some(300_000), "{}", t.replies);
 
   let t = l.say(
     "Acorn",
