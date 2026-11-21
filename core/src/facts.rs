@@ -54,7 +54,7 @@ pub struct Fact {
 
 /// A slot's key: its words, trimmed and lowercased, so a correction finds
 /// what it corrects.
-fn key(text: &str) -> String {
+pub(crate) fn key(text: &str) -> String {
   text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
@@ -136,6 +136,22 @@ pub fn forget(me: &str, id: u64) -> Result<String> {
   }
   crate::memory::erase(&db)?;
   Ok(format!("Forgot #{id}; it is erased from disk."))
+}
+
+/// The facts assistant `me` sees that hold `text` forgotten for good (a
+/// purge by text: each would go on into every system prompt). Answers
+/// how many went.
+pub fn purge(me: &str, text: &str) -> Result<usize> {
+  let db = db()?;
+  let gone = db.execute(
+    "delete from facts where owner in (?1, ?2)
+        and (instr(value, ?3) > 0 or instr(subject, ?4) > 0 or instr(predicate, ?4) > 0)",
+    params![EVERYONE, me, text, key(text)],
+  )?;
+  if gone > 0 {
+    crate::memory::erase(&db)?;
+  }
+  Ok(gone)
 }
 
 /// The facts assistant `me` sees, for its system prompt (none: "").

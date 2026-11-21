@@ -13,22 +13,31 @@
 //! (busy: no connection, a retry status, a stream error, cut short or
 //! silent for IDLE), dropping what it streamed (`pace` keeps a busy
 //! model's room). A call ends answered (`Fail`: the model's answer failed,
-//! a refusal or a stop reason: its input's doing) or not: `Down`, the
-//! service's (a refusal of the request, as when the API key's credit is
-//! gone, or busy past TRIES), or the daily budget's, spent before a
-//! request (`chat::over_budget`: no request goes, and its why is told, so
-//! a patient call waits it out as an outage); `Lost`, ours (a stop). The service's why
-//! goes to the log; the user reads only that the AI service is busy. A
-//! stop ends the call at once, its request cut. What each request used
-//! goes to its meter, a stream cut short counting what it read.
+//! a refusal or a stop reason, or the request itself was refused as
+//! malformed or too long: its input's doing, asked again it fails alike)
+//! or not: `Down`, the service's (a refusal of the key or the account, as
+//! when its credit is gone, or busy past TRIES), or the daily budget's,
+//! spent before a request (`chat::over_budget`: no request goes, and its
+//! why is told, so a patient call waits it out as an outage); `Lost`, ours
+//! (a stop). A refusal's why is told, as the user may mend it (a key, the
+//! credit); a busy service's goes to the log, the user reading only that
+//! it is busy. A request past the model's context goes again with less
+//! room for its output, down to LEAST; past that, the call's older tool
+//! results are dropped (`shed`), a half at a time. A text purged as a
+//! call runs (`Toolbox::purged`) is `[purged]` in all the call sends
+//! after: its prompt, built before, and its items. A stop ends the call at
+//! once, its request cut. What each request used goes to its meter; one
+//! cut short (a stop's, a message's, a stream's end) tells no usage, so
+//! what it sent and read is counted (`used`).
 
-use super::deepseek::{Got, Halt, IDLE, Item, MODEL, Step, URL};
+use super::deepseek::{Got, Halt, IDLE, Item, MAX_OUTPUT_TOKENS, MODEL, Step, URL};
 use super::{Ask, End, Event, On, Out, Spec, Stop, Used, cache, nap, pace};
 use crate::wire::{Live, live_push};
 use crate::{Kind, Say, clip, config, price};
 use futures_util::StreamExt;
 use parking_lot::Mutex;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -38,6 +47,16 @@ pub const TRIES: u32 = 8;
 
 /// What a call the service never answered says.
 const BUSY: &str = "the AI service is busy or unavailable right now";
+
+/// The least room for its output a request is sent with: with less left
+/// of the model's context, the call sheds.
+const LEAST: u64 = 32_000;
+
+/// What a purged secret reads as in a call that runs on.
+const PURGED: &str = "[purged]";
+
+/// What a tool result dropped to fit the model's context reads.
+const SHED: &str = "[dropped: this call outgrew the model's context; run it again if still needed]";
 
 /// What a tool call a message cut in on answers: cut while it ran (after
 /// what it did), or never run.
@@ -95,10 +114,50 @@ async fn turns(
     parts,
     imgs: ask.imgs.clone(),
   }];
+  let mut room = MAX_OUTPUT_TOKENS;
+  let mut ask = Cow::Borrowed(ask);
+  // the secrets its prompt was veiled of, the items veiled of all
+  let (mut known, mut clean) = (0, 0);
   while !cancel.is_cancelled() {
+    let secrets = ask.tools.as_ref().map(|t| t.purged()).unwrap_or_default();
+    if secrets.len() > known {
+      // one purged as the call ran: its prompt, built before, holds it
+      let holds = |text: &str| secrets.iter().any(|s| text.contains(s.as_str()));
+      if holds(&ask.system) || ask.blocks.iter().any(|b| holds(&b.text)) {
+        let ask = ask.to_mut();
+        veil(&mut ask.system, &secrets);
+        for b in &mut ask.blocks {
+          veil(&mut b.text, &secrets);
+        }
+      }
+      (known, clean) = (secrets.len(), 0);
+    }
+    for item in &mut items[clean..] {
+      veil_item(item, &secrets);
+    }
+    clean = items.len();
+    let ask = &*ask;
     let cut = cancel.child_token();
-    let body = super::deepseek::body(ask, &items, &tools);
+    let body = super::deepseek::body(ask, &items, &tools, room);
     let step = heard.till_cut(step(ask, on, key, body, &cut), &cut).await;
+    if step.halt == Halt::Fail
+      && let Some(left) = super::deepseek::left(&step.why)
+    {
+      // each pass sends less: less room, or fewer results
+      if left >= LEAST && left < room {
+        room = left;
+        continue;
+      }
+      if shed(&mut items) {
+        room = MAX_OUTPUT_TOKENS;
+        on(Event::Entry {
+          kind: Kind::Mind,
+          text: "This call outgrew the model's context: its older tool results were dropped.".into(),
+          of: None,
+        });
+        continue;
+      }
+    }
     for e in &step.entries {
       on(Event::Entry {
         kind: e.kind,
@@ -129,11 +188,7 @@ async fn turns(
       _ => None,
     } {
       if end.text.is_empty() {
-        end.text = if step.halt == Halt::Down {
-          BUSY.into()
-        } else {
-          step.why.clone()
-        };
+        end.text = step.why.clone();
       }
       end.stop = Some(stop);
       return Ok(());
@@ -207,6 +262,80 @@ async fn turns(
   Ok(())
 }
 
+/// A text with each secret in it written `[purged]`.
+fn veil(text: &mut String, secrets: &[String]) {
+  for s in secrets {
+    if text.contains(s.as_str()) {
+      *text = text.replace(s.as_str(), PURGED);
+    }
+  }
+}
+
+/// An item veiled: a text of the user's, the model's output, its reply
+/// cut short, a tool's results.
+fn veil_item(item: &mut Item, secrets: &[String]) {
+  if secrets.is_empty() {
+    return;
+  }
+  match item {
+    Item::User { parts, .. } => parts.iter_mut().for_each(|p| veil(p, secrets)),
+    Item::Turn(out) => out.iter_mut().for_each(|v| veil_json(v, secrets)),
+    Item::Said(text) => veil(text, secrets),
+    Item::Back(backs) => backs.iter_mut().for_each(|(_, out)| veil(&mut out.text, secrets)),
+  }
+}
+
+/// Every string of a JSON value veiled; one that is itself JSON (a tool
+/// call's arguments) may hold a secret escaped, so it is veiled as parsed.
+fn veil_json(v: &mut Value, secrets: &[String]) {
+  match v {
+    Value::String(s) => {
+      if let Some(mut inner) = s
+        .starts_with(['{', '['])
+        .then(|| serde_json::from_str::<Value>(s).ok())
+        .flatten()
+      {
+        let was = inner.clone();
+        veil_json(&mut inner, secrets);
+        if inner != was {
+          *s = inner.to_string();
+        }
+      }
+      veil(s, secrets);
+    }
+    Value::Array(a) => a.iter_mut().for_each(|v| veil_json(v, secrets)),
+    Value::Object(o) => o.values_mut().for_each(|v| veil_json(v, secrets)),
+    _ => {}
+  }
+}
+
+/// The older half (by size) of the tool results a call still holds,
+/// dropped; whether any was.
+fn shed(items: &mut [Item]) -> bool {
+  let size = |out: &Out| out.text.len() + out.imgs.iter().map(|i| i.data.len()).sum::<usize>();
+  let held = |out: &&mut Out| out.text != SHED || !out.imgs.is_empty();
+  let mut outs: Vec<&mut Out> = items
+    .iter_mut()
+    .filter_map(|item| match item {
+      Item::Back(backs) => Some(backs.iter_mut().map(|(_, out)| out)),
+      _ => None,
+    })
+    .flatten()
+    .filter(held)
+    .collect();
+  let half = outs.iter().map(|out| size(out)).sum::<usize>() / 2;
+  let mut dropped = 0;
+  for out in &mut outs {
+    if dropped > half {
+      break;
+    }
+    dropped += size(out).max(1);
+    out.text = SHED.into();
+    out.imgs.clear();
+  }
+  dropped > 0
+}
+
 /// The messages sent to a call as it runs: those heard so far wait in
 /// `says` for the step's end.
 struct Heard<'a> {
@@ -269,21 +398,15 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
       (Some(_), false) => vec![MODEL, &own],
     };
     pace::yielded(&waits, cancel).await;
-    let seen = Mutex::new(Vec::new());
-    let sent = tokio::select! {
-        sent = request(ask, on, key, &body, cancel, &seen) => sent,
-        _ = cancel.cancelled() => None,
+    let Some(Sent { after, step }) = request(ask, on, key, &body, cancel).await else {
+      break fail("stopped", &[], Halt::Lost);
     };
-    let Some(Sent { after, step }) = sent else {
-      break fail("stopped", &seen.lock(), Halt::Lost);
-    };
-    if step.halt == Halt::Down {
-      eprintln!("{MODEL}: {}", clip::head(&step.why, 300));
-    }
     if step.halt != Halt::Busy || k >= TRIES {
       break if step.halt == Halt::Busy {
+        eprintln!("{MODEL}: {}", clip::head(&step.why, 300));
         Step {
           halt: Halt::Down,
+          why: BUSY.into(),
           ..step
         }
       } else {
@@ -318,15 +441,9 @@ struct Sent {
   step: Step,
 }
 
-/// One request, in single flight (`cache`) and at its model's pace.
-async fn request(
-  ask: &Ask,
-  on: &On,
-  key: &str,
-  body: &Value,
-  cancel: &CancellationToken,
-  seen: &Mutex<Vec<Live>>,
-) -> Option<Sent> {
+/// One request, in single flight (`cache`) and at its model's pace; None:
+/// stopped before it was sent.
+async fn request(ask: &Ask, on: &On, key: &str, body: &Value, cancel: &CancellationToken) -> Option<Sent> {
   #[cfg(test)]
   if std::env::var_os("ACORN_TEST_CAPPED_REQUEST").is_some() {
     tests::DISPATCHED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -335,41 +452,44 @@ async fn request(
       step: fail("unexpected dispatch", &[], Halt::Fail),
     });
   }
-  let mut flight = cache::wait(ask).await;
-  if cancel.is_cancelled() {
-    return None;
-  }
+  let mut flight = tokio::select! {
+      flight = cache::wait(ask) => flight,
+      _ = cancel.cancelled() => return None,
+  };
   let seat = pace::fly(MODEL, ask.yields.is_some(), cancel).await?;
-  let (status, sent) = send(ask, on, key, body, &mut flight, seen).await;
+  let (status, sent) = send(ask, on, key, body, &mut flight, cancel).await;
   seat.land(status == 429 || status == 529);
   Some(sent)
 }
 
-/// A request sent: its HTTP status (0: none came), and what it gave.
+/// A request sent: its HTTP status (0: none came), and what it gave. A stop cuts it here, not by dropping it, so that what it used
+/// till then is still metered.
 async fn send(
   ask: &Ask,
   on: &On,
   key: &str,
   body: &Value,
   flight: &mut cache::Flight,
-  seen: &Mutex<Vec<Live>>,
+  cancel: &CancellationToken,
 ) -> (u16, Sent) {
   let json = body.to_string();
+  let seen = Mutex::new(Vec::new());
   let mut got = Got::default();
   let mut read = Read::default();
   let mut status = 0;
-  let res = tokio::time::timeout(
-    IDLE,
-    HTTP
-      .post(URL)
-      .bearer_auth(key)
-      .header("content-type", "application/json")
-      .body(json.clone())
-      .send(),
-  )
-  .await;
+  let post = HTTP
+    .post(url())
+    .bearer_auth(key)
+    .header("content-type", "application/json")
+    .body(json.clone())
+    .send();
+  let res = tokio::select! {
+      res = tokio::time::timeout(IDLE, post) => Some(res),
+      _ = cancel.cancelled() => None,
+  };
   let (after, step, ok) = match res {
-    Err(_) => (
+    None => (None, fail("stopped", &[], Halt::Lost), false),
+    Some(Err(_)) => (
       None,
       fail(
         &format!("no word from the API in {} s", IDLE.as_secs()),
@@ -378,8 +498,8 @@ async fn send(
       ),
       false,
     ),
-    Ok(Err(err)) => (None, fail(&err.to_string(), &[], Halt::Busy), false),
-    Ok(Ok(res)) => {
+    Some(Ok(Err(err))) => (None, fail(&err.to_string(), &[], Halt::Busy), false),
+    Some(Ok(Ok(res))) => {
       status = res.status().as_u16();
       let header = |name: &str| {
         res
@@ -390,7 +510,8 @@ async fn send(
       };
       let after = header("retry-after").and_then(|v| retry_after(&v));
       if res.status().is_success() {
-        (after, stream(res, on, flight, seen, &mut got, &mut read).await, true)
+        let step = stream(res, on, flight, &seen, cancel, &mut got, &mut read).await;
+        (after, step, true)
       } else {
         let id = header("x-request-id")
           .or_else(|| header("x-deepseek-request-id"))
@@ -398,18 +519,36 @@ async fn send(
         let should = header("x-should-retry");
         let busy = [408, 409, 429].contains(&status) || status >= 500;
         let passing = should.as_deref() == Some("true") || (should.as_deref() != Some("false") && busy);
-        let why = format!("HTTP {status}{id}: {}", reason(&res.text().await.unwrap_or_default()));
-        (
-          after,
-          fail(&why, &[], if passing { Halt::Busy } else { Halt::Down }),
-          false,
-        )
+        // its why may stall as a stream does: a stop cuts it too
+        let told = tokio::select! {
+            told = tokio::time::timeout(IDLE, res.text()) => Some(told),
+            _ = cancel.cancelled() => None,
+        };
+        let halt = match status {
+          _ if passing => Halt::Busy,
+          400 | 413 | 422 => Halt::Fail,
+          _ => Halt::Down,
+        };
+        match told {
+          None => (None, fail("stopped", &[], Halt::Lost), false),
+          Some(told) => {
+            let why = reason(&told.ok().and_then(Result::ok).unwrap_or_default());
+            if halt != Halt::Busy {
+              eprintln!("{MODEL}: HTTP {status}{id}: {}", clip::head(&why, 300));
+            }
+            let why = match halt {
+              Halt::Busy => format!("HTTP {status}{id}: {why}"),
+              _ => format!("the AI service refused the request (HTTP {status}): {why}"),
+            };
+            (after, fail(&why, &[], halt), false)
+          }
+        }
       }
     }
   };
   flight.end();
   if ok && let Some(meter) = &ask.meter {
-    let usage = used(got.usage, &read, &json);
+    let usage = used(got.usage, &read, json.len(), flight.cached);
     let now = chrono::Utc::now();
     meter(Used {
       effort: ask.effort,
@@ -429,19 +568,34 @@ struct Read {
   done: bool,
 }
 
+/// Where requests go: DeepSeek's API (a test's: its own).
+fn url() -> String {
+  #[cfg(test)]
+  if let Ok(api) = tests::API.try_with(String::clone) {
+    return api;
+  }
+  URL.to_string()
+}
+
 /// The stream's events, each told as it comes, as the step it gives.
 async fn stream(
   res: reqwest::Response,
   on: &On,
   flight: &mut cache::Flight,
   seen: &Mutex<Vec<Live>>,
+  cancel: &CancellationToken,
   got: &mut Got,
   read: &mut Read,
 ) -> Step {
   let mut bytes = res.bytes_stream();
   let mut rest: Vec<u8> = Vec::new();
   loop {
-    let chunk = match tokio::time::timeout(IDLE, bytes.next()).await {
+    let chunk = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return fail("stopped", &seen.lock(), Halt::Lost),
+        chunk = tokio::time::timeout(IDLE, bytes.next()) => chunk,
+    };
+    let chunk = match chunk {
       Err(_) => {
         return fail(
           &format!("no word from the API in {} s", IDLE.as_secs()),
@@ -491,20 +645,28 @@ async fn stream(
   }
 }
 
-/// A request's usage: the API's, once its stream ended; else (cut short)
-/// at least what it read, each byte a token: the output streamed, and the
-/// request's text as written input if the API told no input at all.
-fn used(usage: price::Usage, read: &Read, json: &str) -> price::Usage {
+/// A request's usage: the API's, told as its stream ends; else (cut
+/// short, none told) an estimate, a token each BYTES of what it sent (the
+/// `cached` first of them read from the cache, the rest written) and of
+/// the output it read.
+fn used(usage: price::Usage, read: &Read, sent: usize, cached: usize) -> price::Usage {
   if read.done {
     return usage;
   }
-  let told = usage.input + usage.write + usage.read > 0;
+  let tokens = |bytes: usize| (bytes as u64).div_ceil(BYTES);
+  let cached = cached.min(sent);
   price::Usage {
-    write: if told { usage.write } else { json.len() as u64 },
-    output: usage.output.max(read.bytes),
-    ..usage
+    input: 0,
+    write: tokens(sent - cached),
+    read: tokens(cached),
+    output: tokens(read.bytes as usize),
   }
 }
+
+/// The bytes of text a token is counted for where the API tells no usage:
+/// by DeepSeek's own rule of thumb, a token is three English characters or
+/// more (other scripts take more bytes a token).
+const BYTES: u64 = 3;
 
 /// A failed request's why: the API's message, else the start of its body.
 fn reason(body: &str) -> String {
@@ -574,6 +736,418 @@ mod tests {
   use std::sync::atomic::{AtomicUsize, Ordering};
 
   pub(super) static DISPATCHED: AtomicUsize = AtomicUsize::new(0);
+
+  tokio::task_local! {
+    /// The API a test's requests go to (`api`).
+    pub(super) static API: String;
+  }
+
+  const OVER: &str = "This model's maximum context length is 1048576 tokens. However, you requested 1100000 tokens (716000 in the messages, 384000 in the completion). Please reduce the length of the messages or completion.";
+
+  /// A local API, by its URL: each request's JSON goes to `answer`, whose
+  /// status and body it answers with, a 200's as an event stream left
+  /// open.
+  async fn api(answer: impl Fn(Value) -> (u16, String) + Send + Sync + 'static) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let answer = std::sync::Arc::new(answer);
+    tokio::spawn(async move {
+      while let Ok((mut sock, _)) = listener.accept().await {
+        let answer = answer.clone();
+        tokio::spawn(async move {
+          let (mut req, mut buf) = (Vec::new(), [0u8; 8192]);
+          let json = loop {
+            let n = sock.read(&mut buf).await.unwrap_or(0);
+            if n == 0 {
+              return;
+            }
+            req.extend_from_slice(&buf[..n]);
+            let Some(at) = req.windows(4).position(|w| w == b"\r\n\r\n") else {
+              continue;
+            };
+            let head = String::from_utf8_lossy(&req[..at]).to_lowercase();
+            let len = head.lines().find_map(|l| l.strip_prefix("content-length:"));
+            let len: usize = len.map_or(0, |v| v.trim().parse().unwrap());
+            if req.len() >= at + 4 + len {
+              break serde_json::from_slice(&req[at + 4..]).unwrap();
+            }
+          };
+          let (status, body) = answer(json);
+          let head = if status == 200 {
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n".to_string()
+          } else {
+            format!(
+              "HTTP/1.1 {status} No\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+              body.len()
+            )
+          };
+          let _ = sock.write_all((head + &body).as_bytes()).await;
+          if status == 200 {
+            let _ = sock.read(&mut buf).await; // open till the client goes
+          }
+        });
+      }
+    });
+    url
+  }
+
+  fn refusal(why: &str) -> String {
+    serde_json::json!({"error": {"message": why}}).to_string()
+  }
+
+  fn events(events: &[Value]) -> String {
+    events.iter().map(|ev| format!("data: {ev}\n\n")).collect()
+  }
+
+  fn ask(meter: Option<crate::ai::Meter>) -> Ask {
+    Ask {
+      effort: crate::effort::Effort::None,
+      system: "test".into(),
+      blocks: vec![crate::Block::new("hello", false)],
+      imgs: vec![],
+      tools: None,
+      meter,
+      patient: false,
+      yields: None,
+      user: None,
+    }
+  }
+
+  /// One request of `ask` sent to the API at `url`.
+  async fn sent(ask: &Ask, on: &On, url: String, cancel: &CancellationToken) -> (u16, Step) {
+    let body = super::super::deepseek::body(ask, &[], &[], MAX_OUTPUT_TOKENS);
+    let mut flight = cache::wait(ask).await;
+    let (status, sent) = API.scope(url, send(ask, on, "key", &body, &mut flight, cancel)).await;
+    (status, sent.step)
+  }
+
+  /// A request a stop cuts as it streams ends at once, what it said kept,
+  /// and is metered by what it sent and read (the API told no usage).
+  #[tokio::test]
+  async fn a_request_cut_is_metered() {
+    let url = api(|_| {
+      let stream = events(&[
+        serde_json::json!({"type": "response.output_item.added", "item": {"type": "message"}}),
+        serde_json::json!({"type": "response.output_text.delta", "delta": "Moving the files"}),
+      ]);
+      (200, stream)
+    })
+    .await;
+    let uses = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let meter: crate::ai::Meter = {
+      let uses = uses.clone();
+      std::sync::Arc::new(move |used: Used| uses.lock().push(used))
+    };
+    let ask = ask(Some(meter));
+    let cancel = CancellationToken::new();
+    let on: On = {
+      let cancel = cancel.clone();
+      std::sync::Arc::new(move |ev| {
+        if matches!(ev, Event::Delta { .. }) {
+          cancel.cancel();
+        }
+      })
+    };
+    let sending = sent(&ask, &on, url, &cancel);
+    let (status, step) = tokio::time::timeout(Duration::from_secs(10), sending).await.unwrap();
+    assert_eq!((status, step.halt), (200, Halt::Lost));
+    assert_eq!(step.entries[0].text, "Moving the files\n[cut off]");
+    let uses = uses.lock();
+    assert_eq!(uses.len(), 1, "a request cut short is metered once");
+    let json = super::super::deepseek::body(&ask, &[], &[], MAX_OUTPUT_TOKENS).to_string();
+    let usage = price::Usage {
+      input: 0,
+      write: (json.len() as u64).div_ceil(BYTES),
+      read: 0,
+      output: 6, // "Moving the files": 16 bytes
+    };
+    assert_eq!(uses[0].usage, usage);
+    assert!(uses[0].micros > 0);
+  }
+
+  /// A refusal whose why never comes whole is cut by a stop as a stream
+  /// is: the request ends at once, its seat and its flight let go.
+  #[tokio::test]
+  async fn a_refusal_stalled_is_cut() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+      let (mut sock, _) = listener.accept().await.unwrap();
+      let mut buf = [0u8; 8192];
+      let _ = sock.read(&mut buf).await;
+      let head = "HTTP/1.1 400 No\r\ncontent-type: application/json\r\ncontent-length: 64\r\n\r\n{\"error\"";
+      let _ = sock.write_all(head.as_bytes()).await;
+      while sock.read(&mut buf).await.is_ok_and(|n| n > 0) {} // open till the client goes
+    });
+    let cancel = CancellationToken::new();
+    let stop = cancel.clone();
+    tokio::spawn(async move {
+      tokio::time::sleep(Duration::from_millis(300)).await;
+      stop.cancel();
+    });
+    let on: On = std::sync::Arc::new(|_| {});
+    let ask = ask(None);
+    let sending = sent(&ask, &on, url, &cancel);
+    let (status, step) = tokio::time::timeout(Duration::from_secs(10), sending).await.unwrap();
+    assert_eq!((status, step.halt), (400, Halt::Lost));
+  }
+
+  /// Cut short, a request's prompt counts as read where a call cached it.
+  #[test]
+  fn a_cut_request_reads_what_was_cached() {
+    let read = Read {
+      bytes: 300,
+      done: false,
+    };
+    let usage = used(price::Usage::default(), &read, 9000, 6000);
+    let told = price::Usage {
+      input: 0,
+      write: 1000,
+      read: 2000,
+      output: 100,
+    };
+    assert_eq!(usage, told);
+    let done = Read { bytes: 300, done: true };
+    assert_eq!(used(told, &done, 9, 6), told, "the API's own usage wins");
+  }
+
+  /// A refusal tells its why, and whose doing it is: the account's
+  /// (`Down`: a patient call waits it out), the request's (`Fail`: it
+  /// would fail again); a busy service's stays in the log. None is
+  /// metered.
+  #[tokio::test]
+  async fn a_refusal_tells_why() {
+    let metered: crate::ai::Meter = std::sync::Arc::new(|_| panic!("a refusal uses nothing"));
+    let ask = ask(Some(metered));
+    let on: On = std::sync::Arc::new(|_| {});
+    let cancel = CancellationToken::new();
+    for (status, why, halt, told) in [
+      (
+        401,
+        "Authentication Fails, Your api key is invalid",
+        Halt::Down,
+        "the AI service refused the request (HTTP 401): Authentication Fails, Your api key is invalid",
+      ),
+      (
+        402,
+        "Insufficient Balance",
+        Halt::Down,
+        "the AI service refused the request (HTTP 402): Insufficient Balance",
+      ),
+      (
+        400,
+        "Content Exists Risk",
+        Halt::Fail,
+        "the AI service refused the request (HTTP 400): Content Exists Risk",
+      ),
+      (503, "Server overloaded", Halt::Busy, "HTTP 503: Server overloaded"),
+    ] {
+      let url = api(move |_| (status, refusal(why))).await;
+      let (got, step) = sent(&ask, &on, url, &cancel).await;
+      assert_eq!((got, step.halt, step.why.as_str()), (status, halt, told));
+    }
+    let url = api(|_| (400, refusal(OVER))).await;
+    let (_, step) = sent(&ask, &on, url, &cancel).await;
+    assert_eq!(step.halt, Halt::Fail);
+    assert_eq!(super::super::deepseek::left(&step.why), Some(1_048_576 - 716_000));
+    assert_eq!(super::super::deepseek::left("Content Exists Risk"), None);
+  }
+
+  /// A call past the model's context is sent again with the room its
+  /// input leaves; one whose input leaves too little, and holds nothing
+  /// to drop, fails telling why.
+  #[tokio::test]
+  async fn a_call_past_the_context_makes_room() {
+    let test = "ai::agent::tests::a_call_past_the_context_makes_room";
+    if std::env::var_os("ACORN_TEST_CONTEXT").is_none() {
+      let dir = tempfile::tempdir().unwrap();
+      let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env("ACORN_TEST_CONTEXT", "1")
+        .env("ACORN_DIR", dir.path())
+        .env("ACORN_CHATS", dir.path().join("chats"))
+        .env(config::KEY_VAR, "unused-test-key")
+        .output()
+        .unwrap();
+      assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+      );
+      return;
+    }
+    let rooms = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let url = {
+      let rooms = rooms.clone();
+      api(move |req| {
+        let room = req["max_output_tokens"].as_u64().unwrap();
+        rooms.lock().push(room);
+        if room == MAX_OUTPUT_TOKENS {
+          return (400, refusal(OVER));
+        }
+        let done = serde_json::json!({"type": "response.completed", "response": {
+          "status": "completed",
+          "output": [{"type": "message", "content": [{"type": "output_text", "text": "made it"}]}],
+          "usage": {"input_tokens": 716_000, "output_tokens": 2},
+        }});
+        (200, events(&[done]))
+      })
+      .await
+    };
+    let ask = ask(None);
+    let on: On = std::sync::Arc::new(|_| {});
+    let (_tx, mut rx) = mpsc::unbounded_channel();
+    let cancel = CancellationToken::new();
+    let end = API.scope(url, run(&ask, &on, &mut rx, &cancel)).await;
+    assert!(end.ok, "{}", end.text);
+    assert_eq!(end.text, "made it");
+    assert_eq!(*rooms.lock(), [MAX_OUTPUT_TOKENS, 1_048_576 - 716_000]);
+
+    let tight = OVER.replace("716000 in the messages", "1040000 in the messages");
+    let url = api(move |_| (400, refusal(&tight))).await;
+    let (_tx, mut rx) = mpsc::unbounded_channel();
+    let end = API.scope(url, run(&ask, &on, &mut rx, &cancel)).await;
+    assert_eq!((end.ok, end.stop), (false, Some(Stop::Fail)));
+    assert!(
+      end.text.contains("maximum context length is 1048576 tokens"),
+      "{}",
+      end.text
+    );
+  }
+
+  /// A tool that purges `SECRET` when called: from then on the call's
+  /// toolbox names it purged.
+  struct Purger(std::sync::atomic::AtomicBool);
+
+  const SECRET: &str = "tok\"en-12345";
+
+  impl crate::ai::Toolbox for Purger {
+    fn specs(&self) -> Vec<Spec> {
+      vec![Spec {
+        name: "purge",
+        info: "Purges a text.".into(),
+        schema: serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}}),
+      }]
+    }
+
+    fn call(&self, _: String, input: Value, _: CancellationToken) -> futures_util::future::BoxFuture<'static, Out> {
+      self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+      let text = input["text"].as_str().unwrap_or_default().to_string();
+      Box::pin(async move { Out::ok(format!("Purged {text}")) })
+    }
+
+    fn purged(&self) -> Vec<String> {
+      match self.0.load(std::sync::atomic::Ordering::SeqCst) {
+        true => vec![SECRET.into()],
+        false => vec![],
+      }
+    }
+  }
+
+  /// A text purged as a call runs is in nothing the call sends after: its
+  /// system prompt and view, built before, the tool call that named it
+  /// (there escaped, as JSON in a string), that call's result.
+  #[tokio::test]
+  async fn a_call_sends_no_text_purged_as_it_ran() {
+    let test = "ai::agent::tests::a_call_sends_no_text_purged_as_it_ran";
+    if std::env::var_os("ACORN_TEST_PURGED").is_none() {
+      let dir = tempfile::tempdir().unwrap();
+      let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env("ACORN_TEST_PURGED", "1")
+        .env("ACORN_DIR", dir.path())
+        .env("ACORN_CHATS", dir.path().join("chats"))
+        .env(config::KEY_VAR, "unused-test-key")
+        .output()
+        .unwrap();
+      assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+      );
+      return;
+    }
+    let reqs = std::sync::Arc::new(Mutex::new(Vec::<Value>::new()));
+    let url = {
+      let reqs = reqs.clone();
+      api(move |req| {
+        let mut reqs = reqs.lock();
+        reqs.push(req);
+        let output = match reqs.len() {
+          1 => serde_json::json!([{
+            "type": "function_call", "call_id": "c1", "name": "purge",
+            "arguments": serde_json::json!({"text": SECRET}).to_string(),
+          }]),
+          _ => serde_json::json!([{"type": "message", "content": [{"type": "output_text", "text": "gone"}]}]),
+        };
+        let done = serde_json::json!({"type": "response.completed", "response": {
+          "status": "completed", "output": output, "usage": {"input_tokens": 9, "output_tokens": 2},
+        }});
+        (200, events(&[done]))
+      })
+      .await
+    };
+    let ask = Ask {
+      system: format!("Facts: the key is {SECRET}"),
+      blocks: vec![
+        crate::Block::new(format!("my key is {SECRET}, keep it"), true),
+        crate::Block::new("no, purge it", false),
+      ],
+      tools: Some(std::sync::Arc::new(Purger(false.into()))),
+      ..ask(None)
+    };
+    let on: On = std::sync::Arc::new(|_| {});
+    let (_tx, mut rx) = mpsc::unbounded_channel();
+    let cancel = CancellationToken::new();
+    let end = API.scope(url, run(&ask, &on, &mut rx, &cancel)).await;
+    assert!(end.ok, "{}", end.text);
+    let reqs = reqs.lock();
+    assert_eq!(reqs.len(), 2);
+    // however it is escaped, a secret sent holds this
+    let tail = "en-12345";
+    assert!(
+      reqs[0].to_string().contains(tail),
+      "it was in the prompt before the purge"
+    );
+    assert!(!reqs[1].to_string().contains(tail), "{}", reqs[1]);
+    assert_eq!(reqs[1]["instructions"], "Facts: the key is [purged]");
+    let input = reqs[1]["input"].as_array().unwrap();
+    assert_eq!(input[0]["content"][0]["text"], "my key is [purged], keep it");
+    assert_eq!(input[0]["content"][1]["text"], "no, purge it");
+    assert_eq!(input[1]["arguments"], r#"{"text":"[purged]"}"#);
+    assert_eq!(input[2]["output"][0]["text"], "Purged [purged]");
+  }
+
+  /// Shedding drops the older half of a call's tool results, by size, and
+  /// then the rest; nothing left to drop, it tells so.
+  #[test]
+  fn a_call_sheds_its_older_results() {
+    let back = |id: &str, size: usize| (id.to_string(), Out::ok("x".repeat(size)));
+    let mut items = vec![
+      Item::User {
+        parts: vec!["task".into()],
+        imgs: vec![],
+      },
+      Item::Back(vec![back("a", 4000), back("b", 100)]),
+      Item::Back(vec![back("c", 3000)]),
+    ];
+    let texts = |items: &[Item]| -> Vec<bool> {
+      let outs = items.iter().filter_map(|item| match item {
+        Item::Back(backs) => Some(backs.iter().map(|(_, out)| out.text == SHED)),
+        _ => None,
+      });
+      outs.flatten().collect()
+    };
+    assert!(shed(&mut items));
+    assert_eq!(texts(&items), [true, false, false], "a alone is over half");
+    assert!(shed(&mut items));
+    assert_eq!(texts(&items), [true, true, true], "b, then c: over half of the rest");
+    assert!(!shed(&mut items));
+  }
 
   #[tokio::test]
   async fn a_request_past_the_budget_waits_until_cancelled() {

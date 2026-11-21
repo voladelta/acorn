@@ -4,13 +4,14 @@
 //! source fits is its source, built at once; else a compaction writes it:
 //! a call like a turn, on the config's compactor, with the same system
 //! prompt, no tools, and the compactions' own view up to the node, then
-//! its task. A line too long is asked anew, TRIES lines at most, the
-//! shortest kept. The call asks till it is answered (a patient one: an
-//! outage only delays a node, never harms it); answered with no line (a
-//! refusal: its input's doing), its node is its source clipped. Of each
-//! side, JOBS build at once, in the order the messages came. A purge
-//! stops them all, and a line asked before one is not stored: its input or
-//! context may hold what was purged.
+//! its task. A line too long is asked anew, for fewer bytes by as much as
+//! it ran over (`memory::over`), TRIES lines at most, the shortest kept.
+//! The call asks till it is answered (a patient one: an outage only delays
+//! a node, never harms it); answered with no line (a refusal: its input's
+//! doing), its node is its source clipped. Of each side, JOBS build at
+//! once, in the order the messages came. A purge stops them all, and a
+//! line asked before one is not stored: its input or context may hold
+//! what was purged.
 
 use crate::ai::{self, Stop};
 use crate::chat::Chat;
@@ -65,8 +66,8 @@ fn job(chat: &Chat, part: Part, text: String) {
 
 /// Node (l,i)'s summary: its view to the node and its task, asked till a
 /// line fits. Each try sends those blocks, never a try's words or
-/// thoughts; one after a line too long adds only its size and where the
-/// limit cuts it.
+/// thoughts; one after a line too long adds only its size, the fewer
+/// bytes asked now, and where they cut it.
 async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: String, age: u64) -> Result<(), String> {
   let (ask, served) = {
     let Some(engine) = this.upgrade() else {
@@ -91,6 +92,7 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
     (ask, served)
   };
   let mut lines: Vec<String> = Vec::new();
+  let mut asked = NODE;
   let mut end = compact(this, part, served, age, ask.clone()).await?;
   while end.ok && !end.text.trim().is_empty() {
     let line = end.text.trim().to_string();
@@ -100,7 +102,9 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
       break;
     }
     let mut again = ask.clone();
-    again.blocks.push(Block::new(memory::over(&line), false));
+    let (over, most) = memory::over(&line, asked);
+    asked = most;
+    again.blocks.push(Block::new(over, false));
     end = compact(this, part, served, age, again).await?;
   }
   if lines.is_empty() && !end.ok && end.stop != Some(Stop::Fail) {

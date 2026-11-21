@@ -196,6 +196,18 @@ fn server_pid(sock: &Path) -> Option<i32> {
   })
 }
 
+/// The pid of the acorn-server listening on `sock`, once it runs (the
+/// host starts it as its person signs in, and again after it dies).
+async fn running(sock: &Path) -> i32 {
+  let mut pid = None;
+  wait_for("the server to start", async || {
+    pid = server_pid(sock);
+    pid.is_some()
+  })
+  .await;
+  pid.unwrap()
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn hosts_people_apart() {
   let dir = temp();
@@ -288,7 +300,7 @@ async fn hosts_people_apart() {
 
   // 7. a server killed answers again within 5 s
   let sock = data.join("run").join(a_id).join("sock/server.sock");
-  let pid = server_pid(&sock).expect("A's server");
+  let pid = running(&sock).await;
   unsafe { libc::kill(pid, libc::SIGKILL) };
   let killed = Instant::now();
   wait_for("A's server to die", async || server_pid(&sock) != Some(pid)).await;
@@ -367,7 +379,7 @@ async fn host_does_not_follow_home_symlinks() {
     // The no-sandbox run checks only that the host doesn't follow the link
     // to B's socket: without a sandbox A's server does read B's data through
     // it, as the host's warning says.
-    let pid = server_pid(&a_sock).expect("A's server");
+    let pid = running(&a_sock).await;
     unsafe { libc::kill(pid, libc::SIGKILL) };
     wait_for("A's server to die", async || server_pid(&a_sock) != Some(pid)).await;
     std::fs::rename(a_home.join(".acorn"), &old_acorn).unwrap();
@@ -385,7 +397,7 @@ async fn host_does_not_follow_home_symlinks() {
     assert_ne!(a_hello["epoch"], b_hello["epoch"], "A reached B's server");
 
     // A link in the agent's HOME must not redirect the host's log either.
-    let pid = server_pid(&a_sock).expect("A's server");
+    let pid = running(&a_sock).await;
     unsafe { libc::kill(pid, libc::SIGKILL) };
     wait_for("A's server to die", async || server_pid(&a_sock) != Some(pid)).await;
     std::fs::remove_file(a_home.join(".acorn")).unwrap();

@@ -15,8 +15,18 @@ use std::sync::OnceLock;
 
 /// The bytes past which a chat's view merges to half (`memory` HIGH): 2 MB
 /// at most, ~500k tokens, fits DeepSeek's 1M context (a recall eval: 83% at
-/// 128 KB, 100% at 2 MB); less, if set.
+/// 128 KB, 100% at 2 MB); less, if set, down to 32 KB: a line is up to
+/// `memory::NODE` bytes and a view merges whole lines only, so one set to
+/// a few lines' bytes would stay over them.
 const MOST_VIEW: usize = 2_000_000;
+const LEAST_VIEW: usize = 32_000;
+
+/// The `view` setting, as bytes: within LEAST_VIEW and MOST_VIEW; none or
+/// not a number: MOST_VIEW.
+fn view(set: &str) -> usize {
+  let bytes = set.trim().parse().ok().filter(|&v: &usize| v > 0);
+  bytes.map_or(MOST_VIEW, |v| v.clamp(LEAST_VIEW, MOST_VIEW))
+}
 
 /// The variable the API key is read from, kept out of every job's
 /// environment.
@@ -101,11 +111,7 @@ impl Config {
       } else {
         Some(run("agents", &agents)?)
       },
-      view: get("view", "")
-        .parse()
-        .ok()
-        .filter(|&v| v > 0)
-        .map_or(MOST_VIEW, |v: usize| v.min(MOST_VIEW)),
+      view: view(&get("view", "")),
       budget: budget(&get("budget", ""))?,
       key: key.trim().to_string(),
       chat,
@@ -182,6 +188,21 @@ fn run(key: &str, text: &str) -> Result<Effort, String> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_view_is_set_within_its_bounds() {
+    for (set, bytes) in [
+      ("", MOST_VIEW),
+      ("0", MOST_VIEW),
+      ("lots", MOST_VIEW),
+      ("600", LEAST_VIEW),
+      ("128000", 128_000),
+      (" 128000 ", 128_000),
+      ("9000000", MOST_VIEW),
+    ] {
+      assert_eq!(view(set), bytes, "{set:?}");
+    }
+  }
 
   #[tokio::test(flavor = "multi_thread")]
   async fn no_program_the_agent_runs_sees_the_server_token() {

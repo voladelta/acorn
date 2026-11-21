@@ -3,9 +3,10 @@
 //! A marked block ends a prefix DeepSeek caches. Single flight, as a
 //! request is sent: one whose prefix no call cached within TTL leads; one
 //! whose prefix a leader is writing waits until the leader's response
-//! begins (only then can it read the entry). So a leader is always a
-//! request being sent, never one waiting or yielding (`pace`), which every
-//! call of its prefix would wait on.
+//! begins (only then can it read the entry). So a leader is never a
+//! request yielding (`pace::yielded` comes first), which every call of
+//! its prefix would wait on; it may wait for its model's seat
+//! (`pace::fly`), as they would too.
 
 use super::Ask;
 use parking_lot::Mutex;
@@ -29,8 +30,11 @@ struct Cached {
 static CACHE: LazyLock<Mutex<HashMap<u64, Cached>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A request's place in single flight: its response began; it ended.
+/// `cached`: the bytes its prompt starts with that a call cached within
+/// TTL (its system prompt and blocks through the last so marked).
 pub struct Flight {
   lead: Option<(u64, watch::Sender<bool>)>,
+  pub cached: usize,
 }
 
 impl Flight {
@@ -96,8 +100,11 @@ pub async fn wait(ask: &Ask) -> Flight {
           if let Some((_, got)) = found {
             got.until = now + TTL;
           }
+          let cached = k.map_or(0, |k| {
+            ask.system.len() + ask.blocks[..=k].iter().map(|b| b.text.len()).sum::<usize>()
+          });
           if keys.is_empty() || k == Some(keys.len() - 1) {
-            return Flight { lead: None };
+            return Flight { lead: None, cached };
           }
           let key = *keys.last().unwrap();
           cache.retain(|_, c| live(c));
@@ -109,7 +116,10 @@ pub async fn wait(ask: &Ask) -> Flight {
               ready: Some(rx),
             },
           );
-          return Flight { lead: Some((key, tx)) };
+          return Flight {
+            lead: Some((key, tx)),
+            cached,
+          };
         }
       }
     };
