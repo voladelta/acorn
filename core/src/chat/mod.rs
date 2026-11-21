@@ -152,9 +152,10 @@ pub struct Chat {
   cut_in: bool,
   /// When a wipe waiting on a held purge is woken (ms; 0: none).
   wake: i64,
-  /// Secrets purged by their text: written `[purged]` in whatever is
-  /// logged (`push`) or streams (`veil`) after. Kept in memory only,
-  /// never on disk.
+  /// Secrets purged by their text, in the order purged (one purged again
+  /// is listed again): written `[purged]` in whatever is logged (`push`)
+  /// or streams (`veil`) after, and in what a call whose prompt was built
+  /// before sends (`Kit::purged`). Kept in memory only, never on disk.
   secrets: Vec<String>,
 }
 
@@ -192,7 +193,7 @@ fn veil(secrets: &[String], tail: &mut String, text: &str) -> String {
     .min()
   {
     out.push_str(&tail[..at]);
-    out.push_str("[purged]");
+    out.push_str(ai::PURGED);
     tail.drain(..at + len);
   }
   let most = secrets.iter().map(String::len).max().unwrap_or(0);
@@ -451,9 +452,7 @@ impl Chat {
     if text.chars().count() < SECRET {
       return format!("Give text of {SECRET} characters at least: the secret itself.");
     }
-    if !self.secrets.iter().any(|s| s == text) {
-      self.secrets.push(text.to_string());
-    }
+    self.secrets.push(text.to_string());
     for (call, _, _) in &self.compactions {
       call.stop();
     }
@@ -512,10 +511,9 @@ impl Chat {
 
   /// A text as logged: each secret purged by its text, `[purged]`.
   fn redact(&self, text: &str) -> String {
-    self
-      .secrets
-      .iter()
-      .fold(text.to_string(), |t, s| t.replace(s.as_str(), "[purged]"))
+    let mut text = text.to_string();
+    ai::veil(&mut text, &self.secrets);
+    text
   }
 
   /// What streams, as shown: each secret in it `[purged]`.
@@ -661,39 +659,6 @@ mod tests {
     let mut tail = String::new();
     let out = pieces.iter().map(|p| veil(&secrets, &mut tail, p)).collect();
     (out, tail)
-  }
-
-  /// A text purged is one the chat's calls veil from then on in what they
-  /// send (`Toolbox::purged`): as given, and as a fact's key holds it.
-  #[tokio::test]
-  async fn a_purged_text_is_veiled_by_the_calls_that_run() {
-    let test = "chat::tests::a_purged_text_is_veiled_by_the_calls_that_run";
-    if std::env::var_os("ACORN_TEST_VEILED").is_none() {
-      let dir = tempfile::tempdir().unwrap();
-      let out = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", test, "--nocapture"])
-        .env("ACORN_TEST_VEILED", "1")
-        .env("ACORN_DIR", dir.path())
-        .env("ACORN_CHATS", dir.path().join("chats"))
-        .output()
-        .unwrap();
-      assert!(
-        out.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-      );
-      return;
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let engine = open(dir.path());
-    let kit = engine.lock().kit(None);
-    assert!(kit.purged().is_empty());
-    let said = engine.lock().purge_text("Hunter Two 4242");
-    assert!(said.contains("this call too"), "{said}");
-    assert_eq!(kit.purged(), ["Hunter Two 4242", "hunter two 4242"]);
-    engine.lock().purge_text("hunter-2-4242");
-    assert_eq!(kit.purged(), ["Hunter Two 4242", "hunter-2-4242", "hunter two 4242"]);
   }
 
   #[test]

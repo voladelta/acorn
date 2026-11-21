@@ -37,8 +37,16 @@ pub struct Agent {
   pub(super) live: Vec<Live>,
   pub(super) tail: String,
   pub(super) calls: Vec<(String, String)>,
-  view: Vec<Block>,
+  view: View,
   replies: Vec<String>,
+}
+
+/// The chat's view as an agent's calls get it, and how many secrets were
+/// purged as it was read: a call veils those purged since (`Kit::purged`).
+#[derive(Clone, Default)]
+struct View {
+  blocks: Vec<Block>,
+  since: usize,
 }
 
 /// What an agent does. Told while idle, it starts (its message in its
@@ -57,7 +65,7 @@ enum Doing {
 }
 
 impl Agent {
-  fn new(name: &str, effort: Option<Effort>, view: Vec<Block>) -> Agent {
+  fn new(name: &str, effort: Option<Effort>, view: View) -> Agent {
     Agent {
       name: name.into(),
       effort,
@@ -103,6 +111,8 @@ pub struct Kit {
   halt: CancellationToken,
   /// The bridge whose assistant's chat with the user this is: its tools.
   bridge: Option<Arc<dyn crate::bridge::Bridge>>,
+  /// How many secrets were purged as its call's prompt was read.
+  since: usize,
 }
 
 impl Toolbox for Kit {
@@ -117,13 +127,9 @@ impl Toolbox for Kit {
     let Some(engine) = self.engine.upgrade() else {
       return Vec::new();
     };
-    let mut all = engine.lock().secrets.clone();
-    for key in all.iter().map(|s| crate::facts::key(s)).collect::<Vec<_>>() {
-      if !all.contains(&key) {
-        all.push(key);
-      }
-    }
-    all
+    let chat = engine.lock();
+    let since = chat.secrets.iter().skip(self.since);
+    since.flat_map(|s| [s.clone(), crate::facts::key(s)]).collect()
   }
 
   fn call(&self, name: String, input: Value, cancel: CancellationToken) -> BoxFuture<'static, Out> {
@@ -556,13 +562,16 @@ impl Engine {
 
   /// The chat's view, once its summaries are built; else why there is
   /// none (work stopped).
-  async fn view(&self, halt: &CancellationToken) -> Result<Vec<Block>, String> {
+  async fn view(&self, halt: &CancellationToken) -> Result<View, String> {
     let count = self.lock().mem.count;
     if !self.settle(count, halt).await {
       return Err("Stopped.".into());
     }
     let chat = self.lock();
-    Ok(chat.mem.view_blocks(chat.mem.count))
+    Ok(View {
+      blocks: chat.mem.view_blocks(chat.mem.count),
+      since: chat.secrets.len(),
+    })
   }
 
   /// An agent's calls, `call` first, while a message waits in its log
@@ -609,11 +618,12 @@ impl Chat {
       bridge: (agent.is_none() && self.with.is_none())
         .then(|| crate::bridge::of(&self.me.id))
         .flatten(),
+      since: agent.map_or(self.secrets.len(), |a| a.view.since),
     })
   }
 
   /// An agent started on its task, its log opened with what it is.
-  fn start(&mut self, effort: Option<Effort>, task: &str, view: Vec<Block>) -> String {
+  fn start(&mut self, effort: Option<Effort>, task: &str, view: View) -> String {
     let name = match self.mem.agent_new(effort) {
       Ok(name) => name,
       Err(err) => return format!("(no agent: {err})"),
@@ -646,7 +656,9 @@ impl Chat {
     if !self.agents.contains_key(name) {
       self.mem.agent(name)?;
       let effort = self.mem.agent_effort(name);
-      self.agents.insert(name.into(), Agent::new(name, effort, Vec::new()));
+      self
+        .agents
+        .insert(name.into(), Agent::new(name, effort, View::default()));
     }
     self.agents.get_mut(name)
   }
@@ -659,7 +671,7 @@ impl Chat {
     let pick = config::get().agents.unwrap_or(self.me.effort);
     let system = tools::system(&(tools::sub(&self.me.work()) + &crate::facts::prompt(&self.me.id)));
     let effort = agent.effort.unwrap_or(pick);
-    let mut blocks = agent.view.clone();
+    let mut blocks = agent.view.blocks.clone();
     blocks.push(log);
     Some(ai::Ask {
       effort,
@@ -768,5 +780,59 @@ impl Chat {
       agent: Some(name.into()),
       live,
     });
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// A call veils in what it sends the texts purged since its prompt was
+  /// read (`Kit::purged`), each as given and as a fact's key holds it: one
+  /// purged again too, but none purged before, so a message taken back
+  /// (unpurge) is read by the calls after. An agent's veils those purged
+  /// since its view was read.
+  #[tokio::test]
+  async fn a_call_veils_what_was_purged_since_its_prompt_was_read() {
+    let test = "chat::agents::tests::a_call_veils_what_was_purged_since_its_prompt_was_read";
+    if std::env::var_os("ACORN_TEST_VEILED").is_none() {
+      let dir = tempfile::tempdir().unwrap();
+      let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env("ACORN_TEST_VEILED", "1")
+        .env("ACORN_DIR", dir.path())
+        .env("ACORN_CHATS", dir.path().join("chats"))
+        .output()
+        .unwrap();
+      assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+      );
+      return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let engine = super::super::tests::open(dir.path());
+    let before = engine.lock().kit(None);
+    assert!(before.purged().is_empty());
+    let said = engine.lock().purge_text("Hunter Two 4242");
+    assert!(said.contains("this call too"), "{said}");
+    assert_eq!(before.purged(), ["Hunter Two 4242", "hunter two 4242"]);
+    // a call built now reads what the purge left: it has nothing to veil
+    let after = engine.lock().kit(None);
+    assert!(after.purged().is_empty());
+    let view = engine.view(&CancellationToken::new()).await.unwrap();
+    engine.lock().purge_text("hunter-2-4242");
+    engine.lock().purge_text("Hunter Two 4242");
+    let since = ["hunter-2-4242", "hunter-2-4242", "Hunter Two 4242", "hunter two 4242"];
+    assert_eq!(after.purged(), since);
+    assert_eq!(before.purged().len(), 6);
+    let mut chat = engine.lock();
+    let name = chat.mem.agent_new(None).unwrap();
+    chat.agents.insert(name.clone(), Agent::new(&name, None, view));
+    let kit = chat.kit(chat.agents.get(&name));
+    drop(chat);
+    assert_eq!(kit.purged(), since, "though its call is built after them");
   }
 }
