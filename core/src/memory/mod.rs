@@ -112,15 +112,15 @@ pub const HITS: usize = 50;
 /// compactor copied a sample's content.
 fn leaf_task(id: u64) -> String {
   format!(
-    "Compaction: compress message {id} into one line of at most {NODE} bytes\n(about 70 words), the length of this ruler:\n{}\n<input>\n",
-    "-".repeat(NODE)
+    "Compaction: compress message {id} into one line of at most {AIM} bytes\n(about 60 words), the length of this ruler:\n{}\n<input>\n",
+    "-".repeat(AIM)
   )
 }
 
 fn merge_task(a: &str, b: &str, id: u64, end: u64) -> String {
   format!(
-    "Compaction: merge lines {a} and {b}, adjacent, into one line of at most\n{NODE} bytes (about 70 words), the length of this ruler:\n{}\n<chat> may hold their messages, {id} to {end}, in more detail: take details\nof them from there too.\n<input>\n",
-    "-".repeat(NODE)
+    "Compaction: merge lines {a} and {b}, adjacent, into one line of at most\n{AIM} bytes (about 60 words), the length of this ruler:\n{}\n<chat> may hold their messages, {id} to {end}, in more detail: take details\nof them from there too.\n<input>\n",
+    "-".repeat(AIM)
   )
 }
 
@@ -1084,7 +1084,7 @@ fn clip(text: &str, most: usize) -> &str {
 
 /// What a line written for NODE bytes comes out under them at: NODE less
 /// what a model miscounts.
-const AIM: usize = NODE * 7 / 8;
+pub(crate) const AIM: usize = NODE * 7 / 8;
 
 /// What a line over NODE bytes is answered, and the bytes it asks for
 /// now: of the `asked` it was written for, fewer by as much as it ran
@@ -1110,6 +1110,16 @@ pub fn line(part: Part, text: &str) -> String {
 mod tests {
   use super::{Memory, Msg, Part, Work};
   use crate::Kind;
+
+  #[test]
+  fn compaction_tasks_leave_room_for_miscounting() {
+    for task in [Memory::task(Part::leaf(3)), Memory::task(Part::new(1, 0))] {
+      assert!(task.contains(&format!("{} bytes", super::AIM)));
+      let ruler = task.lines().find(|line| line.starts_with('-')).unwrap();
+      assert_eq!(ruler, "-".repeat(super::AIM));
+      assert!(ruler.len() < super::NODE);
+    }
+  }
 
   #[test]
   fn work_reads_as_saved_before() {
