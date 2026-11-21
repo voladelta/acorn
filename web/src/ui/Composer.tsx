@@ -117,29 +117,29 @@ export function Composer() {
           ))}
         </div>
       ) : null}
-      <div class="relative flex items-end gap-2 rounded-3xl border bg-card py-[7px] pr-[7px] pl-1.5 shadow-xs dark:border-input">
+      <div class="relative flex items-end gap-2.5">
         {naming ? (
-          <div role="listbox" class="absolute bottom-full left-4 z-20 mb-1.5 min-w-[220px] rounded-[10px] border bg-popover py-1 text-popover-foreground shadow-md">
+          <div role="listbox" class="absolute bottom-full left-0 z-20 mb-2 min-w-[230px] rounded-xl border border-border bg-popover py-1 text-popover-foreground shadow-lg">
             {naming.found.map((name, k) => (
               <div
                 key={name}
                 role="option"
                 aria-selected={k === picked}
-                class={cn('flex cursor-pointer gap-2 px-3 py-1.5 hover:bg-accent', k === picked && 'bg-accent')}
+                class={cn('flex cursor-pointer items-baseline gap-2.5 px-3 py-1.5 hover:bg-accent', k === picked && 'bg-accent')}
                 onMouseDown={(e: MouseEvent) => {
                   e.preventDefault();
                   take(name);
                 }}
               >
-                <span class="text-sm font-medium">{`@${name}`}</span>
-                <span class="truncate text-[13px] text-muted-foreground">{ui.assistants.find((a) => a.name === name)?.about ?? ''}</span>
+                <span class="font-serif text-[15px] font-medium">{`@${name}`}</span>
+                <span class="truncate text-[12.5px] text-muted-foreground">{ui.assistants.find((a) => a.name === name)?.about ?? ''}</span>
               </div>
             ))}
           </div>
         ) : null}
         <Tip tip="Attach images, videos, sounds or PDFs">
-          <Button variant="ghost" size="icon-lg" className="rounded-full text-muted-foreground" aria-label="Attach files" onClick={() => files.current?.click()}>
-            <Plus class="size-5" />
+          <Button variant="ghost" size="icon" className="mb-0.5 rounded-full text-muted-foreground hover:text-foreground" aria-label="Attach files" onClick={() => files.current?.click()}>
+            <Plus class="size-4" />
           </Button>
         </Tip>
         <input
@@ -158,8 +158,8 @@ export function Composer() {
           ref={ref}
           rows={1}
           aria-label={`Message ${me.name}`}
-          placeholder={`Message ${me.name}`}
-          class="max-h-80 min-h-9 flex-1 resize-none bg-transparent py-[7px] text-base outline-none [field-sizing:content] placeholder:text-muted-foreground/70"
+          placeholder={`Write to ${me.name}…`}
+          class="max-h-80 min-h-9 flex-1 resize-none bg-transparent py-1.5 font-sans text-[15.5px] leading-relaxed outline-none [field-sizing:content] placeholder:text-muted-foreground/60"
           value={ui.draft}
           onInput={(e: Event) => {
             const t = e.currentTarget as HTMLTextAreaElement;
@@ -178,12 +178,16 @@ export function Composer() {
           }}
         />
         <Button
-          size="icon-lg"
-          className={cn('rounded-full', !ready && 'bg-border text-background hover:bg-border')}
+          variant="ghost"
+          size="icon"
+          className={cn(
+            'mb-0.5 rounded-full transition-colors',
+            ready ? 'bg-foreground text-background hover:bg-foreground/90 hover:text-background' : 'text-muted-foreground/45 hover:bg-transparent',
+          )}
           aria-label="Send"
           onClick={submit}
         >
-          <ArrowUp class="size-[18px]" />
+          <ArrowUp class="size-4" />
         </Button>
       </div>
     </div>
