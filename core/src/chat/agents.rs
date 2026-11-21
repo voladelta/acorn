@@ -46,7 +46,6 @@ pub struct Agent {
 #[derive(Clone, Default)]
 struct View {
   blocks: Vec<Block>,
-  imgs: Vec<crate::Img>,
   since: usize,
 }
 
@@ -579,7 +578,6 @@ impl Engine {
     }
     Ok(View {
       blocks,
-      imgs: latest.imgs,
       since: chat.secrets.len(),
     })
   }
@@ -687,7 +685,6 @@ impl Chat {
       effort,
       system,
       blocks,
-      imgs: agent.view.imgs.clone(),
       tools: Some(self.kit(Some(agent))),
       meter: Some(self.meter(Served::Agent)),
       ..self.share()
@@ -803,7 +800,7 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let engine = crate::chat::tests::open(dir.path());
     let halt = CancellationToken::new();
-    assert!(engine.view(&halt).await.unwrap().imgs.is_empty());
+    assert!(engine.view(&halt).await.is_ok());
     let mut png = Vec::new();
     image::RgbImage::new(1, 1)
       .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -813,7 +810,7 @@ mod tests {
       .lock()
       .mem
       .push(vec![memory::Msg {
-        images: vec![image],
+        images: vec![image.clone()],
         ..memory::Msg::new(Kind::User, "current turn")
       }])
       .unwrap();
@@ -823,8 +820,19 @@ mod tests {
       .unwrap();
     assert!(view.blocks.last().unwrap().text.contains("0+0|"));
     assert!(view.blocks.last().unwrap().text.contains("current turn"));
-    assert_eq!(view.imgs, engine.lock().mem.images(0));
-    assert_eq!(view.imgs.len(), 1);
+    assert!(
+      view
+        .blocks
+        .last()
+        .unwrap()
+        .text
+        .contains(&format!("[image docs/images/{image}]"))
+    );
+    {
+      let mut chat = engine.lock();
+      chat.agents.insert("Test".into(), Agent::new("Test", None, view));
+      assert!(chat.agent_ask("Test").unwrap().imgs.is_empty());
+    }
     halt.cancel();
     assert!(engine.view(&halt).await.is_err());
   }
