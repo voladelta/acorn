@@ -27,33 +27,28 @@ impl Engine {
   /// end it with no nudge.
   pub(super) async fn checked(self: Arc<Self>, call: ai::Call, goal: String, halt: CancellationToken) {
     let end = call.end().await;
-    let nudge = {
-      let mut chat = self.lock();
-      chat.phase = Phase::Settling;
-      let on = !halt.is_cancelled() && chat.mem.goal.as_deref() == Some(goal.as_str()) && chat.wait.is_empty();
-      if on && !end.ok {
-        chat.note(format!(
-          "No goal check: {}. The goal stays till it is dropped.",
-          end.text.trim_end_matches('.')
-        ));
-      } else if on && says_yes(&end.text) {
-        chat.mem.goal = None;
-        chat.save();
-        chat.note("Goal met.");
-      }
-      chat.change();
-      on && end.ok && !says_yes(&end.text)
-    };
-    if nudge {
-      let me = self.clone();
-      self
-        .writing(async move || {
-          let mut chat = me.lock();
-          let span = chat.push(None, Kind::User, GOAL_NO);
-          chat.take(span);
-        })
-        .await;
-    }
+    self
+      .writing(async || {
+        let mut chat = self.lock();
+        chat.phase = Phase::Settling;
+        if !halt.is_cancelled() && chat.mem.goal.as_deref() == Some(goal.as_str()) && chat.wait.is_empty() {
+          if !end.ok {
+            chat.note(format!(
+              "No goal check: {}. The goal stays till it is dropped.",
+              end.text.trim_end_matches('.')
+            ));
+          } else if says_yes(&end.text) {
+            chat.mem.goal = None;
+            chat.save();
+            chat.note("Goal met.");
+          } else {
+            let span = chat.push(None, Kind::User, GOAL_NO);
+            chat.take(span);
+          }
+        }
+        chat.change();
+      })
+      .await;
   }
 }
 
@@ -123,6 +118,34 @@ impl Chat {
 mod tests {
   use super::*;
   use crate::memory::Msg;
+
+  #[tokio::test]
+  async fn handoff_skips_a_goal_nudge_superseded_by_a_user_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    let call = ai::Call::answered("no").await;
+    let halt = {
+      let mut chat = engine.lock();
+      chat.set_goal(Some("finish".into()));
+      chat.phase = Phase::Checking(call.handle.clone());
+      chat.halt.clone()
+    };
+    let writer = engine.writes.lock().await;
+    let check = engine.clone().checked(call, "finish".into(), halt);
+    tokio::pin!(check);
+    assert!(futures_util::poll!(&mut check).is_pending());
+    {
+      let mut chat = engine.lock();
+      let msg = chat.push(None, Kind::User, "wait for my changes");
+      chat.take(msg);
+    }
+    drop(writer);
+    check.await;
+    let chat = engine.lock();
+    assert_eq!(chat.mem.count, 1);
+    assert_eq!(chat.wait.len(), 1);
+    assert_eq!(chat.mem.goal.as_deref(), Some("finish"));
+  }
 
   #[test]
   fn yes_is_a_word() {

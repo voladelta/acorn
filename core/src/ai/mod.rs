@@ -200,8 +200,11 @@ pub struct Handle {
 }
 
 impl Handle {
-  pub fn send(&self, say: Say) {
-    let _ = self.tx.send(say);
+  /// Whether the call's inbox took the message. Once closed, the caller
+  /// must leave the message for the next call.
+  #[must_use]
+  pub fn send(&self, say: Say) -> bool {
+    self.tx.send(say).is_ok()
   }
 
   pub fn stop(&self) {
@@ -224,6 +227,29 @@ pub struct Call {
 }
 
 impl Call {
+  /// A completed call whose inbox has closed, as seen by its chat before
+  /// the turn has processed the result.
+  #[cfg(test)]
+  pub(crate) async fn answered(text: &str) -> Self {
+    let (tx, _) = mpsc::unbounded_channel();
+    let end = End {
+      ok: true,
+      text: text.into(),
+      ..End::default()
+    };
+    let done = tokio::spawn(async move { end });
+    while !done.is_finished() {
+      tokio::task::yield_now().await;
+    }
+    Self {
+      handle: Handle {
+        tx,
+        cancel: CancellationToken::new(),
+      },
+      done,
+    }
+  }
+
   /// Its end (a call that panicked failed).
   pub async fn end(self) -> End {
     self

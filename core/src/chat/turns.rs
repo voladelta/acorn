@@ -170,7 +170,6 @@ impl Engine {
     let call = {
       let mut chat = self.lock();
       let msgs = std::mem::take(&mut chat.wait);
-      chat.sent.clone_from(&msgs);
       let says: Vec<crate::Say> = msgs
         .iter()
         .filter(|m| m.end > from)
@@ -216,9 +215,9 @@ impl Engine {
       chat.phase = Phase::Settling;
       chat.unanswered(None);
       chat.set_live(None, Vec::new());
-      let left = chat.sent.len().saturating_sub(end.left.len());
-      let back: Vec<Span> = chat.sent.split_off(left);
-      chat.wait.splice(0..0, back);
+      let taken = chat.sent.len().saturating_sub(end.left.len());
+      let sent = std::mem::take(&mut chat.sent);
+      chat.wait.splice(0..0, sent.into_iter().skip(taken));
       if !end.ok && !halt.is_cancelled() {
         chat.failed(&end.text);
       }
@@ -250,18 +249,19 @@ impl Chat {
   /// A message logged: to the running call if whole beside its view (the
   /// user's cutting in), else to the next.
   pub(super) fn take(&mut self, msg: Span) {
-    if let Phase::Calling { call, .. } = &self.phase
+    if self.wait.is_empty()
+      && let Phase::Calling { call, .. } = &self.phase
       && self.mem.whole(msg.id) == msg.id
     {
-      let call = call.clone();
-      self.sent.push(msg);
       let cut = self.mem.message(msg.id).is_some_and(|m| m.kind == Kind::User);
-      self.cut_in |= cut;
-      call.send(crate::Say {
+      if call.send(crate::Say {
         cut,
         ..self.mem.say(msg.id, msg.end)
-      });
-      return;
+      }) {
+        self.sent.push(msg);
+        self.cut_in |= cut;
+        return;
+      }
     }
     self.wait.push(msg);
     match &self.phase {
@@ -658,6 +658,35 @@ mod tests {
   use super::*;
 
   #[tokio::test]
+  async fn handoff_keeps_a_message_sent_after_the_call_finished() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    let (call, halt) = {
+      let mut chat = engine.lock();
+      let call = ai::ask(chat.share(), Arc::new(|_| {}));
+      chat.phase = Phase::Calling {
+        call: call.handle.clone(),
+        asked: false,
+        open: 0,
+      };
+      let msg = chat.push(None, Kind::User, "already in the inbox");
+      chat.take(msg);
+      // Close the real inbox without dispatching a request. The first
+      // message comes back in End::left, the second arrives after close.
+      call.handle.stop();
+      (call, chat.halt.clone())
+    };
+    while !call.done.is_finished() {
+      tokio::task::yield_now().await;
+    }
+    engine.clone().say("one more thing".into(), vec![], None).await;
+    engine.clone().ended(call, halt).await;
+    let chat = engine.lock();
+    let queued: Vec<_> = chat.wait.iter().map(|s| chat.mem.say(s.id, s.end).text).collect();
+    assert_eq!(queued, ["already in the inbox", "one more thing"]);
+  }
+
+  #[tokio::test]
   async fn unbuilt_tail_goes_whole_before_the_waiting_messages() {
     let dir = tempfile::tempdir().unwrap();
     let engine = crate::chat::tests::open(dir.path());
@@ -697,9 +726,20 @@ mod tests {
       ])
       .unwrap();
     let end = chat.mem.count;
-    chat.wait.push(Span { id: 1, end });
+    let call = ai::ask(chat.share(), Arc::new(|_| {}));
+    chat.phase = Phase::Calling {
+      call: call.handle.clone(),
+      asked: false,
+      open: 0,
+    };
+    chat.take(Span { id: 1, end });
     assert_eq!(chat.mem.first(0, 0), 0);
     assert!(chat.from() > 0);
     assert!(chat.from() < end);
+    // A later, smaller message must follow the deferred pages.
+    chat.mem.push(vec![Msg::new(Kind::User, "one more thing")]).unwrap();
+    chat.take(Span { id: end, end: end + 1 });
+    assert_eq!(chat.wait.iter().map(|s| s.id).collect::<Vec<_>>(), [1, end]);
+    call.handle.stop();
   }
 }
