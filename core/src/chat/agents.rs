@@ -641,7 +641,7 @@ impl Chat {
   /// at its effort if it has one.
   fn agent_ask(&self, name: &str) -> Option<ai::Ask> {
     let agent = self.agents.get(name)?;
-    let log = Block::new(self.mem.agent_show(name), true);
+    let log = Block::new(self.mem.agent_reads(name), true);
     let pick = config::get().agents.unwrap_or(self.me.effort);
     let system = tools::system(&(tools::sub(&self.me.work()) + &crate::facts::prompt(&self.me.id)));
     let effort = agent.effort.unwrap_or(pick);

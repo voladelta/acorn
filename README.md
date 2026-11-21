@@ -219,7 +219,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `pick` | `high` | Acorn's effort: `none`, `low`, `high`, `max`, or `deepseek-flash:<effort>` (Max's is max; a created one's is set when created) |
 | `compactor` | `low` | The effort of every summary call |
 | `agents` | their assistant's | The effort of agents |
-| `view` | `2000000` | Bytes past which a view merges to half; capped at 2 MB |
+| `view` | `2000000` | Bytes past which a view merges to half; from 32 KB to 2 MB |
 | `budget` | none | USD a day (here) that every chat's calls may spend together; once reached, no request goes till midnight: a turn says why, summaries wait. `0`: none |
 | `rules` | none | A file appended to every system prompt: who you are, how you want work done |
 | `after` | none | A shell command run after each turn |
@@ -251,7 +251,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 - With Telegram, all Telegram App says, and what you write to it, goes through Telegram; and the groups the bot is in are kept here for 24 hours, readable by Telegram App.
 - A search or fetch goes to DeepSeek, or to the service of a plugin that replaces it, as does whatever else a plugin sends.
 - `purge` erases a message at once from everything a call or the app can see. It is held in `chat.db` for ten minutes, so `unpurge` can take it back; its text and old bytes stay in the file until a wipe deletes it and rewrites the file, which runs once the chat is idle (no turn, agent or summary at work) and no purge is still in its ten minutes, and is retried at the next launch if it fails or Acorn quits first.
-- Summaries written while a purged message's summary was in the compactor's context may still echo it.
+- A purge by text also lets go of every summary holding that text (one written with the message in its context may have copied it) and forgets the facts holding it. A purge by id does not, nor does either find a secret a summary reworded.
 - New imports preserve each message's page boundaries for purge and undo. Older imports recorded only the boundary of the entire batch. Each page of those imports can be purged and restored individually by its existing id.
 - Copies the disk itself keeps, such as APFS or Btrfs snapshots and Time Machine or other backups, are beyond Acorn's reach; disk encryption (FileVault, LUKS) protects them.
 

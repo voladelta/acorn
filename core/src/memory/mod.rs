@@ -152,6 +152,12 @@ impl Part {
     (2 * self.i + 1) * self.n() - 1
   }
 
+  /// The node of a key.
+  pub fn at(slot: u64) -> Part {
+    let l = (slot + 1).trailing_zeros();
+    Part::new(l, (slot + 1) >> (l + 1))
+  }
+
   /// Its first and last message.
   pub fn span(self) -> (u64, u64) {
     let a = self.i * self.n();
@@ -902,18 +908,45 @@ impl Memory {
 
   pub fn agent_show(&self, name: &str) -> String {
     match self.agent(name) {
-      Some(log) => log
-        .iter()
-        .map(|r| format!("{}|{}", r.i, r.show()))
-        .collect::<Vec<_>>()
-        .join("\n\n"),
+      Some(log) => shown(&log, usize::MAX),
       None => format!("No agent {name}."),
     }
+  }
+
+  /// An agent's log as its own calls read it: within half the view's HIGH
+  /// bytes (`shown`), as it goes after the view the agent started from.
+  pub fn agent_reads(&self, name: &str) -> String {
+    shown(&self.agent(name).unwrap_or_default(), config::get().view / 2)
   }
 }
 
 // Helpers
 // =======
+
+/// An agent's log, read within `most` bytes: past them, its oldest
+/// entries over NODE bytes are cut to their first NODE (zoom shows them
+/// whole), but the first two (what it is, its task). They are cut by half
+/// of `most` at a time, so what a call caches of the log holds till the
+/// next half. Entries of NODE bytes or under always stay.
+fn shown(log: &[Root], most: usize) -> String {
+  let step = (most / 2).max(1);
+  let size: usize = log.iter().map(|r| r.text.len()).sum();
+  let mut over = size.saturating_sub(most).div_ceil(step) * step;
+  let entry = |(k, r): (usize, &Root)| {
+    if over == 0 || k < 2 || r.text.len() <= NODE {
+      return format!("{}|{}", r.i, r.show());
+    }
+    over = over.saturating_sub(r.text.len() - NODE);
+    format!(
+      "{}|{}: {}\n[cut to fit: the first {NODE} of its {} bytes]",
+      r.i,
+      r.kind.as_str(),
+      cut(&r.text),
+      r.text.len()
+    )
+  };
+  log.iter().enumerate().map(entry).collect::<Vec<_>>().join("\n\n")
+}
 
 /// The state row; None: none, or unreadable.
 fn saved(db: &Connection) -> Option<Saved> {
@@ -1037,19 +1070,36 @@ pub fn flat(text: &str) -> String {
 
 /// A text's first NODE bytes, whole characters.
 pub fn cut(text: &str) -> &str {
-  let mut end = text.len().min(NODE);
+  clip(text, NODE)
+}
+
+/// A text's first `most` bytes, whole characters.
+fn clip(text: &str, most: usize) -> &str {
+  let mut end = text.len().min(most);
   while !text.is_char_boundary(end) {
     end -= 1;
   }
   &text[..end]
 }
 
-pub fn over(line: &str) -> String {
-  format!(
-    "Too long: your last line for this <input> was {} bytes,\nover the {NODE}-byte limit. Write the whole line again, cutting just\nenough of the least valuable items to fit before this cut:\n{}| ← LIMIT",
+/// What a line written for NODE bytes comes out under them at: NODE less
+/// what a model miscounts.
+const AIM: usize = NODE * 7 / 8;
+
+/// What a line over NODE bytes is answered, and the bytes it asks for
+/// now: of the `asked` it was written for, fewer by as much as it ran
+/// over (a model told its line's size alone cut too little, try after
+/// try), by half at most (one far over, held to its measure, cut more
+/// than it had to).
+pub fn over(line: &str, asked: usize) -> (String, usize) {
+  let most = (asked * AIM / line.len()).max(asked / 2);
+  let said = format!(
+    "Too long: your last line for this <input> was {} bytes, and the limit is\ntighter than it reads to you. Write the whole line again within {most} bytes,\nthe length of this ruler, cutting the least valuable items:\n{}\nYour last line, up to where it passes this ruler:\n{}| ← LIMIT",
     line.len(),
-    cut(line)
-  )
+    "-".repeat(most),
+    clip(line, most)
+  );
+  (said, most)
 }
 
 pub fn line(part: Part, text: &str) -> String {
@@ -1073,6 +1123,65 @@ mod tests {
     assert_eq!(read(r#"["Acorn's turn", "Ann"]"#), typed);
     assert!(!read(r#"["Ann"]"#).turn);
     assert_eq!(read("[]"), Work::default());
+  }
+
+  /// A line too long is asked for fewer bytes by as much as it ran over,
+  /// by half at most, each try from the last.
+  #[test]
+  fn a_line_too_long_is_asked_for_less() {
+    let (said, most) = super::over(&"é".repeat(320), 512);
+    assert_eq!(most, 358, "640 written for 512: 448 * 512 / 640");
+    assert!(said.contains("was 640 bytes") && said.contains("within 358 bytes"));
+    assert!(said.contains(&format!("\n{}\n", "-".repeat(358))), "its ruler");
+    assert!(
+      said.ends_with(&format!("\n{}| ← LIMIT", "é".repeat(179))),
+      "cut at a character"
+    );
+    assert_eq!(
+      super::over(&"x".repeat(520), most).1,
+      308,
+      "over still: 448 * 358 / 520"
+    );
+    assert_eq!(super::over(&"x".repeat(2000), 512).1, 256, "far over: half");
+  }
+
+  /// An agent's log reads whole while it fits; past that its oldest long
+  /// entries are cut, but its first two, by half the bound at a time, so
+  /// what was read stays as it was till the next half.
+  #[test]
+  fn an_agents_log_is_read_within_bounds() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut mem = Memory::load(dir.path()).unwrap();
+    let name = mem.agent_new(None).unwrap();
+    let push = |mem: &mut Memory, kind, size: usize| mem.agent_push(&name, kind, &"x".repeat(size)).unwrap();
+    push(&mut mem, Kind::User, 3000); // its task
+    push(&mut mem, Kind::Acorn, 100);
+    for _ in 0..6 {
+      push(&mut mem, Kind::Tool, 10_000);
+      push(&mut mem, Kind::Acorn, 100);
+    }
+    let read = |mem: &Memory, most| super::shown(&mem.agent(&name).unwrap(), most);
+    let marks = |read: &str| -> Vec<bool> { read.split("\n\n").map(|e| e.contains("[cut to fit:")).collect() };
+    let whole = mem.agent_show(&name);
+    assert_eq!(read(&mem, 80_000), whole, "63700 bytes fit");
+    // 23700 over 40000: two halves (40000) to cut, so the five oldest results
+    let cut = read(&mem, 40_000);
+    assert!(cut.len() <= 40_000, "{}", cut.len());
+    let (t, f) = (true, false);
+    assert_eq!(marks(&cut), [f, f, t, f, t, f, t, f, t, f, t, f, f, f]);
+    let entries: Vec<&str> = cut.split("\n\n").collect();
+    assert!(entries[2].ends_with("[cut to fit: the first 512 of its 10000 bytes]"));
+    assert!(entries[0].len() > 3000, "its task is whole");
+    // more logged, what was read stays the same (a call's cache holds)
+    push(&mut mem, Kind::Tool, 1000);
+    push(&mut mem, Kind::Tool, 10_000);
+    let more = read(&mem, 40_000);
+    assert!(more.len() <= 40_000 && more.starts_with(&cut), "the log only grew");
+    // till the next half is passed: the newest result still whole
+    push(&mut mem, Kind::Tool, 10_000);
+    let next = read(&mem, 40_000);
+    assert!(next.len() <= 40_000, "{}", next.len());
+    assert_eq!(marks(&next), [f, f, t, f, t, f, t, f, t, f, t, f, t, f, t, t, f]);
   }
 
   #[test]

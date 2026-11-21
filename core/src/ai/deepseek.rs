@@ -64,7 +64,9 @@ pub struct Step {
   pub why: String,
 }
 
-pub fn body(ask: &Ask, items: &[Item], tools: &[Spec]) -> Value {
+/// A request: `room`, the most tokens its output may take (they count
+/// against the model's context, as its input does).
+pub fn body(ask: &Ask, items: &[Item], tools: &[Spec], room: u64) -> Value {
   let tools: Vec<Value> = tools
     .iter()
     .map(|t| json!({"type": "function", "name": t.name, "description": t.info, "parameters": t.schema}))
@@ -74,7 +76,7 @@ pub fn body(ask: &Ask, items: &[Item], tools: &[Spec]) -> Value {
       "stream": true,
       "tools": tools,
       "reasoning": {"effort": ask.effort.as_str()},
-      "max_output_tokens": MAX_OUTPUT_TOKENS,
+      "max_output_tokens": room,
       "instructions": ask.system,
       "input": items.iter().flat_map(input).collect::<Vec<_>>(),
   });
@@ -82,6 +84,19 @@ pub fn body(ask: &Ask, items: &[Item], tools: &[Spec]) -> Value {
     body["user"] = json!(user);
   }
   body
+}
+
+/// Of a refusal for the model's context ("This model's maximum context
+/// length is W tokens. However, you requested N tokens (M in the messages,
+/// K in the completion)"), the tokens its messages leave for an output:
+/// W - M; None: another failure.
+pub fn left(why: &str) -> Option<u64> {
+  let num = |before: &str, after: &str| -> Option<u64> {
+    let (head, _) = why.split_once(after)?;
+    head.rsplit_once(before)?.1.trim().parse().ok()
+  };
+  let most = num("maximum context length is ", " tokens")?;
+  Some(most.saturating_sub(num("(", " in the messages")?))
 }
 
 fn input(item: &Item) -> Vec<Value> {

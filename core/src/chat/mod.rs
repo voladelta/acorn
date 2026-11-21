@@ -471,6 +471,15 @@ impl Chat {
       }
       last = Some(at);
     }
+    // a summary may have copied it from its context; a fact may keep it
+    let lines = match self.mem.sweep(text) {
+      Ok(n) => n,
+      Err(err) => return format!("The purge failed: {err}"),
+    };
+    let facts = match crate::facts::purge(&self.me.id, text) {
+      Ok(n) => n,
+      Err(err) => return format!("The purge failed: {err}"),
+    };
     // what streams now may hold it too
     let streams: Vec<Option<String>> = std::iter::once(None)
       .chain(self.agents.keys().cloned().map(Some))
@@ -486,10 +495,16 @@ impl Chat {
     self.seen.clear();
     self.show();
     self.pump();
-    let what = match erased.len() {
+    let mut what = match erased.len() {
       0 => "No message held it".to_string(),
       _ => format!("Purged the messages holding it ({})", erased.join(", ")),
     };
+    if lines > 0 {
+      what += &format!("; {lines} summaries that held it or were made from one are being written anew");
+    }
+    if facts > 0 {
+      what += &format!("; forgot the {facts} facts holding it");
+    }
     format!(
       "{what}; from now on it is written [purged] wherever a message would hold it, this call too. unpurge takes a message back by its id for ten minutes; then its old bytes are wiped from Acorn's files once the chat is idle."
     )

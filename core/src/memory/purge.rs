@@ -32,9 +32,7 @@ impl Memory {
       return Ok(no_message(agent, id));
     };
     let gone = self.built_from(agent, a, b);
-    let wipe = self.dir.join(WIPE);
-    fs::write(&wipe, "")?;
-    disk::wrote(&wipe);
+    self.owe_wipe()?;
     let tx = self.db.transaction()?;
     let at = crate::now_ms();
     for i in a..=b {
@@ -74,7 +72,7 @@ impl Memory {
     let mut said = match agent {
       Some(name) => format!("Purged message {id} of {name}'s chat."),
       None => {
-        self.unbuild(a, b, &gone);
+        self.unbuild((a..=b).map(Part::leaf), &gone);
         format!(
           "Purged message {id}{} and the {} summaries made from it; they are being written anew without it.",
           pages(a, b),
@@ -153,7 +151,7 @@ impl Memory {
     Ok(match agent {
       Some(name) => format!("Unpurged message {id} of {name}'s chat: it is back as it was."),
       None => {
-        self.unbuild(a, b, &gone);
+        self.unbuild((a..=b).map(Part::leaf), &gone);
         format!(
           "Unpurged message {id}{}: it is back as it was, and the {} summaries over it are being written anew with it.",
           pages(a, b),
@@ -161,6 +159,43 @@ impl Memory {
         )
       }
     })
+  }
+
+  /// Every summary holding `text` let go, and those built from one: a
+  /// compaction may have copied it from its context, off a message purged
+  /// since. They build anew, as after a purge (not held: nothing to take
+  /// back), and a wipe of chat.db is owed. Answers how many went.
+  pub fn sweep(&mut self, text: &str) -> Result<usize> {
+    let held: Vec<Part> = {
+      let mut q = self.db.prepare("select slot from nodes where instr(text, ?) > 0")?;
+      let slots = q.query_map([text], |r| r.get(0))?;
+      slots.map(|slot| slot.map(Part::at)).collect::<rusqlite::Result<_>>()?
+    };
+    if held.is_empty() {
+      return Ok(0);
+    }
+    let mut gone = HashSet::new();
+    for &part in &held {
+      self.above(part, &mut gone);
+    }
+    self.owe_wipe()?;
+    let tx = self.db.transaction()?;
+    for &slot in &gone {
+      tx.execute("delete from nodes where slot = ?", [slot])?;
+    }
+    tx.commit()?;
+    self.unbuild(held.into_iter(), &gone);
+    self.purged += 1;
+    Ok(gone.len())
+  }
+
+  /// A wipe of chat.db owed: its marker written first, so that a wipe
+  /// cut short by a quit is done at the next launch.
+  fn owe_wipe(&self) -> Result<()> {
+    let wipe = self.dir.join(WIPE);
+    fs::write(&wipe, "")?;
+    disk::wrote(&wipe);
+    Ok(())
   }
 
   /// When the last message held stops being held (ms); None: none is.
@@ -186,14 +221,14 @@ impl Memory {
 
   /// The pages [a, b] of message id: the chat's (all of its), or an
   /// agent's (one); None: no such message.
-  /// The first page holding `text`, or its start (the rest on the page
-  /// after, of the same message): the chat's (None), else an agent's
-  /// log's, by name; and its index.
+  /// The first page holding `text` (or its line), or its start (the rest
+  /// on the page after, of the same message): the chat's (None), else an
+  /// agent's log's, by name; and its index.
   pub fn holding(&self, text: &str) -> Option<(Option<String>, u64)> {
     self
       .db
       .query_row(
-        "select log, i from msgs m where instr(text, ?1) > 0 or (more and instr(
+        "select log, i from msgs m where instr(text, ?1) > 0 or instr(line, ?1) > 0 or (more and instr(
             substr(text, 1 - length(?1)) || (select substr(text, 1, length(?1) - 1) from msgs
               where log = m.log and i = m.i + 1), ?1) > 0)
           order by log <> ?2, log, i limit 1",
@@ -233,29 +268,36 @@ impl Memory {
       return gone;
     }
     for i in a..=b {
-      let mut part = Part::leaf(i);
-      while part.span().1 < self.count {
-        if self.node(part).is_some() {
-          gone.insert(part.slot());
-        }
-        part = part.up();
-      }
+      self.above(Part::leaf(i), &mut gone);
     }
     gone
   }
 
+  /// `part` and the nodes above it, those built, added to `gone` by slot.
+  fn above(&self, mut part: Part, gone: &mut HashSet<u64>) {
+    while part.span().1 < self.count {
+      if self.node(part).is_some() {
+        gone.insert(part.slot());
+      }
+      part = part.up();
+    }
+  }
+
   /// The nodes `gone` (by slot) let go, the views' open into the halves
-  /// left, the leaves a..=b and those above them to build anew.
-  fn unbuild(&mut self, a: u64, b: u64, gone: &HashSet<u64>) {
+  /// left, `parts` and those above them to build anew: each of `parts`
+  /// ready, but one above another, which waits on it as those above do.
+  fn unbuild(&mut self, parts: impl Iterator<Item = Part> + Clone, gone: &HashSet<u64>) {
     self.age += 1;
     self.nodes.retain(|slot, _| !gone.contains(slot));
-    for i in a..=b {
-      let mut part = Part::leaf(i).up();
+    for part in parts.clone() {
+      self.ready(part, true);
+    }
+    for part in parts {
+      let mut part = part.up();
       while part.span().1 < self.count {
         self.ready(part, false);
         part = part.up();
       }
-      self.ready(Part::leaf(i), true);
     }
     for k in 0..2 {
       let view = if k == 0 { &self.view } else { &self.seen };
@@ -404,5 +446,113 @@ mod tests {
     mem.purge(None, 1).unwrap();
     assert_eq!(mem.holding(key), None);
     assert_eq!(mem.message(2).unwrap().text, PURGED, "each page of it");
+  }
+
+  /// Every node ready built, a call's line cut from its source, till
+  /// none is.
+  fn build(mem: &mut Memory) {
+    loop {
+      let (mut built, jobs) = mem.starts();
+      if built.is_empty() && jobs.is_empty() {
+        break;
+      }
+      for (part, text) in jobs {
+        mem.busy.remove(&part.slot());
+        built.push((part, cut(&flat(&text)).to_string()));
+      }
+      mem.store(&built).unwrap();
+      mem.fit(false);
+    }
+  }
+
+  /// How many nodes logged hold a text.
+  fn nodes_holding(mem: &Memory, text: &str) -> u64 {
+    let q = "select count(*) from nodes where instr(text, ?) > 0";
+    mem.db.query_row(q, [text], |r| r.get(0)).unwrap()
+  }
+
+  /// A key and the node of it are one another's, at every level.
+  #[test]
+  fn a_slot_names_its_node() {
+    for l in 0..12 {
+      for i in 0..200 {
+        let part = Part::new(l, i);
+        assert_eq!(Part::at(part.slot()), part);
+      }
+    }
+    for slot in 0..4096 {
+      assert_eq!(Part::at(slot).slot(), slot);
+    }
+  }
+
+  /// A summary that copied a secret from its context outlives the purge
+  /// of the message that held it: a sweep lets it go, and those built
+  /// from it, out of the views and chat.db; they build anew without it,
+  /// the rest as they were, and so it is found after a restart.
+  #[test]
+  fn a_sweep_lets_go_of_the_summaries_holding_a_secret() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut mem = Memory::load(dir.path()).unwrap();
+    let key = "sk-test-ABCD1234";
+    // 85 messages: a tree with roots of four sizes, each past a line
+    for k in 0..85 {
+      let text = if k == 70 {
+        format!("my key: {key}")
+      } else {
+        format!("message {k}: {}", "words ".repeat(400))
+      };
+      mem.push(vec![Msg::new(Kind::User, text)]).unwrap();
+    }
+    build(&mut mem);
+    assert!(mem.seen.parts.iter().any(|p| p.l > 0), "a view merged");
+    // message 5's summary copied the key, and so did the merges above it
+    let (leaf, pair, four) = (Part::leaf(5), Part::new(1, 2), Part::new(2, 1));
+    for part in [leaf, pair, four] {
+      let line = format!("{}+{}|the user's key is {key}", part.span().0, part.n());
+      mem.store(&[(part, line)]).unwrap();
+    }
+    mem.fit(false);
+    while let Some(at) = mem.holding(key) {
+      mem.purge(at.0.as_deref(), at.1).unwrap();
+    }
+    assert_eq!(mem.message(70).unwrap().text, PURGED);
+    assert_eq!(nodes_holding(&mem, key), 3, "a purge leaves them");
+    let kept = mem.node(Part::new(2, 3)).unwrap();
+    let purged = mem.purged;
+
+    // the three, and the four above them
+    let above = [Part::new(3, 0), Part::new(4, 0), Part::new(5, 0), Part::new(6, 0)];
+    assert_eq!(mem.sweep(key).unwrap(), 7);
+    assert_eq!(mem.purged, purged + 1, "a wipe is owed");
+    assert!(dir.path().join(WIPE).exists());
+    assert_eq!(nodes_holding(&mem, key), 0);
+    for part in [leaf, pair, four].into_iter().chain(above) {
+      assert_eq!(mem.node(part), None, "{part:?} is let go");
+    }
+    assert_eq!(mem.node(Part::new(2, 3)), Some(kept.clone()), "the rest stays");
+    let shown = |mem: &Memory| -> String { mem.view_blocks(mem.count).into_iter().map(|b| b.text).collect() };
+    assert!(!shown(&mem).contains(key));
+    for view in [&mem.view, &mem.seen] {
+      let size: usize = view.parts.iter().map(|&p| mem.size(p)).sum();
+      assert_eq!(view.size, size);
+      assert!(view.parts.iter().all(|&p| p.l == 0 || mem.built(p)));
+    }
+    assert_eq!(mem.sweep(key).unwrap(), 0, "none holds it now");
+
+    build(&mut mem);
+    assert_eq!(
+      mem.node(leaf),
+      Some(cut(&flat(&mem.message(5).unwrap().show())).to_string())
+    );
+    for part in [pair, four].into_iter().chain(above) {
+      assert!(mem.node(part).is_some(), "{part:?} is built anew");
+    }
+    assert_eq!(nodes_holding(&mem, key), 0);
+    let text = shown(&mem);
+    drop(mem);
+    let mut mem = Memory::load(dir.path()).unwrap();
+    assert_eq!(shown(&mem), text, "as it was, after a restart");
+    build(&mut mem);
+    assert_eq!(shown(&mem), text, "nothing was left to build");
   }
 }

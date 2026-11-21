@@ -1,4 +1,4 @@
-//! Facts kept, shadowed, and forgotten across assistants, in their own
+//! Facts kept, shadowed, forgotten and purged across assistants, in their own
 //! test binary so setting `ACORN_DIR` happens before `config::get()` is
 //! ever initialized in this process.
 
@@ -81,4 +81,31 @@ fn facts_shared_shadowed_and_erased_on_forget() {
     "a fact forgotten is erased"
   );
   assert!(facts::prompt("nobody").contains("Helix") && !facts::prompt("nobody").contains("emacs"));
+
+  // a purge by text forgets what holds it, of the facts an assistant sees
+  facts::remember("main", fact(false, "user", "password", SECRET, false)).unwrap();
+  facts::remember(
+    "main",
+    fact(true, &format!("Key {SECRET}"), "use", "the staging API", false),
+  )
+  .unwrap();
+  facts::remember(
+    "max",
+    fact(true, "user", "token", &format!("it is {SECRET}, kept"), false),
+  )
+  .unwrap();
+  assert_eq!(facts::purge("main", SECRET).unwrap(), 2);
+  assert_eq!(facts::purge("main", SECRET).unwrap(), 0);
+  let main = facts::prompt("main");
+  assert!(!main.to_lowercase().contains(&SECRET.to_lowercase()), "{main}");
+  assert!(
+    main.contains("Helix") && main.contains("language: Rust"),
+    "the rest kept: {main}"
+  );
+  assert!(
+    facts::prompt("max").contains(SECRET),
+    "max's own is not main's to forget"
+  );
+  assert_eq!(facts::purge("max", SECRET).unwrap(), 1);
+  assert!(!on_disk(&home.path().join("home"), SECRET), "a fact purged is erased");
 }
