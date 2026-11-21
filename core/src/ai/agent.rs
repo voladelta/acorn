@@ -445,20 +445,30 @@ async fn send(
         let should = header("x-should-retry");
         let busy = [408, 409, 429].contains(&status) || status >= 500;
         let passing = should.as_deref() == Some("true") || (should.as_deref() != Some("false") && busy);
-        let why = reason(&res.text().await.unwrap_or_default());
+        // its why may stall as a stream does: a stop cuts it too
+        let told = tokio::select! {
+            told = tokio::time::timeout(IDLE, res.text()) => Some(told),
+            _ = cancel.cancelled() => None,
+        };
         let halt = match status {
           _ if passing => Halt::Busy,
           400 | 413 | 422 => Halt::Fail,
           _ => Halt::Down,
         };
-        if halt != Halt::Busy {
-          eprintln!("{MODEL}: HTTP {status}{id}: {}", clip::head(&why, 300));
+        match told {
+          None => (None, fail("stopped", &[], Halt::Lost), false),
+          Some(told) => {
+            let why = reason(&told.ok().and_then(Result::ok).unwrap_or_default());
+            if halt != Halt::Busy {
+              eprintln!("{MODEL}: HTTP {status}{id}: {}", clip::head(&why, 300));
+            }
+            let why = match halt {
+              Halt::Busy => format!("HTTP {status}{id}: {why}"),
+              _ => format!("the AI service refused the request (HTTP {status}): {why}"),
+            };
+            (after, fail(&why, &[], halt), false)
+          }
         }
-        let why = match halt {
-          Halt::Busy => format!("HTTP {status}{id}: {why}"),
-          _ => format!("the AI service refused the request (HTTP {status}): {why}"),
-        };
-        (after, fail(&why, &[], halt), false)
       }
     }
   };
@@ -780,6 +790,34 @@ mod tests {
     };
     assert_eq!(uses[0].usage, usage);
     assert!(uses[0].micros > 0);
+  }
+
+  /// A refusal whose why never comes whole is cut by a stop as a stream
+  /// is: the request ends at once, its seat and its flight let go.
+  #[tokio::test]
+  async fn a_refusal_stalled_is_cut() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+      let (mut sock, _) = listener.accept().await.unwrap();
+      let mut buf = [0u8; 8192];
+      let _ = sock.read(&mut buf).await;
+      let head = "HTTP/1.1 400 No\r\ncontent-type: application/json\r\ncontent-length: 64\r\n\r\n{\"error\"";
+      let _ = sock.write_all(head.as_bytes()).await;
+      while sock.read(&mut buf).await.is_ok_and(|n| n > 0) {} // open till the client goes
+    });
+    let cancel = CancellationToken::new();
+    let stop = cancel.clone();
+    tokio::spawn(async move {
+      tokio::time::sleep(Duration::from_millis(300)).await;
+      stop.cancel();
+    });
+    let on: On = std::sync::Arc::new(|_| {});
+    let ask = ask(None);
+    let sending = sent(&ask, &on, url, &cancel);
+    let (status, step) = tokio::time::timeout(Duration::from_secs(10), sending).await.unwrap();
+    assert_eq!((status, step.halt), (400, Halt::Lost));
   }
 
   /// Cut short, a request's prompt counts as read where a call cached it.
