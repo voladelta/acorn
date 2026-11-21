@@ -25,7 +25,7 @@ use acorn_core::wire::{Command, Event};
 use axum::body::Bytes;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::{Query, Request, State};
-use axum::http::{StatusCode, header};
+use axum::http::{Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -259,7 +259,8 @@ fn cookie(token: &str, secure: bool) -> String {
 }
 
 /// Every request shows the token: a link's `?token=` sets the cookie and
-/// leads on without it; else the cookie must hold it.
+/// leads on without it; else the cookie must hold it, and only a read
+/// may come from another origin's page.
 async fn guard(State(s): State<Server>, req: Request, next: Next) -> Response {
   let query = req.uri().query().unwrap_or("");
   if let Some(t) = query.split('&').find_map(|kv| kv.strip_prefix("token=")) {
@@ -288,6 +289,16 @@ async fn guard(State(s): State<Server>, req: Request, next: Next) -> Response {
     .any(|t| same(t, &s.token));
   if !has {
     return (StatusCode::UNAUTHORIZED, "Open the link acorn-server printed.").into_response();
+  }
+  // the cookie goes with a request from any port of this host, and from a
+  // sibling subdomain: what changes anything comes from Acorn's own page
+  let safe = matches!(*req.method(), Method::GET | Method::HEAD);
+  let own = req
+    .headers()
+    .get("sec-fetch-site")
+    .is_none_or(|v| v == "same-origin" || v == "none");
+  if !safe && !own {
+    return (StatusCode::FORBIDDEN, "Not from Acorn's own page.").into_response();
   }
   next.run(req).await
 }
@@ -407,7 +418,7 @@ mod tests {
     Router::new()
       .route("/api/events", get(events))
       .route("/api/image", get(image))
-      .route("/ok", get(|| async { "ok" }))
+      .route("/ok", get(|| async { "ok" }).post(|| async { "ok" }))
       .layer(middleware::from_fn_with_state(server.clone(), guard))
       .with_state(server)
   }
@@ -523,6 +534,35 @@ mod tests {
       .await
       .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+  }
+
+  /// The cookie alone sends no command from another origin's page: a
+  /// browser sends it from any port of the host.
+  #[tokio::test]
+  async fn guard_takes_changes_from_its_own_page_only() {
+    let app = test_app(test_server(1, false));
+    let ask = |method: Method, site: Option<&'static str>| {
+      let mut req = Request::builder()
+        .method(method)
+        .uri("/ok")
+        .header(header::COOKIE, "acorn_token=0123456789abcdef0123456789abcdef");
+      if let Some(site) = site {
+        req = req.header("sec-fetch-site", site);
+      }
+      app.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+    for site in ["same-site", "cross-site"] {
+      let res = ask(Method::POST, Some(site)).await.unwrap();
+      assert_eq!(res.status(), StatusCode::FORBIDDEN, "{site}");
+      // a link from another page still opens it
+      let res = ask(Method::GET, Some(site)).await.unwrap();
+      assert_eq!(res.status(), StatusCode::OK, "{site}");
+    }
+    // its own page, and a client that is no browser (the app, the host's tests)
+    for site in [Some("same-origin"), Some("none"), None] {
+      let res = ask(Method::POST, site).await.unwrap();
+      assert_eq!(res.status(), StatusCode::OK, "{site:?}");
+    }
   }
 
   #[tokio::test]

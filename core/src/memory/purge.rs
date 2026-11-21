@@ -186,13 +186,17 @@ impl Memory {
 
   /// The pages [a, b] of message id: the chat's (all of its), or an
   /// agent's (one); None: no such message.
-  /// The first page holding `text`: the chat's (None), else an agent's
+  /// The first page holding `text`, or its start (the rest on the page
+  /// after, of the same message): the chat's (None), else an agent's
   /// log's, by name; and its index.
   pub fn holding(&self, text: &str) -> Option<(Option<String>, u64)> {
     self
       .db
       .query_row(
-        "select log, i from msgs where instr(text, ?1) > 0 order by log <> ?2, log, i limit 1",
+        "select log, i from msgs m where instr(text, ?1) > 0 or (more and instr(
+            substr(text, 1 - length(?1)) || (select substr(text, 1, length(?1) - 1) from msgs
+              where log = m.log and i = m.i + 1), ?1) > 0)
+          order by log <> ?2, log, i limit 1",
         params![text, CHAT],
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?)),
       )
@@ -379,5 +383,26 @@ mod tests {
     }
     assert_eq!(purged, [(None, 1), (None, 2), (Some("Scout".into()), 0)]);
     assert_eq!(mem.holding("hello"), Some((None, 0)), "the rest kept");
+  }
+
+  /// A text cut by a page's end is found, and goes with its message.
+  #[test]
+  fn a_secret_across_a_page_cut_is_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut mem = Memory::load(dir.path()).unwrap();
+    let key = "sk-test-ABCD1234-EFGH5678";
+    mem.push(vec![Msg::new(Kind::User, "hello")]).unwrap();
+    // one long line, so the page ends 10 characters into the key
+    let text = format!("{}{key}{}", "é".repeat(crate::clip::CAP - 10), "y".repeat(50));
+    mem.push(vec![Msg::new(Kind::User, text)]).unwrap();
+    assert_eq!(mem.count, 3, "two pages");
+    assert!(!mem.message(1).unwrap().text.contains(key) && !mem.message(2).unwrap().text.contains(key));
+    assert_eq!(mem.holding(key), Some((None, 1)));
+    // two messages that only together spell it hold none
+    mem.push(vec![Msg::new(Kind::User, &key[..10])]).unwrap();
+    mem.push(vec![Msg::new(Kind::User, &key[10..])]).unwrap();
+    mem.purge(None, 1).unwrap();
+    assert_eq!(mem.holding(key), None);
+    assert_eq!(mem.message(2).unwrap().text, PURGED, "each page of it");
   }
 }
