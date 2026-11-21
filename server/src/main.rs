@@ -69,9 +69,13 @@ impl Log {
   }
 
   fn push(&mut self, json: String) -> u64 {
+    self.push_capped(json, KEEP, KEEP_BYTES)
+  }
+
+  fn push_capped(&mut self, json: String, max_events: usize, max_bytes: usize) -> u64 {
     self.bytes += json.len();
     self.events.push_back(json.into());
-    while self.events.len() > KEEP || self.bytes > KEEP_BYTES {
+    while self.events.len() > max_events || self.bytes > max_bytes {
       let Some(old) = self.events.pop_front() else { break };
       self.bytes -= old.len();
       self.first += 1;
@@ -376,5 +380,253 @@ async fn image(Query(q): Query<HashMap<String, String>>, req: Request) -> Respon
   match ServeFile::new(&path).oneshot(req).await {
     Ok(res) => res.into_response(),
     Err(never) => match never {},
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use axum::body::{Body, to_bytes};
+
+  fn test_server(epoch: u64, secure: bool) -> Server {
+    let (said, tick) = watch::channel(0);
+    Server {
+      epoch,
+      log: Arc::new(Mutex::new(Log {
+        first: 1,
+        ..Log::default()
+      })),
+      tick,
+      said: Arc::new(said),
+      token: Arc::new("0123456789abcdef0123456789abcdef".into()),
+      secure,
+    }
+  }
+
+  fn test_app(server: Server) -> Router {
+    Router::new()
+      .route("/api/events", get(events))
+      .route("/api/image", get(image))
+      .route("/ok", get(|| async { "ok" }))
+      .layer(middleware::from_fn_with_state(server.clone(), guard))
+      .with_state(server)
+  }
+
+  async fn json_body(res: Response) -> serde_json::Value {
+    let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+  }
+
+  #[test]
+  fn log_evicts_by_count_and_bytes() {
+    let mut log = Log {
+      first: 1,
+      ..Log::default()
+    };
+    assert_eq!(log.last(), 0);
+    assert_eq!(log.push_capped("aaaa".into(), 2, 100), 1);
+    assert_eq!(log.push_capped("bbbb".into(), 2, 100), 2);
+    assert_eq!(log.push_capped("cccc".into(), 2, 100), 3);
+    assert_eq!((log.first, log.last(), log.events.len(), log.bytes), (2, 3, 2, 8));
+
+    // byte cap evicts older entries until within budget
+    assert_eq!(log.push_capped("dddddd".into(), 10, 8), 4);
+    assert_eq!((log.first, log.last(), log.events.len(), log.bytes), (4, 4, 1, 6));
+  }
+
+  #[tokio::test]
+  async fn guard_enforces_token_cookie_and_secure_flag() {
+    let app = test_app(test_server(1, false));
+
+    // no token or cookie
+    let res = app
+      .clone()
+      .oneshot(Request::builder().uri("/ok").body(Body::empty()).unwrap())
+      .await
+      .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // wrong query token
+    let res = app
+      .clone()
+      .oneshot(Request::builder().uri("/ok?token=wrong").body(Body::empty()).unwrap())
+      .await
+      .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // valid query token sets HttpOnly cookie and redirects without token
+    let res = app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .uri("/ok?token=0123456789abcdef0123456789abcdef")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(res.headers()[header::LOCATION], "/ok");
+    let set_cookie = res.headers()[header::SET_COOKIE].to_str().unwrap();
+    assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("SameSite=Strict"));
+    assert!(!set_cookie.contains("; Secure"));
+
+    // x-forwarded-proto: https adds Secure
+    let res = app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .uri("/ok?token=0123456789abcdef0123456789abcdef")
+          .header("x-forwarded-proto", "HTTPS")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert!(res.headers()[header::SET_COOKIE].to_str().unwrap().contains("; Secure"));
+
+    // --secure flag also adds Secure without proxy header
+    let secure_app = test_app(test_server(1, true));
+    let res = secure_app
+      .oneshot(
+        Request::builder()
+          .uri("/ok?token=0123456789abcdef0123456789abcdef")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert!(res.headers()[header::SET_COOKIE].to_str().unwrap().contains("; Secure"));
+
+    // valid cookie passes (even alongside other cookies), wrong cookie rejected
+    let res = app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .uri("/ok")
+          .header(header::COOKIE, "other=1; acorn_token=0123456789abcdef0123456789abcdef")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+      .oneshot(
+        Request::builder()
+          .uri("/ok")
+          .header(header::COOKIE, "acorn_token=bad")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+  }
+
+  #[tokio::test]
+  async fn events_reports_epoch_mismatch_and_eviction_loss() {
+    let server = test_server(42, false);
+    {
+      let mut log = server.log.lock().unwrap();
+      let seq = log.push_capped(r#"["main",1]"#.into(), 2, 1024);
+      server.said.send_replace(seq);
+      let seq = log.push_capped(r#"["main",2]"#.into(), 2, 1024);
+      server.said.send_replace(seq);
+    }
+    let app = test_app(server.clone());
+    let cookie_hdr = "acorn_token=0123456789abcdef0123456789abcdef";
+
+    // matching epoch returns buffered events with lost=false
+    let res = app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .uri("/api/events?epoch=42&after=0")
+          .header(header::COOKIE, cookie_hdr)
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = json_body(res).await;
+    assert_eq!(body["epoch"], 42);
+    assert_eq!(body["seq"], 2);
+    assert_eq!(body["lost"], false);
+    assert_eq!(body["events"].as_array().unwrap().len(), 2);
+
+    // wrong epoch returns immediately with lost=true and empty events
+    let res = app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .uri("/api/events?epoch=99&after=2")
+          .header(header::COOKIE, cookie_hdr)
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    let body = json_body(res).await;
+    assert_eq!(body["epoch"], 42);
+    assert_eq!(body["seq"], 2);
+    assert_eq!(body["lost"], true);
+    assert_eq!(body["events"].as_array().unwrap().len(), 0);
+
+    // evicting past `after` signals lost=true and returns only kept events
+    {
+      let mut log = server.log.lock().unwrap();
+      let seq = log.push_capped(r#"["main",3]"#.into(), 2, 1024);
+      server.said.send_replace(seq);
+    }
+    let res = app
+      .oneshot(
+        Request::builder()
+          .uri("/api/events?epoch=42&after=0")
+          .header(header::COOKIE, cookie_hdr)
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    let body = json_body(res).await;
+    assert_eq!(body["seq"], 3);
+    assert_eq!(body["lost"], true);
+    assert_eq!(body["events"], serde_json::json!([["main", 2], ["main", 3]]));
+  }
+
+  #[tokio::test]
+  async fn image_rejects_traversal_and_malformed_params() {
+    let app = test_app(test_server(1, false));
+    let cookie_hdr = "acorn_token=0123456789abcdef0123456789abcdef";
+
+    for uri in [
+      "/api/image",
+      "/api/image?chat=main",
+      "/api/image?name=a.png",
+      "/api/image?chat=main&name=../secret.png",
+      "/api/image?chat=main&name=.hidden",
+      "/api/image?chat=main&name=sub/a.png",
+      "/api/image?chat=main&name=a%5Cb.png",
+      "/api/image?chat=..&name=a.png",
+      "/api/image?chat=.hidden&name=a.png",
+      "/api/image?chat=a/b/c&name=a.png",
+      "/api/image?chat=&name=a.png",
+    ] {
+      let res = app
+        .clone()
+        .oneshot(
+          Request::builder()
+            .uri(uri)
+            .header(header::COOKIE, cookie_hdr)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+      assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{uri}");
+    }
   }
 }

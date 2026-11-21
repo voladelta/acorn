@@ -50,18 +50,10 @@ fn on_disk(dir: &std::path::Path, text: &str) -> bool {
     })
 }
 
-#[test]
-fn memory_in_sqlite() {
-  let home = tempfile::tempdir().unwrap();
-  // SAFETY: set once, before any thread of the test starts.
-  unsafe {
-    std::env::set_var("ACORN_DIR", home.path().join("home"));
-    std::env::set_var("ACORN_CHATS", home.path().join("chats"));
-  }
-  let dir = home.path().join("chats/main");
-
-  // logged, built, opened again as it was
-  let mut mem = Memory::load(&dir).unwrap();
+/// Seed a chat with 12 messages (including `SECRET` at id 5) plus a long
+/// multi-page echo, then build its summary tree.
+fn seed(dir: &std::path::Path) -> Memory {
+  let mut mem = Memory::load(dir).unwrap();
   for k in 0..12 {
     let text = if k == 5 {
       format!("my key is {SECRET}")
@@ -74,6 +66,16 @@ fn memory_in_sqlite() {
   }
   mem.push(vec![Msg::new(Kind::Echo, "y".repeat(70_000))]).unwrap();
   build(&mut mem);
+  mem
+}
+
+#[test]
+fn persistence_fts_search_and_zoom() {
+  let home = tempfile::tempdir().unwrap();
+  let dir = home.path().join("chats/main");
+
+  // logged, built, opened again as it was
+  let mem = seed(&dir);
   let count = mem.count;
   assert!(count > 13, "a long text goes in pages");
   let view = mem.view.parts.clone();
@@ -115,6 +117,13 @@ fn memory_in_sqlite() {
     )
     .unwrap();
   assert_eq!(looks, (4, 2, 2, 1), "each search and zoom logged with what it found");
+}
+
+#[test]
+fn purge_unpurge_and_wal_erasure() {
+  let home = tempfile::tempdir().unwrap();
+  let dir = home.path().join("chats/main");
+  let mut mem = seed(&dir);
 
   // purged: its text, and every node built from it
   let age = mem.age;
@@ -170,8 +179,14 @@ fn memory_in_sqlite() {
     "erased from chat.db and its WAL"
   );
   assert!(mem.purge(None, 999).unwrap().starts_with("No message"));
+}
 
-  // a long message, its secret on every line, purged from every page
+#[test]
+fn long_message_purge_and_concurrent_wipe() {
+  let home = tempfile::tempdir().unwrap();
+  let dir = home.path().join("chats/main");
+  let mut mem = Memory::load(&dir).unwrap();
+  mem.push(vec![Msg::new(Kind::User, "first")]).unwrap();
   let long: String = (0..2500).map(|k| format!("line {k} {SECRET}\n")).collect();
   mem.push(vec![Msg::new(Kind::User, long)]).unwrap();
   let id = mem.count - 1;
@@ -179,6 +194,7 @@ fn memory_in_sqlite() {
   assert!(on_disk(&dir, SECRET));
   let said = mem.purge(None, id).unwrap();
   assert!(said.contains("its pages"), "{said}");
+  let owed = dir.join("chat.db.wipe");
   let upto = mem.purged;
   mem.purge(None, 0).unwrap();
   memory::wipe(&dir, i64::MAX).unwrap();
@@ -189,7 +205,14 @@ fn memory_in_sqlite() {
     !owed.exists() && !on_disk(&dir, SECRET),
     "no stale copy left in chat.db"
   );
-  build(&mut mem);
+}
+
+#[test]
+fn interrupted_message_and_agent_log() {
+  let home = tempfile::tempdir().unwrap();
+  let dir = home.path().join("chats/main");
+  let mut mem = Memory::load(&dir).unwrap();
+  mem.push(vec![Msg::new(Kind::User, "hello")]).unwrap();
 
   // a quit in the middle of a message: its pages so far dropped
   let count = mem.count;
@@ -214,12 +237,18 @@ fn memory_in_sqlite() {
     .unwrap();
   assert_eq!(mem.agent_names(), std::slice::from_ref(&name));
   assert_eq!(mem.agent(&name).unwrap().len(), 2);
+  let owed = dir.join("chat.db.wipe");
   mem.purge(Some(&name), 1).unwrap();
   assert!(mem.agent_show(&name).contains(PURGED) && !mem.agent_show(&name).contains(SECRET));
   assert!(owed.exists());
   wipe(&mut mem);
   assert!(!on_disk(&dir, SECRET));
   assert!(mem.agent("Nobody").is_none());
+}
+
+#[test]
+fn legacy_agent_schema_and_view_lines() {
+  let home = tempfile::tempdir().unwrap();
 
   // an agent from before efforts were kept: its column added, at the run's
   let old = home.path().join("chats/old");
@@ -231,7 +260,32 @@ fn memory_in_sqlite() {
   let was = Memory::load(&old).unwrap();
   assert!(was.agent("Ann").is_some() && was.agent_effort("Ann").is_none());
 
-  // facts, across assistants
+  // a view's last lines: messages not summarized yet as their kind and text
+  let mut thread = Memory::load(&home.path().join("chats/max/with/main")).unwrap();
+  for (kind, text) in [
+    (Kind::User, "first"),
+    (Kind::User, "is the deploy safe?"),
+    (Kind::Acorn, "no:\nthe key leaks"),
+  ] {
+    thread.push(vec![Msg::new(kind, text)]).unwrap();
+  }
+  thread.fit(false);
+  assert_eq!(
+    thread.view_lines(2),
+    ["1+1|user: is the deploy safe?", "2+1|unii: no: the key leaks"]
+  );
+  assert_eq!(thread.view_lines(usize::MAX).len(), 3);
+}
+
+#[test]
+fn facts_shared_shadowed_and_erased_on_forget() {
+  let home = tempfile::tempdir().unwrap();
+  // SAFETY: only this test in this binary reads `ACORN_DIR` via `config::get()`.
+  unsafe {
+    std::env::set_var("ACORN_DIR", home.path().join("home"));
+    std::env::set_var("ACORN_CHATS", home.path().join("chats"));
+  }
+
   let fact = |mine, subject: &str, predicate: &str, value: &str, many| facts::Fact {
     mine,
     subject: subject.into(),
@@ -287,20 +341,4 @@ fn memory_in_sqlite() {
     "a fact forgotten is erased"
   );
   assert!(facts::prompt("nobody").contains("Helix") && !facts::prompt("nobody").contains("emacs"));
-
-  // a view's last lines: messages not summarized yet as their kind and text
-  let mut thread = Memory::load(&home.path().join("chats/max/with/main")).unwrap();
-  for (kind, text) in [
-    (Kind::User, "first"),
-    (Kind::User, "is the deploy safe?"),
-    (Kind::Acorn, "no:\nthe key leaks"),
-  ] {
-    thread.push(vec![Msg::new(kind, text)]).unwrap();
-  }
-  thread.fit(false);
-  assert_eq!(
-    thread.view_lines(2),
-    ["1+1|user: is the deploy safe?", "2+1|unii: no: the key leaks"]
-  );
-  assert_eq!(thread.view_lines(usize::MAX).len(), 3);
 }

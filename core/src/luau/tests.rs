@@ -486,6 +486,20 @@ fn docs_are_what_a_vm_loads() {
     vm.docs["web_fetch"].starts_with("web_fetch(url"),
     "a tool not replaced keeps its doc"
   );
+  for name in [
+    "read",
+    "write",
+    "edit",
+    "sh",
+    "web_search",
+    "web_fetch",
+    "view",
+    "ocr",
+    "json",
+    "vars",
+  ] {
+    assert!(vm.docs.contains_key(name), "{name}");
+  }
   assert_eq!(vm.docs.len(), base_docs().len(), "nothing added by the broken one");
 }
 
@@ -1119,14 +1133,12 @@ async fn lightpanda_lists_its_tools_and_says_how_to_drive_it() {
 #[tokio::test(flavor = "multi_thread")]
 async fn lightpanda_missing_says_how_to_get_it() {
   let lab = Lab::new();
-  lab.file("lightpanda.luau", &lightpanda_plugin("/nonexistent/lightpanda"));
+  lab.file(
+    "lightpanda.luau",
+    &lightpanda_plugin("/nonexistent/lightpanda")
+      .replace("$HOME/.local/bin/lightpanda", "/nonexistent/local/lightpanda"),
+  );
   let out = lab.go("pcall(browser, 'getUrl')").await;
-  // Unless installed in ~/.local/bin, which the plugin falls back to.
-  let home = std::env::var("HOME").unwrap_or_default();
-  if std::path::Path::new(&home).join(".local/bin/lightpanda").exists() {
-    lab.go("browser('close')").await;
-    return;
-  }
   assert!(
     out.text.starts_with("=> false, lightpanda is not installed"),
     "{}",
@@ -1410,32 +1422,6 @@ async fn the_stack_shows_no_tools_raw_form() {
     "=> true"
   );
   assert!(lab.go("typeof(debug.traceback())").await.text.starts_with("=> string"));
-}
-
-#[test]
-fn each_global_has_one_doc_line_a_plugin_can_replace() {
-  let dir = tempfile::tempdir().unwrap();
-  std::fs::write(
-    dir.path().join("r.luau"),
-    "return { read = { doc = 'read(path) -- mine', value = function() return 'mine' end } }",
-  )
-  .unwrap();
-  let mut vm = Vm::new(dir.path(), dir.path()).unwrap();
-  vm.refresh().unwrap();
-  assert_eq!(vm.docs["read"], "read(path) -- mine");
-  for name in [
-    "write",
-    "edit",
-    "sh",
-    "web_search",
-    "web_fetch",
-    "view",
-    "ocr",
-    "json",
-    "vars",
-  ] {
-    assert!(vm.docs.contains_key(name), "{name}");
-  }
 }
 
 #[tokio::test(flavor = "multi_thread")]
