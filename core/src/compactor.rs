@@ -73,9 +73,7 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
       return Err("Acorn quit".into());
     };
     let mut chat = engine.lock();
-    let side = chat.mem.side(part);
-    let upto = part.ctx().min(chat.mem.first(0, side));
-    let mut blocks = chat.mem.blocks(upto, &chat.mem.seen.parts.clone());
+    let mut blocks = chat.mem.compaction_blocks(part);
     blocks.push(Block::new(
       format!("{}{text}\n</input>", memory::Memory::task(part)),
       false,
@@ -85,7 +83,7 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
     let ask = ai::Ask {
       effort: config::get().compactor,
       blocks,
-      meter: Some(chat.meter(served)),
+      meter: Some(chat.meter_at(served, Some(part))),
       patient: true,
       yields,
       ..chat.share()
@@ -93,7 +91,7 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
     (ask, served)
   };
   let mut lines: Vec<String> = Vec::new();
-  let mut end = compact(this, part, served, ask.clone()).await?;
+  let mut end = compact(this, part, served, age, ask.clone()).await?;
   while end.ok && !end.text.trim().is_empty() {
     let line = end.text.trim().to_string();
     lines.push(line.clone());
@@ -103,7 +101,7 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
     }
     let mut again = ask.clone();
     again.blocks.push(Block::new(memory::over(&line), false));
-    end = compact(this, part, served, again).await?;
+    end = compact(this, part, served, age, again).await?;
   }
   if lines.is_empty() && !end.ok && end.stop != Some(Stop::Fail) {
     return Err(end.text);
@@ -129,11 +127,17 @@ async fn compact(
   this: &std::sync::Weak<crate::chat::Engine>,
   part: Part,
   served: Served,
+  age: u64,
   ask: ai::Ask,
 ) -> Result<ai::End, String> {
   let call = {
     let engine = this.upgrade().ok_or("Acorn quit")?;
     let mut chat = engine.lock();
+    // The job or its retry may have been queued before a purge/stop
+    // and have no registered request handle for the caller to cancel.
+    if chat.mem.age != age || chat.mem.done || (served == Served::Import && chat.mem.paused) {
+      return Err("compaction superseded before dispatch".into());
+    }
     let call = ai::ask(ask, Arc::new(|_| {}));
     chat.compactions().push((call.handle.clone(), part, served));
     call

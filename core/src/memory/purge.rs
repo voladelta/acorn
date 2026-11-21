@@ -36,6 +36,7 @@ impl Memory {
     fs::write(&wipe, "")?;
     disk::wrote(&wipe);
     let tx = self.db.transaction()?;
+    let at = crate::now_ms();
     for i in a..=b {
       let Some(mut root) = tx
         .query_row("select * from msgs where log = ? and i = ?", params![log, i], from_row)
@@ -53,7 +54,7 @@ impl Memory {
             root.text,
             serde_json::to_string(&root.images)?,
             root.line,
-            crate::now_ms()
+            at
           ],
         )?;
       }
@@ -100,18 +101,20 @@ impl Memory {
     let Some((a, b)) = self.pages_of(agent, id) else {
       return Ok(no_message(agent, id));
     };
-    let held: u64 = self.db.query_row(
-      "select count(*) from held where log = ? and i between ? and ?",
+    let gone = self.built_from(agent, a, b);
+    let tx = self
+      .db
+      .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let oldest: Option<i64> = tx.query_row(
+      "select min(at) from held where log = ? and i between ? and ?",
       params![log, a, b],
       |r| r.get(0),
     )?;
-    if held == 0 {
+    if oldest.is_none_or(|at| at <= crate::now_ms() - GRACE) {
       return Ok(format!(
-        "Message {id} isn't held: it was never purged, or its ten minutes are over and it is erased for good."
+        "Message {id} isn't held for undo: it was never purged, or its ten minutes are over."
       ));
     }
-    let gone = self.built_from(agent, a, b);
-    let tx = self.db.transaction()?;
     for i in a..=b {
       let Some(mut root) = tx
         .query_row("select * from msgs where log = ? and i = ?", params![log, i], from_row)
@@ -320,7 +323,7 @@ pub fn wipe(dir: &Path, expired: i64) -> Result<()> {
   tables(&db)?;
   let tx = db.transaction()?;
   let images: Vec<String> = {
-    let mut q = tx.prepare("select images from held where at < ?")?;
+    let mut q = tx.prepare("select images from held where at <= ?")?;
     let lists = q.query_map([expired], |r| r.get::<_, String>(0))?;
     let mut names = Vec::new();
     for list in lists {
@@ -328,7 +331,7 @@ pub fn wipe(dir: &Path, expired: i64) -> Result<()> {
     }
     names
   };
-  tx.execute("delete from held where at < ?", [expired])?;
+  tx.execute("delete from held where at <= ?", [expired])?;
   tx.commit()?;
   for name in images {
     let used: bool = db.query_row(

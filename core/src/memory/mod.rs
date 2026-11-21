@@ -17,7 +17,8 @@
 //! its last message, to the view's end, in halves: detail fades with age)
 //! down to half, so a view changes only at its end between batches. Two,
 //! each on its own: the chat's (turns'), to the last message, and the
-//! compactions' (`seen`), to the first not built of the sides that build.
+//! compactions' (`seen`), grown to the first missing leaf of the sides
+//! that build. If that frontier retreats, calls read only its prefix.
 //! A call gets one in BLOCK-line blocks, the last whole one marked for the
 //! cache (`ai`).
 //!
@@ -43,6 +44,7 @@
 //! keeps (APFS snapshots, the SSD) are beyond Acorn's reach.
 
 mod images;
+mod import;
 mod purge;
 mod view;
 
@@ -91,6 +93,8 @@ create table if not exists msgs (log text not null, i integer not null, kind tex
 create table if not exists nodes (slot integer primary key, text text not null);
 create table if not exists agents (name text primary key, effort text) without rowid;
 create table if not exists state (id integer primary key check (id = 1), json text not null);
+create table if not exists import_batch (id integer primary key check (id = 1), a integer not null, b integer not null,
+    said integer not null, spent real not null, paused integer not null);
 create table if not exists looks (at integer not null, tool text not null, hits integer not null);
 create virtual table if not exists search using fts5 (log unindexed, i unindexed, text);
 create trigger if not exists search_add after insert on msgs begin
@@ -272,6 +276,14 @@ impl View {
   }
 }
 
+/// The unchanged lines before `end`, and the children needed if it cuts
+/// through a line. Only the latter can be below the in-memory view.
+pub(crate) fn prefix(parts: &[Part], end: u64) -> (&[Part], impl Iterator<Item = Part>) {
+  let cut = parts.partition_point(|p| p.span().1 < end);
+  let start = parts.get(cut).map_or(end, |p| p.span().0);
+  (&parts[..cut], tiles(start, end))
+}
+
 #[derive(Serialize, Deserialize, Default)]
 struct Kept {
   parts: Vec<(u32, u64)>,
@@ -335,8 +347,7 @@ struct Saved {
 /// agents: their logs' lengths; ready: the nodes not built whose halves
 /// are, by side and level, in order; busy: nodes building, by slot, with
 /// their side; sides: the side by the last message of nodes not built;
-/// paused: the import's side is held (paused, or no import has gone on
-/// since Acorn started; the chat's side always builds); made: nodes built since
+/// paused: the import's side is held by request; made: nodes built since
 /// last drained; fitted: the views were fit since last drained; age: the
 /// chat's purges so far (a node a call began before one is not stored);
 /// purged, wiped: the purges so far, those a wipe has erased from the file
@@ -418,7 +429,7 @@ impl Memory {
       ready: [Vec::new(), Vec::new()],
       busy: HashMap::new(),
       sides: HashMap::new(),
-      paused: true,
+      paused: false,
       done: false,
       made: Vec::new(),
       fitted: false,
@@ -442,6 +453,7 @@ impl Memory {
     mem
       .db
       .execute("delete from msgs where log = '' and i >= ?", [mem.count])?;
+    mem.migrate_import()?;
     mem.view = mem.opened(mem.view.high, saved.as_ref().map(|s| &s.view));
     mem.seen = mem.opened(SEEN, saved.as_ref().map(|s| &s.seen));
     for part in roots(mem.count)
@@ -553,13 +565,17 @@ impl Memory {
     let ids = if done == 0 { 0 } else { self.open + done as u64 };
     self.log(CHAT, &roots)?;
     self.open = self.open + roots.len() as u64 - ids;
+    self.publish(ids);
+    Ok(roots)
+  }
+
+  fn publish(&mut self, ids: u64) {
     let from = self.count;
     self.count += ids;
     for i in from..self.count {
       self.ready(Part::leaf(i), true);
     }
     self.fit(true);
-    Ok(roots)
   }
 
   /// The first message, from `from` on, from which those to the end go
@@ -607,12 +623,17 @@ impl Memory {
       return Some(text.clone());
     }
     let mut q = self.db.prepare_cached("select text from nodes where slot = ?").ok()?;
-    q.query_row([part.slot()], |r| r.get(0))
-      .optional()
-      .unwrap_or_else(|err| {
-        eprintln!("memory: node {}/{}: {err}", part.l, part.i);
-        None
-      })
+    q.query_row([part.slot()], |r| {
+      let mut text: String = r.get(0)?;
+      // Older compactors could keep an overlong line after their last try.
+      text.truncate(cut(&text).len());
+      Ok(text)
+    })
+    .optional()
+    .unwrap_or_else(|err| {
+      eprintln!("memory: node {}/{}: {err}", part.l, part.i);
+      None
+    })
   }
 
   /// The view under `part`, down from it, keeping the built nodes met:
@@ -755,13 +776,14 @@ impl Memory {
     {
       let mut q = tx.prepare_cached("insert or replace into nodes values (?, ?)")?;
       for (part, text) in parts {
-        q.execute(params![part.slot(), text])?;
+        q.execute(params![part.slot(), cut(text)])?;
       }
     }
     tx.commit()?;
     for (part, text) in parts {
+      let text = cut(text);
       self.ready(*part, false);
-      self.nodes.insert(part.slot(), text.clone());
+      self.nodes.insert(part.slot(), text.to_owned());
       self.sides.remove(&part.span().1);
       for view in [&mut self.view, &mut self.seen] {
         if part.l == 0 && part.i < view.end() {
@@ -966,15 +988,20 @@ fn pages(msg: Msg) -> Vec<Msg> {
 
 /// The tree's roots: a node per power of two in the count, largest first.
 pub fn roots(count: u64) -> Vec<Part> {
-  let mut out = Vec::new();
-  let mut id = 0;
-  for l in (0..=40).rev() {
-    if id + (1u64 << l) <= count {
-      out.push(Part::new(l, id >> l));
-      id += 1 << l;
+  tiles(0, count).collect()
+}
+
+/// The fewest aligned tree nodes covering [start, end), in order.
+pub(crate) fn tiles(mut start: u64, end: u64) -> impl Iterator<Item = Part> {
+  std::iter::from_fn(move || {
+    if start >= end {
+      return None;
     }
-  }
-  out
+    let level = start.trailing_zeros().min((end - start).ilog2());
+    let part = Part::new(level, start >> level);
+    start += part.n();
+    Some(part)
+  })
 }
 
 /// A text on one line: each run of whitespace holding a newline, a space.

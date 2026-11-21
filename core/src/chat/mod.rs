@@ -206,10 +206,14 @@ fn veil(secrets: &[String], tail: &mut String, text: &str) -> String {
 
 impl Engine {
   /// A chat opened (`hub`), its events to `events`.
-  fn start(id: String, me: Assistant, with: Option<Assistant>, events: hub::Heard) -> Result<Arc<Engine>> {
-    let dir = hub::dir(&id);
-    std::fs::create_dir_all(&dir)?;
-    let mem = Memory::load(&dir)?;
+  fn start(
+    dir: &std::path::Path,
+    id: String,
+    me: Assistant,
+    with: Option<Assistant>,
+    events: hub::Heard,
+  ) -> Result<Arc<Engine>> {
+    let mem = Memory::load(dir)?;
     usage::tables(&mem.db)?;
     let work = mem.work.clone();
     let engine = Arc::new_cyclic(|this| Engine {
@@ -259,7 +263,7 @@ impl Engine {
       }
       let turn = chat.mem.turn();
       chat.eye = chat.eye_from(turn);
-      chat.batch = chat.resumed();
+      chat.batch = chat.resumed()?;
       chat.pump();
       chat.progress();
     }
@@ -520,7 +524,9 @@ impl Chat {
   /// counts its own), and, as the views were fit, its waiters woken and
   /// an import's progress told.
   fn settle(&mut self) {
-    for part in std::mem::take(&mut self.mem.made) {
+    let made = std::mem::take(&mut self.mem.made);
+    self.count_built(&made);
+    for part in made {
       self.made(part);
     }
     if std::mem::take(&mut self.mem.fitted) {
@@ -603,10 +609,14 @@ impl Chat {
 
   /// The meter of a kind of call.
   pub fn meter(&self, kind: Served) -> ai::Meter {
+    self.meter_at(kind, None)
+  }
+
+  pub(crate) fn meter_at(&self, kind: Served, part: Option<Part>) -> ai::Meter {
     let this = self.this.clone();
     std::sync::Arc::new(move |used: Used| {
       if let Some(engine) = this.upgrade() {
-        engine.lock().used(kind, used);
+        engine.lock().used(kind, part, used);
       }
     })
   }
@@ -623,6 +633,12 @@ impl Chat {
 #[cfg(test)]
 mod tests {
   use super::veil;
+
+  pub(super) fn open(dir: &std::path::Path) -> std::sync::Arc<super::Engine> {
+    let me = super::Assistant::max();
+    let (events, _) = tokio::sync::mpsc::unbounded_channel();
+    super::Engine::start(dir, "test".into(), me.clone(), Some(me), events).unwrap()
+  }
 
   /// A stream's pieces as shown, and what is still kept back.
   fn shown(secrets: &[&str], pieces: &[&str]) -> (String, String) {

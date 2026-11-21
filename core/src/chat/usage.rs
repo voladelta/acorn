@@ -132,7 +132,7 @@ fn over(cap: f64, spent: f64) -> Option<String> {
 }
 
 impl Chat {
-  pub(super) fn used(&mut self, kind: Served, used: Used) {
+  pub(super) fn used(&mut self, kind: Served, part: Option<crate::memory::Part>, used: Used) {
     let input = used.usage.input + used.usage.write;
     let row = params![
       used.at,
@@ -142,8 +142,22 @@ impl Chat {
       used.usage.output,
       used.micros
     ];
-    if let Err(err) = self.mem.db.execute("insert into uses values (?, ?, ?, ?, ?, ?)", row) {
-      eprintln!("acorn: usage: {err}");
+    let batch = self
+      .batch
+      .as_mut()
+      .filter(|b| kind == Served::Import && part.is_some_and(|p| (b.a..b.b).contains(&p.span().1)));
+    let usd = used.micros as f64 / 1e6;
+    let logged = self.mem.db.transaction().and_then(|tx| {
+      tx.execute("insert into uses values (?, ?, ?, ?, ?, ?)", row)?;
+      if batch.is_some() {
+        tx.execute("update import_batch set spent = spent + ?", [usd])?;
+      }
+      tx.commit()
+    });
+    match (logged, batch) {
+      (Ok(()), Some(b)) => b.spent += usd,
+      (Err(err), _) => eprintln!("acorn: usage: {err}"),
+      _ => {}
     }
     if kind == Served::Chat && self.busy() {
       let spend = Spend {
@@ -151,7 +165,7 @@ impl Chat {
         input,
         read: used.usage.read,
         output: used.usage.output,
-        usd: used.micros as f64 / 1e6,
+        usd,
         at: used.at,
       };
       self.spend = self.spend + spend;

@@ -252,6 +252,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 - A search or fetch goes to DeepSeek, or to the service of a plugin that replaces it, as does whatever else a plugin sends.
 - `purge` erases a message at once from everything a call or the app can see. It is held in `chat.db` for ten minutes, so `unpurge` can take it back; its text and old bytes stay in the file until a wipe deletes it and rewrites the file, which runs once the chat is idle (no turn, agent or summary at work) and no purge is still in its ten minutes, and is retried at the next launch if it fails or Acorn quits first.
 - Summaries written while a purged message's summary was in the compactor's context may still echo it.
+- New imports preserve each message's page boundaries for purge and undo. Older imports recorded only the boundary of the entire batch. Each page of those imports can be purged and restored individually by its existing id.
 - Copies the disk itself keeps, such as APFS or Btrfs snapshots and Time Machine or other backups, are beyond Acorn's reach; disk encryption (FileVault, LUKS) protects them.
 
 ## Limitations
