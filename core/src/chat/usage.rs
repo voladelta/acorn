@@ -279,7 +279,7 @@ impl Chat {
 #[cfg(test)]
 mod tests {
   #[test]
-  fn a_request_waits_past_the_budget() {
+  fn a_daily_budget_is_reached_at_the_cap() {
     assert_eq!(super::over(5.0, 4.99), None);
     let why = super::over(5.0, 5.004).unwrap();
     assert!(why.contains("$5.00") && why.contains("daily budget of $5.00"), "{why}");

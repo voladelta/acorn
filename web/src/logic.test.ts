@@ -59,12 +59,24 @@ test('an @ word names an assistant', () => {
 
 test('the chat shows blocks, then the turn whole', () => {
   let m: Model = empty();
-  m = hear(m, { Know: { whole: [[0, entry('user', 'hi')], [1, entry('tool', 'bash {"command":"ls"}')]], nodes: [] } }).m;
-  m = hear(m, { View: { parts: [[0, 1], [1, 1]], turn: 1 } }).m;
+  m = hear(m, { Know: { whole: [
+    [0, entry('user', 'hi')],
+    [1, entry('tool', 'bash {"command":"ls"}')],
+    [2, entry('echo', 'file.txt')],
+    [3, entry('unii', 'Found one file.')],
+  ], nodes: [] } }).m;
+  m = hear(m, { View: { parts: [[0, 1], [1, 1], [2, 1], [3, 1]], turn: 1 } }).m;
   const items = body(m);
   assert.equal(items[0].rows[0].t, 'box', "a user's message before the turn opens");
   const r = items[1].rows[0];
   assert.ok(r.t === 'msg' && r.call?.name === 'bash');
+  assert.deepEqual(items.slice(1).map(item => [item.key, item.rows.map(row => row.t)]), [
+    ['1+1', ['msg']], ['2+1', ['msg']], ['3+1', ['msg']],
+  ], 'every message of the current turn stays expanded');
+  const current = items.slice(1).flatMap(item => item.rows);
+  assert.deepEqual(current.map(row => row.t === 'msg' ? [row.kind, row.text] : null), [
+    ['tool', 'bash {"command":"ls"}'], ['echo', 'file.txt'], ['unii', 'Found one file.'],
+  ]);
 });
 
 test('a message is the only act', () => {

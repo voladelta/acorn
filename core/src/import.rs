@@ -874,9 +874,13 @@ mod tests {
   #[test]
   fn guesses_price_the_tree() {
     let small = guess(0, &[100, 100, 100, 100]);
-    assert!(small.iter().flatten().all(|&c| c == 0));
-    let big = guess(3, &[5000; 8]);
-    assert!(big[0].iter().all(|&c| c > 0));
-    assert!(usd(3, &[5000; 8]) > 0.0);
+    assert_eq!(small, [vec![0, 0, 0, 0], vec![0, 0], vec![0]]);
+    assert_eq!(
+      guess(3, &[5000; 8]),
+      [vec![3231; 8], vec![2111; 4], vec![2739; 2], vec![3367]]
+    );
+    assert_eq!(usd(3, &[5000; 8]), 0.043137);
+    assert!(guess(0, &[]).is_empty());
+    assert_eq!(usd(0, &[]), 0.0);
   }
 }

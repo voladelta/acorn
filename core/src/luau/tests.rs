@@ -1,5 +1,7 @@
 use super::tools::bare;
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 /// `eval`, with no plugins, whatever this Mac has.
 async fn eval(cwd: PathBuf, code: &str, budget: Duration, cancel: CancellationToken) -> Out {
@@ -213,9 +215,22 @@ async fn showing_a_value_is_stopped_too() {
   let dir = tempfile::tempdir().unwrap();
   let cwd = dir.path();
   let code = "local m = {__tostring = function() while true do end end}\nt = {[setmetatable({}, m)] = 1, [setmetatable({}, m)] = 2}\nt";
-  let (took, _) = stopped(cwd, code, Duration::from_millis(300)).await;
+  let (took, out) = stopped(cwd, code, Duration::from_millis(300)).await;
   assert!(took < Duration::from_secs(3), "{took:?}");
+  assert!(out.fail && out.text.contains("stopped"), "{}", out.text);
   assert_eq!(go(cwd, "1 + 1").await.text, "=> 2");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_value_that_cannot_be_shown_keeps_its_type() {
+  let dir = tempfile::tempdir().unwrap();
+  let out = go(
+    dir.path(),
+    "local m = {__tostring = function() error('cannot show') end}\nreturn {[setmetatable({}, m)] = 1, [setmetatable({}, m)] = 2}",
+  )
+  .await;
+  assert!(!out.fail, "{}", out.text);
+  assert_eq!(out.text, "=> <table>");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -241,7 +256,13 @@ async fn a_bad_argument_is_a_short_error() {
   let dir = tempfile::tempdir().unwrap();
   let out = go(dir.path(), "print(pcall(read, nil))").await;
   assert!(
-    out.text.starts_with("false\t") && !out.text.contains("traceback"),
+    !out.fail
+      && out.text.starts_with("false\t")
+      && out.text.contains("bad argument #1")
+      && out.text.contains("expected string")
+      && out.text.contains("nil")
+      && !out.text.contains("traceback")
+      && out.text.len() < 240,
     "{}",
     out.text
   );
@@ -421,11 +442,12 @@ async fn the_model_cant_reach_what_a_plugin_has() {
     "p.luau",
     "local key = 'SECRET'\nreturn { p = { doc = 'p', value = { len = function() return #key end, deep = { x = 1 } } } }",
   );
+  let warm = lab.go("p.len()").await;
+  assert!(!warm.fail && warm.text.starts_with("=> 6"), "{}", warm.text);
   for code in ["http", "secret", "__http", "__host", "__read", "__secret"] {
-    assert!(
-      lab.go(code).await.text.starts_with("[plugins") || lab.go(code).await.text.is_empty(),
-      "{code}"
-    );
+    let out = lab.go(&format!("type({code})")).await;
+    assert!(!out.fail, "{code}: {}", out.text);
+    assert_eq!(out.text, "=> nil", "{code}");
   }
   assert!(lab.go("p.len = nil").await.fail, "a plugin's table is frozen");
   assert!(lab.go("p.deep.x = 2").await.fail, "all the way down");
@@ -476,17 +498,24 @@ async fn a_stop_while_loading_leaves_the_layer_to_be_built_again() {
 
 #[test]
 fn docs_are_what_a_vm_loads() {
-  let dir = tempfile::tempdir().unwrap();
-  std::fs::write(dir.path().join("exa.luau"), EXA).unwrap();
-  std::fs::write(dir.path().join("bad.luau"), "return {").unwrap();
-  let mut vm = Vm::new(dir.path(), dir.path()).unwrap();
-  vm.refresh().unwrap();
-  assert_eq!(vm.docs["web_search"], "web_search(q) -- exa");
-  assert!(
-    vm.docs["web_fetch"].starts_with("web_fetch(url"),
-    "a tool not replaced keeps its doc"
-  );
-  assert_eq!(vm.docs.len(), base_docs().len(), "nothing added by the broken one");
+  for (name, src, doc) in [
+    ("web_search", EXA, "web_search(q) -- exa"),
+    (
+      "read",
+      "return { read = { doc = 'read(path) -- mine', value = function() return 'mine' end } }",
+      "read(path) -- mine",
+    ),
+  ] {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("tool.luau"), src).unwrap();
+    std::fs::write(dir.path().join("bad.luau"), "return {").unwrap();
+    let mut vm = Vm::new(dir.path(), dir.path()).unwrap();
+    vm.refresh().unwrap();
+    let mut expected = base_docs();
+    expected.insert(name.into(), doc.into());
+    assert_eq!(vm.docs, expected, "{name}: only the replaced tool's doc changes");
+    assert!(vm.warns.iter().any(|w| w.contains("plugin bad did not load")));
+  }
 }
 
 /// A server answering one request, with what it saw sent back.
@@ -535,7 +564,23 @@ async fn http_sends_and_answers_and_keeps_the_query_out_of_the_log() {
 async fn http_saves_a_file_viewable_and_wont_overwrite_or_pay_twice() {
   let lab = Lab::new();
   lab.file("h.luau", HANDS);
-  let (at, _) = server("\u{ff}bytes").await;
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let at = format!("http://{}", listener.local_addr().unwrap());
+  let requests = Arc::new(AtomicUsize::new(0));
+  let count = requests.clone();
+  let serving = tokio::spawn(async move {
+    loop {
+      let (mut sock, _) = listener.accept().await.unwrap();
+      let mut buf = [0; 8192];
+      let n = sock.read(&mut buf).await.unwrap();
+      assert!(n > 0);
+      count.fetch_add(1, Ordering::SeqCst);
+      sock
+        .write_all("HTTP/1.1 200 OK\r\ncontent-length: 7\r\nconnection: close\r\n\r\n\u{ff}bytes".as_bytes())
+        .await
+        .unwrap();
+    }
+  });
   let out = lab
     .go(&format!("get{{url = '{at}', save = 'got/out.bin'}}.bytes"))
     .await;
@@ -544,14 +589,25 @@ async fn http_saves_a_file_viewable_and_wont_overwrite_or_pay_twice() {
     std::fs::read(lab.cwd.path().join("got/out.bin")).unwrap(),
     "\u{ff}bytes".as_bytes()
   );
+  assert_eq!(requests.load(Ordering::SeqCst), 1);
   let again = lab
     .go(&format!("pcall(get, {{url = '{at}', save = 'got/out.bin'}})"))
     .await;
   assert!(
-    again.text.contains("false") && again.text.contains("already there"),
+    !again.fail && again.text.contains("false") && again.text.contains("already there"),
     "{}",
     again.text
   );
+  assert_eq!(
+    requests.load(Ordering::SeqCst),
+    1,
+    "an existing save must not make another HTTP request"
+  );
+  assert_eq!(
+    std::fs::read(lab.cwd.path().join("got/out.bin")).unwrap(),
+    "\u{ff}bytes".as_bytes()
+  );
+  serving.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1321,8 +1377,15 @@ return { decide = { doc = "decide(state, questions) -- scripted", value = decide
 async fn text_that_looks_like_bytecode_is_only_a_syntax_error() {
   let lab = Lab::new();
   lab.file("b.luau", "\u{5}\u{1}\u{1}aaaaaaaaaa");
+  let plugin = lab.go("1").await;
+  assert!(!plugin.fail && plugin.text.starts_with("=> 1"), "{}", plugin.text);
+  assert!(
+    plugin.text.contains("plugin b did not load") && plugin.text.contains("syntax error"),
+    "{}",
+    plugin.text
+  );
   let out = lab.go("\u{5}\u{1}\u{1}aaaaaaaaaa").await;
-  assert!(out.fail && out.text.contains("plugin b did not load"), "{}", out.text);
+  assert!(out.fail && out.text.starts_with("error: syntax error:"), "{}", out.text);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1332,7 +1395,21 @@ async fn a_table_nested_past_the_stack_is_frozen_all_the_same() {
     "d.luau",
     "local t = {} for i = 1, 200000 do t = {t} end return { d = { doc = 'd', value = t } }",
   );
-  assert!(lab.go("d[1] = 1").await.fail);
+  let loaded = lab
+    .go("leaf = d for i = 1, 200000 do leaf = leaf[1] end return type(leaf), next(leaf) == nil")
+    .await;
+  assert!(
+    !loaded.fail && loaded.text.starts_with("=> table, true"),
+    "{}",
+    loaded.text
+  );
+  let out = lab.go("leaf.x = 1").await;
+  assert!(
+    out.fail && out.text.contains("attempt to modify a readonly table"),
+    "{}",
+    out.text
+  );
+  assert_eq!(lab.go("leaf.x == nil").await.text, "=> true");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1342,9 +1419,20 @@ async fn keys_and_metatables_are_frozen_too() {
     "m.luau",
     "local key = {}\nreturn { m = { doc = 'm', value = setmetatable({ [key] = 1, key = function() return key end }, { __index = function() return 'theirs' end }) } }",
   );
-  assert!(lab.go("getmetatable(m).__index = 1").await.fail);
-  assert!(lab.go("m.key().x = 1").await.fail);
-  assert!(lab.go("m.other").await.text.starts_with("=> theirs"));
+  let loaded = lab.go("m.other").await;
+  assert!(!loaded.fail && loaded.text.starts_with("=> theirs"), "{}", loaded.text);
+  for code in ["getmetatable(m).__index = 1", "m.key().x = 1"] {
+    let out = lab.go(code).await;
+    assert!(
+      out.fail && out.text.contains("attempt to modify a readonly table"),
+      "{code}: {}",
+      out.text
+    );
+    assert_eq!(
+      lab.go("print(m.key().x == nil, m[m.key()], m.other)").await.text,
+      "true\t1\ttheirs"
+    );
+  }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1410,32 +1498,6 @@ async fn the_stack_shows_no_tools_raw_form() {
     "=> true"
   );
   assert!(lab.go("typeof(debug.traceback())").await.text.starts_with("=> string"));
-}
-
-#[test]
-fn each_global_has_one_doc_line_a_plugin_can_replace() {
-  let dir = tempfile::tempdir().unwrap();
-  std::fs::write(
-    dir.path().join("r.luau"),
-    "return { read = { doc = 'read(path) -- mine', value = function() return 'mine' end } }",
-  )
-  .unwrap();
-  let mut vm = Vm::new(dir.path(), dir.path()).unwrap();
-  vm.refresh().unwrap();
-  assert_eq!(vm.docs["read"], "read(path) -- mine");
-  for name in [
-    "write",
-    "edit",
-    "sh",
-    "web_search",
-    "web_fetch",
-    "view",
-    "ocr",
-    "json",
-    "vars",
-  ] {
-    assert!(vm.docs.contains_key(name), "{name}");
-  }
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -395,16 +395,24 @@ mod tests {
   /// the statuses given are answered first, one a request, then 200s. The
   /// count is of requests.
   async fn fake(statuses: &[u16], answer: fn(&Value) -> Value) -> (Jev, Arc<AtomicUsize>) {
+    let (jev, count, _) = counted_fake(statuses, answer).await;
+    (jev, count)
+  }
+
+  async fn counted_fake(statuses: &[u16], answer: fn(&Value) -> Value) -> (Jev, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/v1/systemone", listener.local_addr().unwrap());
     let statuses = Arc::new(std::sync::Mutex::new(statuses.to_vec()));
     let count = Arc::new(AtomicUsize::new(0));
+    let flying = Arc::new(AtomicUsize::new(0));
+    let most = Arc::new(AtomicUsize::new(0));
+    let max = most.clone();
     let n = count.clone();
     tokio::spawn(async move {
       loop {
         let (mut sock, _) = listener.accept().await.unwrap();
-        let (statuses, n) = (statuses.clone(), n.clone());
+        let (statuses, n, flying, max) = (statuses.clone(), n.clone(), flying.clone(), max.clone());
         tokio::spawn(async move {
           let mut got = Vec::new();
           let mut buf = [0; 65536];
@@ -427,6 +435,8 @@ mod tests {
             }
           };
           n.fetch_add(1, Ordering::SeqCst);
+          let active = flying.fetch_add(1, Ordering::SeqCst) + 1;
+          max.fetch_max(active, Ordering::SeqCst);
           let status = {
             let mut s = statuses.lock().unwrap();
             if s.is_empty() { 200 } else { s.remove(0) }
@@ -441,10 +451,11 @@ mod tests {
             reply.len()
           );
           sock.write_all(head.as_bytes()).await.unwrap();
+          flying.fetch_sub(1, Ordering::SeqCst);
         });
       }
     });
-    (Jev { url, key: "K".into() }, count)
+    (Jev { url, key: "K".into() }, count, most)
   }
 
   /// Jev's answers by the fake's rules.
@@ -469,7 +480,7 @@ mod tests {
 
   #[tokio::test]
   async fn batches_go_out_at_once_and_come_back_in_the_items_order() {
-    let (jev, count) = fake(&[], by_rules).await;
+    let (jev, count, most) = counted_fake(&[], by_rules).await;
     // 600 items: five batches by count, the first two slow.
     let all = items(600, |i| {
       format!(
@@ -485,6 +496,10 @@ mod tests {
     });
     let judged = jev.judge("q", &all, &CancellationToken::new()).await.unwrap();
     assert_eq!(count.load(Ordering::SeqCst), 5);
+    assert!(
+      most.load(Ordering::SeqCst) > 1,
+      "the batches must overlap at the server"
+    );
     let kept: Vec<usize> = (0..600).filter(|&i| judged[i].relevant > 0.5).collect();
     assert_eq!(kept, (0..600).filter(|i| i % 7 == 0).collect::<Vec<_>>());
     // 20 items of 7 KB: batches by bytes, 4 a batch under 30 KB.

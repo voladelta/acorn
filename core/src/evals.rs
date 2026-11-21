@@ -269,4 +269,7 @@ fn calibration_error_is_the_weighted_gap_of_each_tenth() {
   assert!(calibration_error(&[(0.95, true), (0.05, false)]) < 0.051);
   let off = calibration_error(&[(0.9, false), (0.9, false)]);
   assert!((off - 0.9).abs() < 1e-9, "{off}");
+  // Bin .2: |.25 - 1/2| * 2/5 = .10; bin .8: |.85 - 2/3| * 3/5 = .11.
+  let mixed = calibration_error(&[(0.22, true), (0.28, false), (0.82, true), (0.85, false), (0.88, true)]);
+  assert!((mixed - 0.21).abs() < 1e-9, "{mixed}");
 }

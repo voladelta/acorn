@@ -170,17 +170,41 @@ async fn a_message_heard_during_a_sweep_is_kept() {
   let (tg, _heard, _asked, _dir) = tg(plain, Some(OWNER)).await;
   tg.clone().update(&added(-100, OWNER)).await;
   let now = Local::now().timestamp();
+  rooms::heard(
+    &tg,
+    -100,
+    &group(-100, 9, "expired", now - rooms::KEEP_SECS - 1)["message"],
+    false,
+  );
+  let meeting = Arc::new(std::sync::Barrier::new(2));
+  let writing = meeting.clone();
   let hearing = tg.clone();
   let heard = std::thread::spawn(move || {
     for k in 0..300 {
+      writing.wait();
       rooms::heard(&hearing, -100, &group(-100, 9, &format!("m{k}"), now)["message"], false);
+      writing.wait();
     }
   });
-  while !heard.is_finished() {
+  for _ in 0..300 {
+    meeting.wait();
     rooms::sweep(&tg, now);
+    meeting.wait();
   }
   heard.join().unwrap();
-  assert_eq!(rooms::lines(&tg, -100).len(), 300);
+  let lines = rooms::lines(&tg, -100);
+  assert_eq!(
+    lines.iter().map(|line| line.text.clone()).collect::<Vec<_>>(),
+    (0..300).map(|k| format!("m{k}")).collect::<Vec<_>>()
+  );
+  assert_eq!(
+    lines
+      .iter()
+      .map(|line| line.id)
+      .collect::<std::collections::HashSet<_>>()
+      .len(),
+    300
+  );
 }
 
 async fn tg(

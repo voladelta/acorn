@@ -183,9 +183,38 @@ fn run(key: &str, text: &str) -> Result<Effort, String> {
 mod tests {
   use super::*;
 
-  #[test]
-  fn the_server_token_is_kept_from_the_agent() {
-    assert!(hidden().contains(&TOKEN_VAR));
+  #[tokio::test(flavor = "multi_thread")]
+  async fn no_program_the_agent_runs_sees_the_server_token() {
+    let test = "config::tests::no_program_the_agent_runs_sees_the_server_token";
+    if std::env::var_os("ACORN_TEST_TOKEN_CHILD").is_none() {
+      let dir = tempfile::tempdir().unwrap();
+      let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env("ACORN_TEST_TOKEN_CHILD", "1")
+        .env(TOKEN_VAR, "test-server-token")
+        .env("ACORN_DIR", dir.path())
+        .output()
+        .unwrap();
+      assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+      );
+      return;
+    }
+    assert_eq!(std::env::var(TOKEN_VAR).unwrap(), "test-server-token");
+    let dir = tempfile::tempdir().unwrap();
+    let ran = crate::machine::shell(
+      "if [ \"${ACORN_TOKEN+x}\" = x ]; then echo inherited; else echo absent; fi",
+      dir.path(),
+      10_000.0,
+      tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ran.code(), 0);
+    assert_eq!(ran.tails(), ("absent\n".into(), String::new()));
   }
 
   #[test]
