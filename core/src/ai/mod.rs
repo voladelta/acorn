@@ -86,10 +86,39 @@ impl Out {
 pub trait Toolbox: Send + Sync {
   fn specs(&self) -> Vec<Spec>;
   fn call(&self, name: String, input: Value, cancel: CancellationToken) -> BoxFuture<'static, Out>;
-  /// The texts purged as secrets so far: a call that runs sends none on.
+  /// The texts purged as secrets since the call's prompt was built: it
+  /// sends none on (`veil`).
   fn purged(&self) -> Vec<String> {
     Vec::new()
   }
+}
+
+/// What a purged secret reads as.
+pub const PURGED: &str = "[purged]";
+
+/// A text with each secret in it written `[purged]`; where secrets overlap
+/// (one purged, then a longer one holding it), all they cover is one.
+pub fn veil(text: &mut String, secrets: &[String]) {
+  let mut spans: Vec<(usize, usize)> = secrets
+    .iter()
+    .filter(|s| !s.is_empty())
+    .flat_map(|s| text.match_indices(s.as_str()).map(|(at, m)| (at, at + m.len())))
+    .collect();
+  if spans.is_empty() {
+    return;
+  }
+  spans.sort_unstable();
+  let (mut out, mut from, mut end) = (String::with_capacity(text.len()), 0, 0);
+  for (at, till) in spans {
+    if at >= end {
+      out.push_str(&text[from..at]);
+      out.push_str(PURGED);
+    }
+    end = end.max(till);
+    from = end;
+  }
+  out.push_str(&text[from..]);
+  *text = out;
 }
 
 #[derive(Clone)]

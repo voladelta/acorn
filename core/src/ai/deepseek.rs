@@ -86,6 +86,56 @@ pub fn body(ask: &Ask, items: &[Item], tools: &[Spec], room: u64) -> Value {
   body
 }
 
+/// What makes an item what it is, and its images: veiled, a request would
+/// be refused.
+const SHAPE: [&str; 8] = [
+  "type",
+  "role",
+  "id",
+  "call_id",
+  "name",
+  "status",
+  "encrypted_content",
+  "image_url",
+];
+
+/// A request with each secret written `[purged]` in its system prompt and
+/// in its input: every text of every item, but its SHAPE.
+pub fn veil(body: &mut Value, secrets: &[String]) {
+  if !secrets.is_empty() {
+    veil_in(&mut body["instructions"], secrets, false);
+    veil_in(&mut body["input"], secrets, false);
+  }
+}
+
+/// Every string of a JSON value veiled, but an item's SHAPE (`free`: none
+/// is kept). One that is itself JSON (a tool call's arguments) may hold a
+/// secret escaped, so it is veiled as parsed, all of it free.
+fn veil_in(v: &mut Value, secrets: &[String], free: bool) {
+  match v {
+    Value::String(s) => {
+      if let Some(mut inner) = s
+        .starts_with(['{', '['])
+        .then(|| serde_json::from_str::<Value>(s).ok())
+        .flatten()
+      {
+        let was = inner.clone();
+        veil_in(&mut inner, secrets, true);
+        if inner != was {
+          *s = inner.to_string();
+        }
+      }
+      super::veil(s, secrets);
+    }
+    Value::Array(a) => a.iter_mut().for_each(|v| veil_in(v, secrets, free)),
+    Value::Object(o) => o
+      .iter_mut()
+      .filter(|(k, _)| free || !SHAPE.contains(&k.as_str()))
+      .for_each(|(_, v)| veil_in(v, secrets, free)),
+    _ => {}
+  }
+}
+
 /// Of a refusal for the model's context ("This model's maximum context
 /// length is W tokens. However, you requested N tokens (M in the messages,
 /// K in the completion)"), the tokens its messages leave for an output:

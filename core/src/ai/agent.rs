@@ -23,9 +23,9 @@
 //! credit); a busy service's goes to the log, the user reading only that
 //! it is busy. A request past the model's context goes again with less
 //! room for its output, down to LEAST; past that, the call's older tool
-//! results are dropped (`shed`), a half at a time. A text purged as a
-//! call runs (`Toolbox::purged`) is `[purged]` in all the call sends
-//! after: its prompt, built before, and its items. A stop ends the call at
+//! results are dropped (`shed`), a half at a time. A text purged since
+//! a call's prompt was built (`Toolbox::purged`) is `[purged]` in all the
+//! call sends after: that prompt and its items. A stop ends the call at
 //! once, its request cut. What each request used goes to its meter; one
 //! cut short (a stop's, a message's, a stream's end) tells no usage, so
 //! what it sent and read is counted (`used`).
@@ -37,7 +37,6 @@ use crate::{Kind, Say, clip, config, price};
 use futures_util::StreamExt;
 use parking_lot::Mutex;
 use serde_json::Value;
-use std::borrow::Cow;
 use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -51,9 +50,6 @@ const BUSY: &str = "the AI service is busy or unavailable right now";
 /// The least room for its output a request is sent with: with less left
 /// of the model's context, the call sheds.
 const LEAST: u64 = 32_000;
-
-/// What a purged secret reads as in a call that runs on.
-const PURGED: &str = "[purged]";
 
 /// What a tool result dropped to fit the model's context reads.
 const SHED: &str = "[dropped: this call outgrew the model's context; run it again if still needed]";
@@ -115,30 +111,12 @@ async fn turns(
     imgs: ask.imgs.clone(),
   }];
   let mut room = MAX_OUTPUT_TOKENS;
-  let mut ask = Cow::Borrowed(ask);
-  // the secrets its prompt was veiled of, the items veiled of all
-  let (mut known, mut clean) = (0, 0);
   while !cancel.is_cancelled() {
-    let secrets = ask.tools.as_ref().map(|t| t.purged()).unwrap_or_default();
-    if secrets.len() > known {
-      // one purged as the call ran: its prompt, built before, holds it
-      let holds = |text: &str| secrets.iter().any(|s| text.contains(s.as_str()));
-      if holds(&ask.system) || ask.blocks.iter().any(|b| holds(&b.text)) {
-        let ask = ask.to_mut();
-        veil(&mut ask.system, &secrets);
-        for b in &mut ask.blocks {
-          veil(&mut b.text, &secrets);
-        }
-      }
-      (known, clean) = (secrets.len(), 0);
-    }
-    for item in &mut items[clean..] {
-      veil_item(item, &secrets);
-    }
-    clean = items.len();
-    let ask = &*ask;
     let cut = cancel.child_token();
-    let body = super::deepseek::body(ask, &items, &tools, room);
+    let mut body = super::deepseek::body(ask, &items, &tools, room);
+    // one purged as the call ran: its prompt, built before, holds it
+    let secrets = ask.tools.as_ref().map(|t| t.purged()).unwrap_or_default();
+    super::deepseek::veil(&mut body, &secrets);
     let step = heard.till_cut(step(ask, on, key, body, &cut), &cut).await;
     if step.halt == Halt::Fail
       && let Some(left) = super::deepseek::left(&step.why)
@@ -260,53 +238,6 @@ async fn turns(
     }
   }
   Ok(())
-}
-
-/// A text with each secret in it written `[purged]`.
-fn veil(text: &mut String, secrets: &[String]) {
-  for s in secrets {
-    if text.contains(s.as_str()) {
-      *text = text.replace(s.as_str(), PURGED);
-    }
-  }
-}
-
-/// An item veiled: a text of the user's, the model's output, its reply
-/// cut short, a tool's results.
-fn veil_item(item: &mut Item, secrets: &[String]) {
-  if secrets.is_empty() {
-    return;
-  }
-  match item {
-    Item::User { parts, .. } => parts.iter_mut().for_each(|p| veil(p, secrets)),
-    Item::Turn(out) => out.iter_mut().for_each(|v| veil_json(v, secrets)),
-    Item::Said(text) => veil(text, secrets),
-    Item::Back(backs) => backs.iter_mut().for_each(|(_, out)| veil(&mut out.text, secrets)),
-  }
-}
-
-/// Every string of a JSON value veiled; one that is itself JSON (a tool
-/// call's arguments) may hold a secret escaped, so it is veiled as parsed.
-fn veil_json(v: &mut Value, secrets: &[String]) {
-  match v {
-    Value::String(s) => {
-      if let Some(mut inner) = s
-        .starts_with(['{', '['])
-        .then(|| serde_json::from_str::<Value>(s).ok())
-        .flatten()
-      {
-        let was = inner.clone();
-        veil_json(&mut inner, secrets);
-        if inner != was {
-          *s = inner.to_string();
-        }
-      }
-      veil(s, secrets);
-    }
-    Value::Array(a) => a.iter_mut().for_each(|v| veil_json(v, secrets)),
-    Value::Object(o) => o.values_mut().for_each(|v| veil_json(v, secrets)),
-    _ => {}
-  }
 }
 
 /// The older half (by size) of the tool results a call still holds,
@@ -1120,6 +1051,79 @@ mod tests {
     assert_eq!(input[0]["content"][1]["text"], "no, purge it");
     assert_eq!(input[1]["arguments"], r#"{"text":"[purged]"}"#);
     assert_eq!(input[2]["output"][0]["text"], "Purged [purged]");
+  }
+
+  /// Secrets that overlap are veiled as one: none of the longer shows
+  /// around the shorter, whichever was purged first.
+  #[test]
+  fn secrets_that_overlap_are_veiled_whole() {
+    let veiled = |text: &str, secrets: &[&str]| {
+      let secrets: Vec<String> = secrets.iter().map(|s| s.to_string()).collect();
+      let mut text = text.to_string();
+      crate::ai::veil(&mut text, &secrets);
+      text
+    };
+    let (short, long) = ("hunter2pass", "sk-hunter2pass-extra");
+    assert_eq!(veiled("key sk-hunter2pass-extra.", &[short, long]), "key [purged].");
+    assert_eq!(veiled("key sk-hunter2pass-extra.", &[long, short]), "key [purged].");
+    assert_eq!(veiled("abcdefghijkl", &["abcdefgh", "efghijkl"]), "[purged]");
+    // each apart is its own, one named twice is one
+    assert_eq!(
+      veiled("a hunter2pass, hunter2passé", &[short, short]),
+      "a [purged], [purged]é"
+    );
+    assert_eq!(
+      veiled("abcdefghefghijkl", &["abcdefgh", "efghijkl"]),
+      "[purged][purged]"
+    );
+    assert_eq!(veiled("nothing held", &[short, long]), "nothing held");
+  }
+
+  /// A request veiled keeps its shape, whatever was purged: only its
+  /// texts are rewritten, a tool call's arguments as the JSON they are.
+  #[test]
+  fn a_request_veiled_keeps_its_shape() {
+    let args = serde_json::json!({"text": "function_call", "name": "c1-input_text"}).to_string();
+    let mut body = serde_json::json!({
+      "model": "function_call",
+      "instructions": "Facts: function_call",
+      "tools": [{"type": "function", "name": "purge", "description": "a function_call"}],
+      "input": [
+        {"role": "user", "content": [
+          {"type": "input_text", "text": "purge function_call and input_text"},
+          {"type": "input_image", "image_url": "data:image/png;base64,function_call"},
+        ]},
+        {"type": "reasoning", "id": "rs_function_call", "encrypted_content": "function_call",
+         "summary": [{"type": "summary_text", "text": "they said function_call"}]},
+        {"type": "function_call", "status": "completed", "call_id": "c1-input_text", "name": "purge", "arguments": args},
+        {"type": "function_call_output", "call_id": "c1-input_text",
+         "output": [{"type": "input_text", "text": "Purged function_call"}]},
+        {"role": "assistant", "content": "function_call is gone"},
+      ],
+    });
+    let secrets = ["function_call", "input_text", "function", "assistant"].map(String::from);
+    super::super::deepseek::veil(&mut body, &secrets);
+    assert_eq!(
+      body,
+      serde_json::json!({
+        "model": "function_call",
+        "instructions": "Facts: [purged]",
+        "tools": [{"type": "function", "name": "purge", "description": "a function_call"}],
+        "input": [
+          {"role": "user", "content": [
+            {"type": "input_text", "text": "purge [purged] and [purged]"},
+            {"type": "input_image", "image_url": "data:image/png;base64,function_call"},
+          ]},
+          {"type": "reasoning", "id": "rs_function_call", "encrypted_content": "function_call",
+           "summary": [{"type": "summary_text", "text": "they said [purged]"}]},
+          {"type": "function_call", "status": "completed", "call_id": "c1-input_text", "name": "purge",
+           "arguments": r#"{"text":"[purged]","name":"c1-[purged]"}"#},
+          {"type": "function_call_output", "call_id": "c1-input_text",
+           "output": [{"type": "input_text", "text": "Purged [purged]"}]},
+          {"role": "assistant", "content": "[purged] is gone"},
+        ],
+      })
+    );
   }
 
   /// Shedding drops the older half of a call's tool results, by size, and
