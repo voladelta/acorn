@@ -96,18 +96,35 @@ pub trait Toolbox: Send + Sync {
 /// What a purged secret reads as.
 pub const PURGED: &str = "[purged]";
 
-/// A text with each secret in it written `[purged]`; where secrets overlap
-/// (one purged, then a longer one holding it), all they cover is one.
-pub fn veil(text: &mut String, secrets: &[String]) {
+/// Each place a secret is in a text (from, till), those that overlap too
+/// (a secret that ends as it begins).
+fn places<'a>(text: &'a str, secret: &'a str) -> impl Iterator<Item = (usize, usize)> + 'a {
+  let mut from = 0;
+  std::iter::from_fn(move || {
+    let at = from + text[from..].find(secret)?;
+    from = at + text[at..].chars().next().map_or(1, char::len_utf8);
+    Some((at, at + secret.len()))
+  })
+}
+
+/// Where each secret is in a text, in order.
+pub(crate) fn held(text: &str, secrets: &[String]) -> Vec<(usize, usize)> {
   let mut spans: Vec<(usize, usize)> = secrets
     .iter()
     .filter(|s| !s.is_empty())
-    .flat_map(|s| text.match_indices(s.as_str()).map(|(at, m)| (at, at + m.len())))
+    .flat_map(|s| places(text, s))
     .collect();
+  spans.sort_unstable();
+  spans
+}
+
+/// A text with each secret in it written `[purged]`; where secrets overlap
+/// (one purged, then a longer one holding it), all they cover is one.
+pub fn veil(text: &mut String, secrets: &[String]) {
+  let spans = held(text, secrets);
   if spans.is_empty() {
     return;
   }
-  spans.sort_unstable();
   let (mut out, mut from, mut end) = (String::with_capacity(text.len()), 0, 0);
   for (at, till) in spans {
     if at >= end {

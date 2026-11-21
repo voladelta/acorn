@@ -361,8 +361,29 @@ impl Chat {
 
   /// The goal (the `goal` tool), asked of the chat's model, without
   /// tools, on the chat as it is now.
-  fn check_goal(&self, goal: &str) -> ai::Call {
-    let at = self.mem.whole(0);
+  fn check_goal(&mut self, goal: &str) -> ai::Call {
+    let ask = ai::Ask {
+      system: GOAL.into(),
+      blocks: self.goal_blocks(goal),
+      meter: Some(self.meter(Served::Chat)),
+      ..self.share()
+    };
+    ai::ask(ask, Arc::new(|_| {}))
+  }
+
+  /// A goal check's prompt: the view, the chat's latest messages whole,
+  /// the goal. The whole ones take half the view's bytes at most, and
+  /// start where the last check's did while they fit, else at a quarter:
+  /// a goal's checks, one after each turn, then begin alike, and DeepSeek
+  /// reads what they share from its cache.
+  fn goal_blocks(&mut self, goal: &str) -> Vec<Block> {
+    let high = config::get().view;
+    let least = self.mem.whole_in(0, high / 2);
+    let at = match self.checked {
+      Some(at) if at >= least => at,
+      _ => self.mem.whole_in(0, high / 4),
+    };
+    self.checked = Some(at);
     let tail: String = (at..self.mem.count)
       .filter_map(|i| self.mem.message(i))
       .map(|m| {
@@ -374,13 +395,7 @@ impl Chat {
       .collect();
     let mut blocks = self.mem.view_blocks(at);
     blocks.push(Block::new(format!("{tail}{GOAL_ASK}{goal}"), true));
-    let ask = ai::Ask {
-      system: GOAL.into(),
-      blocks,
-      meter: Some(self.meter(Served::Chat)),
-      ..self.share()
-    };
-    ai::ask(ask, Arc::new(|_| {}))
+    blocks
   }
 
   /// A thread's call's answer, joined to the turn's reply (none outside
@@ -501,8 +516,8 @@ impl Chat {
           let mut tail = std::mem::take(self.tail_of(agent));
           let last = self.live_of(agent).last().map(|l| l.kind);
           if let Some(last) = last.filter(|&last| (fresh || last != kind) && !tail.is_empty()) {
-            // what was kept back of the part before began no secret
-            let text = std::mem::take(&mut tail);
+            // what was kept back of the part before grew no further
+            let text = self.redact(&std::mem::take(&mut tail));
             live_push(self.live_of(agent), last, &text, false);
             self.all(Event::Delta {
               agent: agent.map(str::to_string),
@@ -796,5 +811,73 @@ mod tests {
     assert!(super::says_yes("**yes**"));
     assert!(!super::says_yes("yesterday"));
     assert!(!super::says_yes("no"));
+  }
+
+  /// Every summary ready built, a call's line cut from its source.
+  fn build(mem: &mut memory::Memory) {
+    loop {
+      let (mut built, jobs) = mem.starts();
+      if built.is_empty() && jobs.is_empty() {
+        break;
+      }
+      for (part, text) in jobs {
+        mem.busy.remove(&part.slot());
+        built.push((part, memory::cut(&memory::flat(&text)).to_string()));
+      }
+      mem.store(&built).unwrap();
+    }
+    mem.fit(false);
+  }
+
+  #[tokio::test]
+  async fn a_goals_checks_begin_alike_as_the_chat_grows() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    let mut chat = engine.lock();
+    let high = config::get().view;
+    let turn = |chat: &mut Chat, n: u64| {
+      for k in 0..n {
+        let (kind, len) = if k % 2 == 0 {
+          (Kind::User, 200)
+        } else {
+          (Kind::Acorn, 6000)
+        };
+        let id = chat.mem.count;
+        chat
+          .mem
+          .push(vec![Msg::new(kind, format!("{id} {}", "w".repeat(len)))])
+          .unwrap();
+      }
+      build(&mut chat.mem);
+      let prompt: String = chat.goal_blocks("done").iter().map(|b| b.text.as_str()).collect();
+      prompt
+    };
+    let alike = |a: &str, b: &str| a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
+    // a chat past the view's bytes: its latest go whole, a quarter of them
+    let first = turn(&mut chat, (high / 3100 + 2) as u64);
+    let from = chat.checked.unwrap();
+    assert!(from > 0);
+    let whole = |chat: &Chat, from: u64| {
+      (from..chat.mem.count)
+        .map(|i| chat.mem.message(i).unwrap().size)
+        .sum::<usize>()
+    };
+    assert!(whole(&chat, from) <= high / 4 && whole(&chat, from - 1) > high / 4);
+    assert!(first.len() < high / 2);
+    // a turn later, the check starts where the last did: all it had, then more
+    let next = turn(&mut chat, 6);
+    assert_eq!(chat.checked, Some(from));
+    let goal = format!("{GOAL_ASK}done");
+    assert_eq!(alike(&first, &next), first.len() - goal.len());
+    assert!(next.ends_with(&goal));
+    // past half the view's bytes, it starts over at a quarter
+    let mut last = next;
+    while chat.checked == Some(from) {
+      assert!(whole(&chat, from) <= high / 2);
+      last = turn(&mut chat, 40);
+    }
+    let from = chat.checked.unwrap();
+    assert!(whole(&chat, from) <= high / 4 && whole(&chat, from - 1) > high / 4);
+    assert!(last.len() < high);
   }
 }

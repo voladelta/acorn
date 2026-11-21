@@ -139,6 +139,8 @@ pub struct Chat {
   /// The end of what streams kept back, not shown yet: it may begin a
   /// secret (`veil`).
   tail: String,
+  /// Where the last goal check took the chat whole from (`goal_blocks`).
+  checked: Option<u64>,
   calls: Vec<(String, String)>,
   eye: Eye,
   batch: Option<Batch>,
@@ -182,26 +184,27 @@ impl Drop for Guard<'_> {
 }
 
 /// What may be shown of a stream as `text` comes: each secret whole in it
-/// `[purged]`, and its end kept back in `tail` while it may begin one (a
-/// secret can come in pieces).
+/// `[purged]` as `ai::veil` writes it, and its end kept back in `tail`
+/// while a secret may yet grow there (one can come in pieces): from where
+/// a longer one may begin, and from the start of any whole one that
+/// reaches past that, since secrets that overlap are purged as one.
 fn veil(secrets: &[String], tail: &mut String, text: &str) -> String {
   tail.push_str(text);
-  let mut out = String::new();
-  while let Some((at, len)) = secrets
-    .iter()
-    .filter_map(|s| tail.find(s.as_str()).map(|at| (at, s.len())))
-    .min()
-  {
-    out.push_str(&tail[..at]);
-    out.push_str(ai::PURGED);
-    tail.drain(..at + len);
-  }
   let most = secrets.iter().map(String::len).max().unwrap_or(0);
-  let keep = (tail.len().saturating_sub(most)..tail.len())
+  let mut keep = (tail.len().saturating_sub(most)..tail.len())
     .filter(|&k| tail.is_char_boundary(k))
-    .find(|&k| secrets.iter().any(|s| s.starts_with(&tail[k..])))
+    .find(|&k| {
+      let end = &tail[k..];
+      secrets.iter().any(|s| s.len() > end.len() && s.starts_with(end))
+    })
     .unwrap_or(tail.len());
-  out.extend(tail.drain(..keep));
+  for (at, till) in ai::held(tail, secrets).into_iter().rev() {
+    if at < keep && keep < till {
+      keep = at;
+    }
+  }
+  let mut out: String = tail.drain(..keep).collect();
+  ai::veil(&mut out, secrets);
   out
 }
 
@@ -233,6 +236,7 @@ impl Engine {
         halt: CancellationToken::new(),
         live: Vec::new(),
         tail: String::new(),
+        checked: None,
         calls: Vec::new(),
         eye: Eye::default(),
         batch: None,
@@ -683,14 +687,66 @@ mod tests {
       shown(&key, &["sk-1sk-1234", "5678"]),
       ("sk-1[purged]".to_string(), String::new())
     );
-    // a secret that ends as it begins, whole: purged, not half kept back
+    // a secret that ends as it begins, whole: kept back whole, not half,
+    // till what follows shows it is not two that overlap
     assert_eq!(
       shown(&["abcd-abcd"], &["abcd-abcd"]),
-      ("[purged]".to_string(), String::new())
+      (String::new(), "abcd-abcd".to_string())
+    );
+    assert_eq!(
+      shown(&["abcd-abcd"], &["abcd-abcd", ", kept."]),
+      ("[purged], kept.".to_string(), String::new())
+    );
+    assert_eq!(
+      shown(&["abcd-abcd"], &["abcd-abcd", "-abcd."]),
+      ("[purged].".to_string(), String::new())
     );
     assert_eq!(
       shown(&["12345678", "péché-péché"], &["x péché-p", "éché 1234", "5678é"]),
       ("x [purged] [purged]é".to_string(), String::new())
     );
+  }
+
+  /// Each stream as shown, in one piece, in two cut at each byte, and
+  /// letter by letter: what `ai::veil` makes of it whole.
+  fn shown_as_whole(secrets: &[&str], text: &str, purged: &str) {
+    let mut whole = text.to_string();
+    crate::ai::veil(&mut whole, &secrets.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    assert_eq!(whole, purged);
+    let each: Vec<String> = text.chars().map(String::from).collect();
+    let each: Vec<&str> = each.iter().map(String::as_str).collect();
+    let cuts = (0..=text.len()).filter(|&k| text.is_char_boundary(k));
+    let pieces = cuts.map(|k| vec![&text[..k], &text[k..]]).chain([each]);
+    for pieces in pieces {
+      assert_eq!(
+        shown(secrets, &pieces),
+        (purged.to_string(), String::new()),
+        "{pieces:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn secrets_that_overlap_are_purged_as_one_as_they_stream() {
+    // one purged, then a longer one holding it
+    shown_as_whole(
+      &["sk-abc12345", "sk-abc12345678"],
+      "key sk-abc12345678 end",
+      "key [purged] end",
+    );
+    // one ending as the next begins
+    shown_as_whole(&["AAAABBBB", "BBBBCCCC"], "x AAAABBBBCCCC y", "x [purged] y");
+    shown_as_whole(
+      &["hunter2-", "XXhunter2-hunter2-long"],
+      "XXhunter2-hunter2-long.",
+      "[purged].",
+    );
+    shown_as_whole(&["ab", "ba"], "x abababa y", "x [purged] y");
+    // two that only touch are two
+    shown_as_whole(&["abc", "def"], "abcdef.", "[purged][purged].");
+    shown_as_whole(&["péché", "ché-pé"], "un péché-péché.", "un [purged].");
+    // one overlapping itself
+    shown_as_whole(&["abcd-abcd"], "abcd-abcd-abcd.", "[purged].");
+    shown_as_whole(&["ééé"], "éééé, éé.", "[purged], éé.");
   }
 }
