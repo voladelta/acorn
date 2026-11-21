@@ -200,8 +200,11 @@ pub struct Handle {
 }
 
 impl Handle {
-  pub fn send(&self, say: Say) {
-    let _ = self.tx.send(say);
+  /// Whether the call's inbox took the message. Once closed, the caller
+  /// must leave the message for the next call.
+  #[must_use]
+  pub fn send(&self, say: Say) -> bool {
+    self.tx.send(say).is_ok()
   }
 
   pub fn stop(&self) {

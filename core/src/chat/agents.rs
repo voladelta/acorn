@@ -57,10 +57,10 @@ struct View {
 enum Doing {
   Idle,
   Starting,
-  /// fired: stopped by `fire` or a quit (its report stays unanswered).
+  /// `again`: a tell reached the log after this call closed its inbox.
   Calling {
     call: Handle,
-    fired: bool,
+    again: bool,
   },
 }
 
@@ -451,26 +451,30 @@ impl Engine {
       let Some(agent) = chat.agent(name) else {
         return format!("No agent {name} to tell.");
       };
-      let call = match &agent.doing {
-        Doing::Calling { call, .. } => Some(call.clone()),
-        Doing::Idle | Doing::Starting => None,
+      let reply = match &mut agent.doing {
+        Doing::Calling { call, .. } if call.stopped() => {
+          Some(format!("{name} is stopping; your message stays in its log."))
+        }
+        Doing::Calling { call, again } => {
+          *again = !call.send(crate::Say {
+            text: message.into(),
+            cut: true,
+            ..Default::default()
+          });
+          Some(format!("Sent. {name}'s report will answer your message."))
+        }
+        Doing::Starting => Some(format!(
+          "Sent. {name} reads it as it starts; its reply will reach you as a message."
+        )),
+        Doing::Idle => {
+          agent.doing = Doing::Starting;
+          agent.replies.clear();
+          None
+        }
       };
-      let idle = matches!(agent.doing, Doing::Idle);
-      if idle {
-        agent.doing = Doing::Starting;
-        agent.replies.clear();
-      }
       chat.push(Some(name), Kind::User, message);
-      if let Some(call) = call {
-        call.send(crate::Say {
-          text: message.into(),
-          imgs: vec![],
-          cut: true,
-        });
-        return format!("Sent. {name} stops what it was doing to read it, and its report answers it.");
-      }
-      if !idle {
-        return format!("Sent. {name} reads it as it starts; its reply will reach you as a message.");
+      if let Some(reply) = reply {
+        return reply;
       }
       chat.change();
       chat.halt.clone()
@@ -591,13 +595,16 @@ impl Engine {
       let Some(agent) = chat.agents.get_mut(&name) else {
         return;
       };
-      let fired = matches!(agent.doing, Doing::Calling { fired: true, .. });
+      let Doing::Calling { call: handle, again } = &agent.doing else {
+        return;
+      };
+      let fired = handle.stopped();
       agent.replies.push(if end.ok {
         end.text
       } else {
         format!("failed: {}", end.text)
       });
-      if fired || !end.ok || end.left.is_empty() {
+      if fired || (!again && end.left.is_empty()) {
         agent.doing = Doing::Idle;
         let text = report_text(&name, &agent.replies.join("\n\n"));
         chat.report(&name, text, fired);
@@ -652,7 +659,7 @@ impl Chat {
     let call = ai::ask(ask, self.on_events(Some(name.to_string())));
     self.agents.get_mut(name)?.doing = Doing::Calling {
       call: call.handle.clone(),
-      fired: false,
+      again: false,
     };
     self.change();
     Some(call)
@@ -722,10 +729,7 @@ impl Chat {
       match &mut agent.doing {
         Doing::Idle => {}
         Doing::Starting => agent.doing = Doing::Idle,
-        Doing::Calling { call, fired } => {
-          *fired = true;
-          call.stop();
-        }
+        Doing::Calling { call, .. } => call.stop(),
       }
     }
   }
@@ -794,6 +798,36 @@ impl Chat {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[tokio::test]
+  async fn handoff_restarts_an_agent_told_after_its_call_finished() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    let call = ai::Call::ended("old report");
+    while !call.done.is_finished() {
+      tokio::task::yield_now().await;
+    }
+    let name = {
+      let mut chat = engine.lock();
+      let name = chat.mem.agent_new(None).unwrap();
+      let mut agent = Agent::new(&name, None, View::default());
+      agent.doing = Doing::Calling {
+        call: call.handle.clone(),
+        again: false,
+      };
+      chat.agents.insert(name.clone(), agent);
+      name
+    };
+    engine.tell_agent(&name, "check the revised input").await;
+    let run = engine.clone().run(name.clone(), call);
+    // Drive the completion through handoff on this single-thread runtime.
+    // The next request cannot run until we yield.
+    assert!(futures_util::poll!(Box::pin(run)).is_pending());
+    let chat = engine.lock();
+    assert_eq!(chat.working(), std::slice::from_ref(&name));
+    let ask = chat.agent_ask(&name).unwrap();
+    assert!(ask.blocks.last().unwrap().text.contains("check the revised input"));
+  }
 
   #[tokio::test]
   async fn a_starting_view_takes_unbuilt_messages_whole() {
