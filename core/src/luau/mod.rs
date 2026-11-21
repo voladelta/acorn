@@ -592,6 +592,11 @@ impl Vm {
       let _ = self.lua.gc_collect();
     }
     let run = std::mem::take(&mut *self.run.lock());
+    let got = if run.cancel.is_cancelled() {
+      Err(mlua::Error::runtime("stopped"))
+    } else {
+      got
+    };
     let mut text = run.out;
     let fail = match got {
       Ok(shown) => {

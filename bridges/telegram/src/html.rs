@@ -288,12 +288,21 @@ mod tests {
       .join("\n");
     let parts = pieces(&format!("Here:\n\n```rust\n{code}\n```"));
     assert!(parts.len() >= 3);
+    assert_eq!(parts[0], "Here:");
+    for p in &parts {
+      assert!(p.chars().count() <= PIECE, "piece has {} characters", p.chars().count());
+      assert!(html(p).chars().count() <= 4096);
+    }
     for p in &parts[1..] {
       assert!(p.starts_with("```rust\n") && p.ends_with("\n```"), "{}", &p[..20]);
       assert!(html(p).starts_with("<pre><code class=\"language-rust\">"));
     }
-    let lines: usize = parts.iter().map(|p| p.matches("let x").count()).sum();
-    assert_eq!(lines, 400);
+    let rebuilt = parts[1..]
+      .iter()
+      .map(|p| p.strip_prefix("```rust\n").unwrap().strip_suffix("\n```").unwrap())
+      .collect::<Vec<_>>()
+      .join("\n");
+    assert_eq!(rebuilt, code);
   }
 
   #[test]

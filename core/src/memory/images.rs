@@ -304,5 +304,23 @@ mod tests {
     assert!(is_image(&pic) && !is_image(&video));
     let broken = media_add(dir.path(), b"\x89PNG not really").unwrap();
     assert!(broken.ends_with(".bin"), "an image that won't decode: {broken}");
+    let doc = media_add(dir.path(), b"%PDF-1.7\ndocument").unwrap();
+    let mut mem = Memory::load(dir.path()).unwrap();
+    let mut msg = Msg::new(Kind::User, "attachments");
+    msg.images = vec![video.clone(), pic.clone(), doc.clone(), broken];
+    mem.push(vec![msg]).unwrap();
+    let payload = mem.images(0);
+    assert_eq!(
+      payload,
+      [Img {
+        mime: "image/png".into(),
+        data: base64::engine::general_purpose::STANDARD.encode(&png),
+      }]
+    );
+    let mut msg = Msg::new(Kind::User, "documents alone");
+    msg.images = vec![video, doc];
+    mem.push(vec![msg]).unwrap();
+    assert!(mem.images(1).is_empty());
+    assert!(mem.images(2).is_empty());
   }
 }

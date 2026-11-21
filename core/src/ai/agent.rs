@@ -327,6 +327,14 @@ async fn request(
   cancel: &CancellationToken,
   seen: &Mutex<Vec<Live>>,
 ) -> Option<Sent> {
+  #[cfg(test)]
+  if std::env::var_os("ACORN_TEST_CAPPED_REQUEST").is_some() {
+    tests::DISPATCHED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    return Some(Sent {
+      after: None,
+      step: fail("unexpected dispatch", &[], Halt::Fail),
+    });
+  }
   let mut flight = cache::wait(ask).await;
   if cancel.is_cancelled() {
     return None;
@@ -563,6 +571,73 @@ async fn tool(ask: &Ask, tools: &[Spec], name: String, input: Value, cancel: &Ca
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+
+  pub(super) static DISPATCHED: AtomicUsize = AtomicUsize::new(0);
+
+  #[tokio::test]
+  async fn a_request_past_the_budget_waits_until_cancelled() {
+    let test = "ai::agent::tests::a_request_past_the_budget_waits_until_cancelled";
+    if std::env::var_os("ACORN_TEST_CAPPED_REQUEST").is_none() {
+      let dir = tempfile::tempdir().unwrap();
+      let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env("ACORN_TEST_CAPPED_REQUEST", "1")
+        .env("ACORN_DIR", dir.path())
+        .env("ACORN_CHATS", dir.path().join("chats"))
+        .env("ACORN_BUDGET", "0.01")
+        .env(config::KEY_VAR, "unused-test-key")
+        .output()
+        .unwrap();
+      assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+      );
+      return;
+    }
+    let (tx, _events) = mpsc::unbounded_channel();
+    assert!(crate::chat::hub::listen(tx));
+    let engine = crate::chat::hub::chat(&crate::assistant::all()[0]).unwrap();
+    engine
+      .lock()
+      .mem
+      .db
+      .execute(
+        "insert into uses values (?, 'chat', 0, 0, 0, 20000)",
+        [chrono::Local::now().timestamp_millis()],
+      )
+      .unwrap();
+    let why = crate::chat::over_budget().expect("the fixture spent more than its daily cap");
+    let ask = Ask {
+      effort: crate::effort::Effort::None,
+      system: "test".into(),
+      blocks: vec![],
+      imgs: vec![],
+      tools: None,
+      meter: None,
+      patient: true,
+      yields: None,
+      user: None,
+    };
+    let on: On = std::sync::Arc::new(|_| panic!("a capped call emits no model output"));
+    let (_tx, mut rx) = mpsc::unbounded_channel();
+    let capped = run(&ask, &on, &mut rx, &CancellationToken::new()).await;
+    assert!(!capped.ok);
+    assert_eq!(capped.stop, Some(Stop::Down));
+    assert_eq!(capped.text, why);
+    let call = super::super::ask(ask, on);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!call.done.is_finished(), "a patient over-budget call must wait");
+    assert_eq!(DISPATCHED.load(Ordering::SeqCst), 0);
+    call.handle.stop();
+    let end = tokio::time::timeout(Duration::from_secs(1), call.end()).await.unwrap();
+    assert!(!end.ok);
+    assert_eq!(end.text, why);
+    assert_eq!(DISPATCHED.load(Ordering::SeqCst), 0);
+    engine.close();
+  }
 
   fn say(text: &str, cut: bool) -> Say {
     Say {
