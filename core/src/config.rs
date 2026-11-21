@@ -195,10 +195,10 @@ mod tests {
         .env("ACORN_DIR", dir.path())
         .output()
         .unwrap();
+      let said = String::from_utf8_lossy(&out.stdout);
       assert!(
-        out.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
+        out.status.success() && said.contains("1 passed"),
+        "{said}{}",
         String::from_utf8_lossy(&out.stderr)
       );
       return;

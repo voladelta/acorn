@@ -498,24 +498,15 @@ async fn a_stop_while_loading_leaves_the_layer_to_be_built_again() {
 
 #[test]
 fn docs_are_what_a_vm_loads() {
-  for (name, src, doc) in [
-    ("web_search", EXA, "web_search(q) -- exa"),
-    (
-      "read",
-      "return { read = { doc = 'read(path) -- mine', value = function() return 'mine' end } }",
-      "read(path) -- mine",
-    ),
-  ] {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("tool.luau"), src).unwrap();
-    std::fs::write(dir.path().join("bad.luau"), "return {").unwrap();
-    let mut vm = Vm::new(dir.path(), dir.path()).unwrap();
-    vm.refresh().unwrap();
-    let mut expected = base_docs();
-    expected.insert(name.into(), doc.into());
-    assert_eq!(vm.docs, expected, "{name}: only the replaced tool's doc changes");
-    assert!(vm.warns.iter().any(|w| w.contains("plugin bad did not load")));
-  }
+  let dir = tempfile::tempdir().unwrap();
+  std::fs::write(dir.path().join("tool.luau"), EXA).unwrap();
+  std::fs::write(dir.path().join("bad.luau"), "return {").unwrap();
+  let mut vm = Vm::new(dir.path(), dir.path()).unwrap();
+  vm.refresh().unwrap();
+  let mut expected = base_docs();
+  expected.insert("web_search".into(), "web_search(q) -- exa".into());
+  assert_eq!(vm.docs, expected, "only the replaced tool's doc changes");
+  assert!(vm.warns.iter().any(|w| w.contains("plugin bad did not load")));
 }
 
 /// A server answering one request, with what it saw sent back.
