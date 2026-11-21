@@ -99,7 +99,7 @@ The window runs in a browser as an Octane page (`web/`: Vite, Base UI and shadcn
 cargo run --release -p acorn-server
 ```
 
-Open the link it prints (`http://127.0.0.1:8484/?token=...`): the token becomes a cookie, and every request needs it, since the agent runs commands there. The token is kept in `$ACORN_DIR/server-token`, unless `ACORN_TOKEN` is set. `--addr HOST:PORT` (or `ACORN_ADDR`) listens elsewhere; on anything but localhost, put it behind HTTPS, with `--secure` so the cookie is sent over HTTPS only (a proxy's `X-Forwarded-Proto: https` does the same). `--unix PATH` listens on a Unix socket instead. `--web DIR` (or `ACORN_WEB`) serves another build.
+Open the link it prints (`http://127.0.0.1:8484/?token=...`): the token becomes a cookie, and every request needs it, since the agent runs commands there. A page of another site, or of another port of the same host, can't send it a command. The token is kept in `$ACORN_DIR/server-token`, unless `ACORN_TOKEN` is set. `--addr HOST:PORT` (or `ACORN_ADDR`) listens elsewhere; on anything but localhost, put it behind HTTPS, with `--secure` so the cookie is sent over HTTPS only (a proxy's `X-Forwarded-Proto: https` does the same). `--unix PATH` listens on a Unix socket instead. `--web DIR` (or `ACORN_WEB`) serves another build.
 
 The server and the desktop app both hear every chat, so don't run both on the same `$ACORN_DIR` at once.
 
