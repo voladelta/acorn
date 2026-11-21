@@ -46,6 +46,7 @@ pub struct Agent {
 #[derive(Clone, Default)]
 struct View {
   blocks: Vec<Block>,
+  imgs: Vec<crate::Img>,
   since: usize,
 }
 
@@ -560,16 +561,25 @@ impl Engine {
     Some(format!("{}\n{}", thread_head(&asks.name), lines.join("\n")))
   }
 
-  /// The chat's view, once its summaries are built; else why there is
+  /// The chat's view and whole tail; else why there is
   /// none (work stopped).
   async fn view(&self, halt: &CancellationToken) -> Result<View, String> {
-    let count = self.lock().mem.count;
-    if !self.settle(count, halt).await {
+    let from = {
+      let chat = self.lock();
+      chat.mem.whole(chat.mem.first(0, 0))
+    };
+    if !self.settle(from, halt).await {
       return Err("Stopped.".into());
     }
     let chat = self.lock();
+    let latest = super::turns::latest(&chat.mem, from, chat.mem.count);
+    let mut blocks = chat.mem.view_blocks(from);
+    if !latest.text.is_empty() {
+      blocks.push(Block::new(latest.text, true));
+    }
     Ok(View {
-      blocks: chat.mem.view_blocks(chat.mem.count),
+      blocks,
+      imgs: latest.imgs,
       since: chat.secrets.len(),
     })
   }
@@ -677,6 +687,7 @@ impl Chat {
       effort,
       system,
       blocks,
+      imgs: agent.view.imgs.clone(),
       tools: Some(self.kit(Some(agent))),
       meter: Some(self.meter(Served::Agent)),
       ..self.share()
@@ -786,6 +797,37 @@ impl Chat {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[tokio::test]
+  async fn a_starting_view_takes_unbuilt_messages_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    let halt = CancellationToken::new();
+    assert!(engine.view(&halt).await.unwrap().imgs.is_empty());
+    let mut png = Vec::new();
+    image::RgbImage::new(1, 1)
+      .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+      .unwrap();
+    let image = memory::media_add(dir.path(), &png).unwrap();
+    engine
+      .lock()
+      .mem
+      .push(vec![memory::Msg {
+        images: vec![image],
+        ..memory::Msg::new(Kind::User, "current turn")
+      }])
+      .unwrap();
+    let view = tokio::time::timeout(std::time::Duration::from_secs(1), engine.view(&halt))
+      .await
+      .unwrap()
+      .unwrap();
+    assert!(view.blocks.last().unwrap().text.contains("0+0|"));
+    assert!(view.blocks.last().unwrap().text.contains("current turn"));
+    assert_eq!(view.imgs, engine.lock().mem.images(0));
+    assert_eq!(view.imgs.len(), 1);
+    halt.cancel();
+    assert!(engine.view(&halt).await.is_err());
+  }
 
   /// A call veils in what it sends the texts purged since its prompt was
   /// read (`Kit::purged`), each as given and as a fact's key holds it: one

@@ -25,7 +25,8 @@ use std::path::Path;
 pub fn master(work: &Path, thread: bool) -> String {
   format!(
     "You are Acorn, an AI agent that works for one user in a single chat that never
-ends. Each call to you is a turn or a compaction: the view below is followed by
+ends. Each call to you is a turn or a compaction: the view below, then any latest
+messages whole, not summarized yet, are followed by
 a task starting \"Turn:\" (the user's new message, which you answer and act on
 as yourself, never with a summary line) or one starting \"Compaction:\" (the
 only kind you answer with a summary line).
@@ -191,7 +192,8 @@ your tools, following the user's instructions at the end of this
 prompt: they say who the user is, how their files are organized and how
 they want work done.
 
-Your first message holds the view below, then your chat with Acorn so far,
+Your first message holds the view below, then any latest messages whole, not
+summarized yet, then your chat with Acorn so far,
 its lines as \"i|kind: text\": what you are (note), your task (user), and
 later all you did and were told. The view shows you what Acorn knows: what the user wants,
 decided and taught. Use it as context only, and do what your task says,
@@ -210,7 +212,7 @@ A summary tags each item with its kind: user (the user's words), unii
 starting \"[Name]\"). A short message is its own line, word for word. Recent lines
 cover one message each; the older the messages, the more a line covers.
 A message not summarized yet shows as \"{wait}\".
-No message appears in full, not even the last ones. A text too long for
+Latest messages may follow the view whole as id+0|kind: text. A text too long for
 one message is split over several in a row.
 
 Navigating: zoom(id, n) opens line id+n into the two lines of n/2

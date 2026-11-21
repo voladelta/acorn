@@ -4,8 +4,8 @@
 //! goes whole beside its view, else by the next. The user's cuts in on the
 //! call at work (`ai::agent`); an agent's report or a note waits for its
 //! step to end. A
-//! turn runs its calls till no message waits; each call first waits for
-//! the summaries of the messages before its own (`settle`). A goal (the
+//! turn runs its calls till no message waits; each call takes the latest
+//! messages whole, waiting only for summaries before them (`settle`). A goal (the
 //! `goal` tool) is checked as a turn would end, and its nudge keeps the
 //! turn going till it is met, unless the user cut in meanwhile: then the
 //! assistant answers them and waits. A thread's turn ends with its reply
@@ -26,6 +26,22 @@ pub const TIMER: &str = "timer";
 
 /// A turn's head, as a summary's is "Compaction:": one prompt serves both.
 const HEAD: &str = "Turn: the user's new message:\n\n";
+
+pub(super) fn latest(mem: &memory::Memory, from: u64, end: u64) -> crate::Say {
+  let mut say = crate::Say::default();
+  for id in from..end {
+    if let Some(root) = mem.message(id) {
+      if say.text.is_empty() {
+        say
+          .text
+          .push_str("The chat's latest messages, whole, not summarized yet:\n\n");
+      }
+      say.text.push_str(&format!("{id}+0|{}\n", root.show()));
+      say.imgs.extend(mem.images(id));
+    }
+  }
+  say
+}
 
 /// A goal's check: its own system prompt (Acorn's, which says a call is a
 /// turn or a compaction, made the model summarize the chat instead of
@@ -137,7 +153,7 @@ impl Engine {
     }
   }
 
-  /// A call of the turn, once the summaries before its messages are
+  /// A call of the turn, once the summaries before its whole tail are
   /// built.
   async fn call(self: Arc<Self>) {
     let halt = {
@@ -169,16 +185,20 @@ impl Engine {
         .map(|m| chat.mem.say(m.id.max(from), m.end))
         .collect();
       let text = says.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("\n\n");
-      let imgs = says.into_iter().flat_map(|s| s.imgs).collect();
+      let mut latest = latest(&chat.mem, from, msgs.first().map_or(chat.mem.count, |m| m.id));
+      latest.imgs.extend(says.into_iter().flat_map(|s| s.imgs));
       chat.eye = chat.eye_from(from);
       chat.show();
       let mut blocks = chat.mem.view_blocks(from);
       blocks.push(chat.at_work());
       blocks.extend(threads);
+      if !latest.text.is_empty() {
+        blocks.push(Block::new(latest.text, true));
+      }
       blocks.push(Block::new(format!("{HEAD}{text}"), true));
       let ask = ai::Ask {
         blocks,
-        imgs,
+        imgs: latest.imgs,
         tools: Some(chat.kit(None)),
         meter: Some(chat.meter(Served::Chat)),
         ..chat.share()
@@ -336,7 +356,7 @@ impl Chat {
   /// it).
   pub(super) fn from(&self) -> u64 {
     let first = self.wait.first().map_or(self.mem.count, |m| m.id);
-    self.mem.whole(first)
+    self.mem.whole(first.min(self.mem.first(0, 0)))
   }
 
   /// The goal (the `goal` tool), asked of the chat's model, without
@@ -722,6 +742,54 @@ impl Chat {
 
 #[cfg(test)]
 mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn unbuilt_tail_goes_whole_before_the_waiting_messages() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    let mut chat = engine.lock();
+    assert_eq!(chat.from(), 0);
+    assert!(latest(&chat.mem, 0, 0).text.is_empty());
+    chat
+      .mem
+      .push(vec![
+        Msg::new(Kind::Acorn, "previous reply"),
+        Msg::new(Kind::User, "next"),
+      ])
+      .unwrap();
+    chat.wait.push(Span { id: 1, end: 2 });
+    assert_eq!(chat.from(), 0);
+    let tail = latest(&chat.mem, chat.from(), 1);
+    assert!(
+      tail
+        .text
+        .contains(&format!("0+0|{}", chat.mem.message(0).unwrap().show()))
+    );
+    assert!(!tail.text.contains("1+0|"));
+    assert!(tail.imgs.is_empty());
+    assert!(latest(&chat.mem, 2, 3).text.is_empty());
+  }
+
+  #[tokio::test]
+  async fn an_oversize_tail_still_needs_summaries() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    let mut chat = engine.lock();
+    chat
+      .mem
+      .push(vec![
+        Msg::new(Kind::Acorn, "previous reply"),
+        Msg::new(Kind::User, "x".repeat(config::get().view + 1)),
+      ])
+      .unwrap();
+    let end = chat.mem.count;
+    chat.wait.push(Span { id: 1, end });
+    assert_eq!(chat.mem.first(0, 0), 0);
+    assert!(chat.from() > 0);
+    assert!(chat.from() < end);
+  }
+
   #[test]
   fn yes_is_a_word() {
     assert!(super::says_yes("Yes."));
