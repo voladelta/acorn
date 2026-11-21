@@ -36,7 +36,7 @@ test('results read as files', () => {
   assert.ok(none[0].file && none[0].x.length === 0);
   const diff = output('--- f\n+++ f\n@@ -1,2 +1,2 @@\n a\n-b\n+B');
   assert.ok(!diff[0].file && diff[0].k === 'f' && diff[0].x[0].length === 3);
-  assert.equal(output('ok\n[exit code: 1]').length, 1);
+  assert.deepEqual(output('ok\n[exit code: 1]'), [{ file: true, k: 'result', n: 1, x: ['ok', '[exit code: 1]'] }]);
   assert.equal(flat('**bold** and `code` [x](http://y)'), 'bold and code x');
   assert.equal(linkNames('ask [RedAnt] and [x](y)'), 'ask [RedAnt](agent:RedAnt) and [x](y)');
   assert.equal(tokensShow(18_200), '18k');
@@ -72,8 +72,8 @@ test('a message is the only act', () => {
   assert.equal(act(m, { t: 'send', text: ' ', images: [] }).cmds.length, 0, 'an empty Enter stops nothing');
   m = act(m, { t: 'goto', name: 'FireAnt' }).m;
   m = act(m, { t: 'fold', on: true }).m;
-  const sent = act(m, { t: 'send', text: 'stop', images: [] });
-  assert.ok(typeof sent.cmds[0] === 'object' && 'Say' in sent.cmds[0]);
+  const sent = act(m, { t: 'send', text: ' stop ', images: ['aGVsbG8='] });
+  assert.deepEqual(sent.cmds, [{ Say: { text: 'stop', images: ['aGVsbG8='] } }]);
   assert.deepEqual([sent.m.page, sent.m.fold], [null, null], 'back to the chat, where the reply comes');
 });
 

@@ -244,9 +244,10 @@ mod tests {
   fn a_dropped_hold_frees_its_room_even_on_panic() {
     let model = "pace-test-hold";
     let own = "pace-test-hold-import";
-    let result = std::panic::catch_unwind(|| {
-      let _hold = hold(model, own, "busy");
-      assert!(held(own));
+    let guard = hold(model, own, "busy");
+    assert!(held(own));
+    let result = std::panic::catch_unwind(move || {
+      let _hold = guard;
       panic!("cut");
     });
     assert!(result.is_err());
