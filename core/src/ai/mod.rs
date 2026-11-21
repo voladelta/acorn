@@ -233,6 +233,26 @@ impl Call {
   }
 }
 
+#[cfg(test)]
+impl Call {
+  /// A call ended already, answering `text`.
+  pub fn ended(text: &str) -> Call {
+    let (tx, _) = mpsc::unbounded_channel();
+    let handle = Handle {
+      tx,
+      cancel: CancellationToken::new(),
+    };
+    let end = End {
+      ok: true,
+      ..End::failed(text)
+    };
+    Call {
+      handle,
+      done: tokio::spawn(async move { end }),
+    }
+  }
+}
+
 /// A call: its tries, one after another (a patient one's).
 pub fn ask(ask: Ask, on: On) -> Call {
   let (tx, mut rx) = mpsc::unbounded_channel();
