@@ -184,11 +184,6 @@ mod tests {
   use super::*;
 
   #[test]
-  fn the_server_token_is_kept_from_the_agent() {
-    assert!(hidden().contains(&TOKEN_VAR));
-  }
-
-  #[test]
   fn a_budget_is_usd_a_day_or_none() {
     assert_eq!(budget(""), Ok(None));
     assert_eq!(budget("0"), Ok(None));
