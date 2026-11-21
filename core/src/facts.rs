@@ -54,7 +54,7 @@ pub struct Fact {
 
 /// A slot's key: its words, trimmed and lowercased, so a correction finds
 /// what it corrects.
-fn key(text: &str) -> String {
+pub(crate) fn key(text: &str) -> String {
   text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 

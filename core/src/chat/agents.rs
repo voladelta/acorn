@@ -112,6 +112,20 @@ impl Toolbox for Kit {
     specs
   }
 
+  /// Each as given, and as a fact's subject or predicate would hold it.
+  fn purged(&self) -> Vec<String> {
+    let Some(engine) = self.engine.upgrade() else {
+      return Vec::new();
+    };
+    let mut all = engine.lock().secrets.clone();
+    for key in all.iter().map(|s| crate::facts::key(s)).collect::<Vec<_>>() {
+      if !all.contains(&key) {
+        all.push(key);
+      }
+    }
+    all
+  }
+
   fn call(&self, name: String, input: Value, cancel: CancellationToken) -> BoxFuture<'static, Out> {
     let (engine, cwd, halt) = (self.engine.clone(), self.work.join(&self.who), self.halt.clone());
     if let Some(bridge) = self

@@ -86,6 +86,10 @@ impl Out {
 pub trait Toolbox: Send + Sync {
   fn specs(&self) -> Vec<Spec>;
   fn call(&self, name: String, input: Value, cancel: CancellationToken) -> BoxFuture<'static, Out>;
+  /// The texts purged as secrets so far: a call that runs sends none on.
+  fn purged(&self) -> Vec<String> {
+    Vec::new()
+  }
 }
 
 #[derive(Clone)]

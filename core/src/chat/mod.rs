@@ -663,6 +663,39 @@ mod tests {
     (out, tail)
   }
 
+  /// A text purged is one the chat's calls veil from then on in what they
+  /// send (`Toolbox::purged`): as given, and as a fact's key holds it.
+  #[tokio::test]
+  async fn a_purged_text_is_veiled_by_the_calls_that_run() {
+    let test = "chat::tests::a_purged_text_is_veiled_by_the_calls_that_run";
+    if std::env::var_os("ACORN_TEST_VEILED").is_none() {
+      let dir = tempfile::tempdir().unwrap();
+      let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env("ACORN_TEST_VEILED", "1")
+        .env("ACORN_DIR", dir.path())
+        .env("ACORN_CHATS", dir.path().join("chats"))
+        .output()
+        .unwrap();
+      assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+      );
+      return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let engine = open(dir.path());
+    let kit = engine.lock().kit(None);
+    assert!(kit.purged().is_empty());
+    let said = engine.lock().purge_text("Hunter Two 4242");
+    assert!(said.contains("this call too"), "{said}");
+    assert_eq!(kit.purged(), ["Hunter Two 4242", "hunter two 4242"]);
+    engine.lock().purge_text("hunter-2-4242");
+    assert_eq!(kit.purged(), ["Hunter Two 4242", "hunter-2-4242", "hunter two 4242"]);
+  }
+
   #[test]
   fn a_secret_streaming_in_pieces_is_never_shown() {
     let key = ["sk-12345678"];
