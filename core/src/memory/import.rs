@@ -56,6 +56,13 @@ impl Memory {
     Ok(())
   }
 
+  /// Let go of the pages still staged: those of an import that failed.
+  pub(crate) fn end_import(&self) {
+    if let Err(err) = self.db.execute_batch("drop table if exists temp.import_pages") {
+      eprintln!("memory: staged import: {err}");
+    }
+  }
+
   /// Keep just the page sizes for the batch estimate as the text goes to disk.
   pub(crate) fn stage_import(&mut self, msgs: Vec<crate::import::Msg>) -> Result<Vec<usize>> {
     let mut sizes = Vec::with_capacity(msgs.len());

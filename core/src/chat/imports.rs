@@ -84,6 +84,15 @@ impl Batch {
   }
 }
 
+/// An import's staged pages, let go as it ends, however it ends.
+struct Staged<'a>(&'a Engine);
+
+impl Drop for Staged<'_> {
+  fn drop(&mut self) {
+    self.0.lock().mem.end_import();
+  }
+}
+
 impl Engine {
   /// The `import` tool: find, start (as the turn ends), pause, resume.
   pub(super) async fn import_tool(self: &Arc<Self>, input: &serde_json::Value) -> Out {
@@ -171,10 +180,14 @@ impl Engine {
           chat.mem.begin_import()?;
           (plan.picked, plan.msgs)
         };
+        let _staged = Staged(&self);
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<import::Msg>>(4);
         let reader = tokio::task::spawn_blocking(move || {
           let mut chunk = Vec::with_capacity(CHUNK);
           for s in &picked {
+            if tx.is_closed() {
+              return;
+            }
             s.body(&mut |m| {
               chunk.push(m);
               if chunk.len() == CHUNK {
@@ -407,6 +420,33 @@ mod tests {
     assert_eq!(chat.mem.message(2).unwrap().text, "hello");
     assert!(chat.batch.is_none());
     assert!(chat.mem.node(Part::new(1, 0)).is_some());
+  }
+
+  #[tokio::test]
+  async fn a_failed_import_leaves_nothing_staged_and_the_next_publishes() {
+    let dir = tempfile::tempdir().unwrap();
+    let export = dir.path().join("conversations.json");
+    std::fs::write(
+      &export,
+      r#"[{"name":"test","chat_messages":[{"sender":"human","text":"morning","created_at":"2025-01-01T08:00:00Z"}]}]"#,
+    )
+    .unwrap();
+    let engine = open(dir.path());
+    engine.lock().found = import::export(&export).unwrap();
+    let staged = || {
+      let chat = engine.lock();
+      let q = "select exists (select 1 from temp.sqlite_master where name = 'import_pages')";
+      chat.mem.db.query_row(q, [], |r| r.get::<_, bool>(0)).unwrap()
+    };
+    let refuse = "create temp trigger refuse before insert on msgs begin select raise(abort, 'refused'); end";
+    engine.lock().mem.db.execute_batch(refuse).unwrap();
+    engine.clone().import(Want::default()).await;
+    assert!(!staged());
+    assert!(engine.lock().mem.count == 0 && engine.lock().batch.is_none());
+    engine.lock().mem.db.execute_batch("drop trigger refuse").unwrap();
+    engine.clone().import(Want::default()).await;
+    assert!(!staged());
+    assert_eq!(engine.lock().mem.message(1).unwrap().text, "morning");
   }
 
   #[tokio::test]
