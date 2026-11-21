@@ -26,13 +26,8 @@ impl Memory {
   pub fn fit(&mut self, next: bool) {
     let mut gone = Vec::new();
     let mut changed = false;
-    let sides: Vec<u64> = [0, 1]
-      .into_iter()
-      .filter(|&s| s == 0 || !self.paused)
-      .map(|s| self.first(0, s))
-      .collect();
     let count = self.count;
-    let seen_end = sides.into_iter().fold(count, u64::min);
+    let seen_end = self.seen_end();
     let mut views = [std::mem::take(&mut self.view), std::mem::take(&mut self.seen)];
     self.reach(&mut views[0], count);
     self.reach(&mut views[1], seen_end);
@@ -61,17 +56,23 @@ impl Memory {
     self.fitted = true;
   }
 
-  /// A view to message `end`: its lines from it dropped (an import going
-  /// on again), the messages to it appended.
+  /// Keep the partition already built when a purge or resumed import
+  /// moves the readable frontier back. Its children may be evicted.
   fn reach(&self, view: &mut View, end: u64) {
-    let cut = view.cover(end);
-    for part in view.parts.split_off(cut) {
-      view.size -= self.size(part);
-    }
     for i in view.end()..end {
       view.parts.push(Part::leaf(i));
       view.size += self.size(Part::leaf(i));
     }
+  }
+
+  /// The first missing leaf among the sides whose summaries are running.
+  fn seen_end(&self) -> u64 {
+    let chat = self.first(0, 0);
+    if self.paused { chat } else { chat.min(self.first(0, 1)) }
+  }
+
+  pub(crate) fn compaction_blocks(&self, part: Part) -> Vec<crate::Block> {
+    self.blocks(part.ctx().min(self.seen_end()), &self.seen.parts)
   }
 
   /// Whether a view holds `part` or a node under it, or will (not there).
@@ -144,10 +145,12 @@ impl Memory {
   /// mark ends the prefix single flight keys (`ai::cache`); DeepSeek
   /// caches prefixes itself.
   pub fn blocks(&self, end: u64, parts: &[Part]) -> Vec<crate::Block> {
-    let lines: Vec<String> = parts
+    let (whole_parts, boundary) = prefix(parts, end);
+    let lines: Vec<String> = whole_parts
       .iter()
-      .filter(|p| p.span().1 < end && self.built(**p))
+      .filter(|p| self.built(**p))
       .map(|&p| format!("{}\n", line(p, self.text(p))))
+      .chain(boundary.filter_map(|p| self.node(p).map(|text| format!("{}\n", line(p, &text)))))
       .collect();
     let whole = lines.len() / BLOCK;
     let mut blocks = vec![crate::Block::new("<chat>\n", whole == 0)];
@@ -165,10 +168,16 @@ impl Memory {
   /// yet as its kind and its text's first NODE bytes, so the latest show
   /// at once. Only those lines are read.
   pub fn view_lines(&self, n: usize) -> Vec<String> {
-    let shown = |p: Part| match (self.built(p), p.n(), self.message(p.i)) {
-      (true, ..) => line(p, self.text(p)),
-      (false, 1, Some(m)) => line(p, cut(&format!("{}: {}", m.kind.as_str(), flat(&m.text)))),
-      _ => line(p, WAIT),
+    let shown = |p: Part| {
+      if self.built(p) {
+        return line(p, self.text(p));
+      }
+      if p.l == 0
+        && let Some(m) = self.message(p.i)
+      {
+        return line(p, cut(&format!("{}: {}", m.kind.as_str(), flat(&m.text))));
+      }
+      line(p, WAIT)
     };
     let parts = &self.view.parts;
     parts[parts.len().saturating_sub(n)..]
@@ -184,7 +193,7 @@ impl Memory {
 
   /// The node of the n messages from id, if in the chat.
   pub fn part(&self, id: u64, n: u64) -> Option<Part> {
-    Part::of(id, n).filter(|_| id + n <= self.count)
+    Part::of(id, n).filter(|_| id.checked_add(n).is_some_and(|end| end <= self.count))
   }
 
   /// A message (n = 1) whole, a long one a page from `at`, its images on

@@ -79,6 +79,47 @@ fn seed(dir: &std::path::Path) -> Memory {
   mem
 }
 
+/// The rendered summary ids must tile exactly the requested history,
+/// even when the cutoff is inside an evicted subtree.
+fn assert_prefix(blocks: Vec<acorn_core::Block>, end: u64) {
+  let mut next = 0;
+  for s in blocks.iter().flat_map(|b| b.text.lines()).filter(|s| s.contains('|')) {
+    let (id, n) = s.split_once('|').unwrap().0.split_once('+').unwrap();
+    assert_eq!(id.parse::<u64>().unwrap(), next, "{s}");
+    next += n.parse::<u64>().unwrap();
+  }
+  assert_eq!(next, end);
+}
+
+#[test]
+fn compacted_views_cover_every_prefix_even_after_a_rewind() {
+  configured();
+  let home = tempfile::tempdir().unwrap();
+  let mut mem = Memory::load(home.path()).unwrap();
+  mem.view.high = 1100;
+  mem.seen.high = 1100;
+  mem
+    .push(
+      (0..16)
+        .map(|i| Msg::new(Kind::User, format!("{i} {}", "x".repeat(490))))
+        .collect(),
+    )
+    .unwrap();
+  build(&mut mem);
+  assert!(!mem.built(Part::leaf(0)));
+  for end in 0..=mem.count {
+    assert_prefix(mem.view_blocks(end), end);
+  }
+  mem.purge(None, 1).unwrap();
+  build(&mut mem);
+  assert_prefix(mem.blocks(mem.count, &mem.seen.parts), mem.count);
+  drop(mem);
+  let mem = Memory::load(home.path()).unwrap();
+  for end in 0..=mem.count {
+    assert_prefix(mem.view_blocks(end), end);
+  }
+}
+
 #[test]
 fn persistence_fts_search_and_zoom() {
   configured();
@@ -184,6 +225,14 @@ fn purge_unpurge_and_wal_erasure() {
   assert!(mem.held_till().is_some_and(|t| t > acorn_core::now_ms()));
   memory::wipe(&dir, acorn_core::now_ms() - memory::GRACE).unwrap();
   assert!(on_disk(&dir, SECRET), "held in its grace, a wipe leaves it");
+  let cutoff = acorn_core::now_ms() - memory::GRACE;
+  mem.db.execute("update held set at = ?", [cutoff]).unwrap();
+  assert!(mem.unpurge(None, 5).unwrap().contains("ten minutes are over"));
+  assert_eq!(
+    mem.message(5).unwrap().text,
+    PURGED,
+    "expiry is independent of the idle wipe"
+  );
   wipe(&mut mem);
   assert!(mem.held_till().is_none(), "past its grace, a wipe deletes it");
   assert!(
@@ -191,6 +240,26 @@ fn purge_unpurge_and_wal_erasure() {
     "erased from chat.db and its WAL"
   );
   assert!(mem.purge(None, 999).unwrap().starts_with("No message"));
+}
+
+#[test]
+fn oversized_summaries_are_bounded_in_storage_and_on_legacy_reads() {
+  configured();
+  let home = tempfile::tempdir().unwrap();
+  let mut mem = Memory::load(home.path()).unwrap();
+  mem.push(vec![Msg::new(Kind::User, "source")]).unwrap();
+  let fits = "a".repeat(memory::NODE - 1);
+  let oversized = format!("{fits}é");
+  let leaf = Part::leaf(0);
+  mem.store(&[(leaf, oversized.clone())]).unwrap();
+  let stored: String = mem.db.query_row("select text from nodes", [], |r| r.get(0)).unwrap();
+  assert_eq!(stored, fits);
+  assert_eq!(mem.view.size, fits.len());
+  mem.db.execute("update nodes set text = ?", [oversized]).unwrap();
+  drop(mem);
+  let mem = Memory::load(home.path()).unwrap();
+  assert_eq!(mem.text(leaf), fits);
+  assert_eq!(mem.view.size, fits.len());
 }
 
 #[test]

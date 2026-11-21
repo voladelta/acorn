@@ -42,12 +42,11 @@ impl Chat {
 
   /// What the agent saw before message `from`.
   pub(super) fn eye_from(&self, from: u64) -> Eye {
-    let parts = self
-      .mem
-      .view
-      .parts
+    let (whole, boundary) = memory::prefix(&self.mem.view.parts, from);
+    let parts = whole
       .iter()
-      .filter(|p| p.span().1 < from)
+      .copied()
+      .chain(boundary)
       .map(|p| (p.span().0, p.n()))
       .collect();
     Eye { parts, from }
@@ -80,7 +79,7 @@ impl Chat {
       .copied()
       .filter(|&(id, n)| id + n <= cover.0 || id >= cover.1)
       .collect();
-    parts.extend(roots.iter().flat_map(|&p| blocks(p, cover)));
+    parts.extend(memory::tiles(cover.0, cover.1.min(count)).map(|p| (p.span().0, p.n())));
     parts.extend((from..cover.0).map(|k| (k, 1)));
     parts.extend((from.max(cover.1)..count).map(|k| (k, 1)));
     parts.sort_by_key(|s| s.0);
@@ -134,12 +133,8 @@ impl Chat {
     Some(((id, n), Node { text, to }))
   }
 
-  /// A summary built: counted, if the import's; told, if the app was
-  /// shown its block.
+  /// A summary built, told if the app was shown its block.
   pub(super) fn made(&mut self, part: Part) {
-    if let Some(batch) = &mut self.batch {
-      batch.built(part.l as usize, part.i as i64 - (batch.a >> part.l) as i64);
-    }
     let seg = (part.span().0, part.n());
     if self.seen.contains(&seg)
       && let Some(node) = self.node(seg)
@@ -173,23 +168,6 @@ impl Chat {
   }
 }
 
-/// The fewest blocks under a tree part that tile messages [a, b).
-fn blocks(part: Part, (a, b): Seg) -> Vec<Seg> {
-  let (first, last) = part.span();
-  if last < a || first >= b {
-    return vec![];
-  }
-  if first >= a && last < b {
-    return vec![(first, part.n())];
-  }
-  part
-    .halves()
-    .into_iter()
-    .flatten()
-    .flat_map(|h| blocks(h, (a, b)))
-    .collect()
-}
-
 /// How many messages a lock is held for, at most, as the memory is written
 /// out: the chat goes on between.
 const PIECE: u64 = 512;
@@ -201,7 +179,7 @@ fn stamp() -> String {
 
 impl Engine {
   /// The memory as JSON, in the user's Downloads: the chat's id, the
-  /// messages, the summaries, the agents' logs, then every image, each
+  /// messages, the summaries, the agents' logs, then their attachments, each
   /// in base64.
   pub(super) async fn export(self: &Arc<Self>) -> Result<PathBuf, String> {
     let file = crate::config::home()
@@ -216,16 +194,18 @@ impl Engine {
 
   fn dump(&self, file: &std::path::Path) -> anyhow::Result<()> {
     let mut out = std::io::BufWriter::new(std::fs::File::create(file)?);
-    let (id, count, dir) = {
+    let (id, count) = {
       let chat = self.lock();
-      (chat.id.clone(), chat.mem.count, chat.mem.dir.clone())
+      (chat.id.clone(), chat.mem.count)
     };
+    let mut images = std::collections::BTreeSet::new();
     write!(out, "{{\"chat\": {},\n\"messages\": [", serde_json::to_string(&id)?)?;
     for from in (0..count).step_by(PIECE as usize) {
       let chat = self.lock();
       for i in from..(from + PIECE).min(count) {
         let Some(m) = chat.mem.message(i) else { continue };
         let rec = serde_json::json!({"id": i, "kind": m.kind, "text": m.text, "date": m.date, "images": m.images, "more": m.more});
+        images.extend(m.images);
         write!(out, "{}{rec}", if i == 0 { "\n" } else { ",\n" })?;
       }
     }
@@ -250,16 +230,6 @@ impl Engine {
       }
     }
     write!(out, "],\n\"agents\": {{")?;
-    let ls = |sub: &str| -> Vec<String> {
-      let mut names: Vec<String> = std::fs::read_dir(dir.join(sub))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
-      names.sort();
-      names
-    };
     sep = "\n";
     let agents = self.lock().mem.agent_names();
     for name in &agents {
@@ -280,7 +250,7 @@ impl Engine {
     }
     write!(out, "}},\n\"images\": {{")?;
     sep = "\n";
-    for name in ls("docs/images") {
+    for name in images {
       let Some(path) = self.lock().mem.image_file(&name) else {
         continue;
       };
@@ -384,5 +354,46 @@ h4 {{ margin: .8em 0 .2em; color: #888; font-weight: normal; }} pre {{ margin: 0
     writeln!(out, "</section>")?;
     out.flush()?;
     Ok(())
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::{Kind, memory::Msg};
+
+  #[tokio::test]
+  async fn export_contains_only_referenced_attachments_even_during_undo_grace() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    let public = memory::media_add(dir.path(), b"shared").unwrap();
+    let private = memory::media_add(dir.path(), b"held").unwrap();
+    let _orphan = memory::media_add(dir.path(), b"no message references this").unwrap();
+    engine
+      .lock()
+      .mem
+      .push(vec![
+        Msg {
+          images: vec![public.clone(), private.clone()],
+          ..Msg::new(Kind::User, "first")
+        },
+        Msg {
+          images: vec![public.clone()],
+          ..Msg::new(Kind::User, "second")
+        },
+      ])
+      .unwrap();
+    engine.lock().purge(None, 0, false);
+    let exported = || {
+      let file = dir.path().join("export.json");
+      engine.dump(&file).unwrap();
+      let json: serde_json::Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+      json["images"].as_object().unwrap().clone()
+    };
+    let images = exported();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[&public], "c2hhcmVk");
+    engine.lock().purge(None, 0, true);
+    assert_eq!(exported()[&private], "aGVsZA==");
   }
 }

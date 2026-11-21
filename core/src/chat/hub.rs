@@ -166,7 +166,7 @@ fn open(id: String, me: &Assistant, with: Option<&Assistant>) -> Result<Arc<Engi
   {
     return Err(format!("{} is archived.", gone.name));
   }
-  match Engine::start(id.clone(), me.clone(), with.cloned(), heard.clone()) {
+  match Engine::start(&dir(&id), id.clone(), me.clone(), with.cloned(), heard.clone()) {
     Ok(engine) => {
       *slot = Some(engine.clone());
       Ok(engine)

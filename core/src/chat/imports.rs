@@ -2,22 +2,20 @@
 //! =======
 //! A person's past chats, found (`import::find`) and priced as the
 //! assistant asks (the `import` tool), then, once the turn that asked
-//! ends, logged as one: every page `more` but the last, so none is in the
-//! chat till all are. Their summaries build on their own side, which a
-//! pause holds; a quit leaves the batch's file, and the next start goes on
+//! ends, published in one transaction, preserving each message's page
+//! boundaries. Their summaries build on their own side, which a
+//! pause holds; a quit leaves the batch's row, and the next start goes on
 //! with it. Refused amid another turn or import.
 
 use super::{Chat, Engine};
 use crate::Kind;
 use crate::ai::Out;
 use crate::import::{self, Done, Want};
-use crate::memory::{JOBS, Msg, Part};
+use crate::memory::{JOBS, Part};
 use crate::wire::{Event, Progress};
+use rusqlite::OptionalExtension;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-/// An import running: its batch's file in the chat's dir.
-const BATCH: &str = "import.json";
 
 /// Why an import's summaries wait, as told and kept: the person paused it.
 const PAUSED: &str = "paused";
@@ -35,24 +33,34 @@ pub struct Batch {
   pub a: u64,
   pub b: u64,
   said: u64,
-  spent: f64,
+  pub(super) spent: f64,
   micros: Vec<Vec<u64>>,
   open: Vec<u64>,
   left: f64,
   all: f64,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Kept {
-  a: u64,
-  b: u64,
-  said: u64,
-  spent: f64,
-  #[serde(default)]
-  why: Option<String>,
+  age: u64,
 }
 
 impl Batch {
+  fn new(a: u64, sizes: &[usize], said: u64, spent: f64, age: u64) -> Self {
+    let micros = import::guess(a, sizes);
+    let open = micros.iter().map(|l| l.len() as u64).collect();
+    let left = micros.iter().flatten().sum::<u64>() as f64;
+    let mut batch = Self {
+      a,
+      b: a + sizes.len() as u64,
+      said,
+      spent,
+      micros,
+      open,
+      left,
+      all: 0.0,
+      age,
+    };
+    batch.all = batch.time();
+    batch
+  }
+
   /// Node j of level l built (none such: the chat's).
   pub fn built(&mut self, l: usize, j: i64) {
     if let Some(&cost) = usize::try_from(j).ok().and_then(|j| self.micros.get(l)?.get(j)) {
@@ -73,6 +81,15 @@ impl Batch {
       .filter_map(|(level, _)| level.last())
       .sum();
     self.left / JOBS as f64 + tops as f64
+  }
+}
+
+/// An import's staged pages, let go as it ends, however it ends.
+struct Staged<'a>(&'a Engine);
+
+impl Drop for Staged<'_> {
+  fn drop(&mut self) {
+    self.0.lock().mem.end_import();
   }
 }
 
@@ -141,33 +158,36 @@ impl Engine {
   /// The sessions picked, logged as one, summarized on the compactor; a
   /// turn at work begins it as it ends.
   pub(super) async fn import(self: Arc<Self>, want: Want) {
-    let (picked, a) = {
-      let mut chat = self.lock();
-      if chat.busy() {
-        // a turn began meanwhile: its end begins the import
-        chat.then = Some(want);
-        return;
-      }
-      if chat.batch.is_some() {
-        chat.all(Event::Note("An import is under way: import again once it ends.".into()));
-        return;
-      }
-      let done = chat.imported();
-      let plan = import::plan(&chat.found, &want, &done, chat.mem.count);
-      if plan.msgs == 0 {
-        chat.all(Event::Note("Nothing to import: no new messages found.".into()));
-        return;
-      }
-      (plan.picked, chat.mem.count)
-    };
-    let me = self.clone();
-    self
-      .writing(async move || {
-        me.lock().mem.paused = false;
+    let wrote: anyhow::Result<()> = self
+      .writing(async || {
+        let (picked, expected) = {
+          let mut chat = self.lock();
+          if chat.busy() {
+            // a turn began meanwhile: its end begins the import
+            chat.then = Some(want);
+            return Ok(());
+          }
+          if chat.batch.is_some() {
+            chat.all(Event::Note("An import is under way: import again once it ends.".into()));
+            return Ok(());
+          }
+          let done = chat.imported();
+          let plan = import::plan(&chat.found, &want, &done, chat.mem.count);
+          if plan.msgs == 0 {
+            chat.all(Event::Note("Nothing to import: no new messages found.".into()));
+            return Ok(());
+          }
+          chat.mem.begin_import()?;
+          (plan.picked, plan.msgs)
+        };
+        let _staged = Staged(&self);
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<import::Msg>>(4);
-        tokio::task::spawn_blocking(move || {
+        let reader = tokio::task::spawn_blocking(move || {
           let mut chunk = Vec::with_capacity(CHUNK);
           for s in &picked {
+            if tx.is_closed() {
+              return;
+            }
             s.body(&mut |m| {
               chunk.push(m);
               if chunk.len() == CHUNK {
@@ -178,42 +198,30 @@ impl Engine {
           let _ = tx.blocking_send(chunk);
         });
         let mut said = 0;
-        let mut last: Option<import::Msg> = None;
-        let tag = |m: import::Msg, more: bool| Msg {
-          date: Some(m.date),
-          imported: true,
-          more,
-          ..Msg::new(m.kind, m.text)
-        };
+        let mut sizes = Vec::with_capacity(expected);
         while let Some(chunk) = rx.recv().await {
           said += chunk.iter().filter(|m| m.kind != Kind::Note).count() as u64;
-          let mut msgs: Vec<Msg> = last.take().into_iter().chain(chunk).map(|m| tag(m, true)).collect();
-          let held = msgs.pop().map(|m| import::Msg {
-            kind: m.kind,
-            text: m.text,
-            date: m.date.unwrap_or_default(),
-            more: false,
-          });
-          last = held;
-          if !msgs.is_empty()
-            && let Err(err) = me.lock().mem.push(msgs)
-          {
-            eprintln!("acorn: import: {err}");
-          }
+          sizes.extend(self.lock().mem.stage_import(chunk)?);
         }
-        let mut chat = me.lock();
-        if let Some(m) = last
-          && let Err(err) = chat.mem.push(vec![tag(m, false)])
-        {
-          eprintln!("acorn: import: {err}");
-        }
-        let b = chat.mem.count;
-        chat.batch = Some(chat.batch_of(a, b, said, 0.0));
+        reader.await?;
+        anyhow::ensure!(
+          said == expected as u64,
+          "the selected source messages changed during import"
+        );
+        let mut chat = self.lock();
+        let a = chat.mem.count;
+        chat.mem.finish_import(said)?;
+        chat.mem.paused = false;
+        chat.batch = Some(Batch::new(a, &sizes, said, 0.0, chat.mem.age));
         chat.show();
         chat.pump();
         chat.progress();
+        Ok(())
       })
       .await;
+    if let Err(err) = wrote {
+      self.tell(Event::Note(format!("Import failed: {err}")));
+    }
   }
 }
 
@@ -277,20 +285,7 @@ impl Chat {
   /// with none built, then its summaries built counted.
   fn batch_of(&self, a: u64, b: u64, said: u64, spent: f64) -> Batch {
     let sizes: Vec<usize> = (a..b).map(|i| self.mem.message(i).map_or(0, |m| m.size)).collect();
-    let micros = import::guess(a, &sizes);
-    let open = micros.iter().map(|l| l.len() as u64).collect();
-    let left = micros.iter().flatten().sum::<u64>() as f64;
-    let mut batch = Batch {
-      a,
-      b,
-      said,
-      spent,
-      micros,
-      open,
-      left,
-      all: 0.0,
-    };
-    batch.all = batch.time();
+    let mut batch = Batch::new(a, &sizes, said, spent, self.mem.age);
     for l in 0..batch.micros.len() {
       for j in 0..batch.micros[l].len() {
         if self.mem.node(Part::new(l as u32, (a >> l) + j as u64)).is_some() {
@@ -301,32 +296,33 @@ impl Chat {
     batch
   }
 
-  /// Kept as it is till it ends: written whole, then moved in place.
-  fn keep(&self) {
-    let Some(b) = &self.batch else { return };
-    let kept = Kept {
-      a: b.a,
-      b: b.b,
-      said: b.said,
-      spent: b.spent,
-      why: self.paused(),
-    };
-    let file = self.mem.dir.join(BATCH);
-    let new = self.mem.dir.join(format!("{BATCH}.new"));
-    let wrote = serde_json::to_vec(&kept)
-      .map_err(std::io::Error::other)
-      .and_then(|json| std::fs::write(&new, json))
-      .and_then(|_| std::fs::rename(&new, &file));
-    if let Err(err) = wrote {
-      eprintln!("acorn: {BATCH}: {err}");
+  /// A purge can invalidate summaries already counted by the active
+  /// import. Recount from the tree before publishing its progress.
+  pub(super) fn count_built(&mut self, made: &[Part]) {
+    let Some(b) = &mut self.batch else { return };
+    if b.age != self.mem.age {
+      let (a, end, said, spent) = (b.a, b.b, b.said, b.spent);
+      self.batch = Some(self.batch_of(a, end, said, spent));
+    } else {
+      for part in made {
+        b.built(part.l as usize, part.i as i64 - (b.a >> part.l) as i64);
+      }
     }
   }
 
-  /// The import a quit left (BATCH); None: none.
-  pub(super) fn resumed(&mut self) -> Option<Batch> {
-    let kept: Kept = serde_json::from_slice(&std::fs::read(self.mem.dir.join(BATCH)).ok()?).ok()?;
-    self.mem.paused = kept.why.as_deref() == Some(PAUSED);
-    Some(self.batch_of(kept.a, kept.b, kept.said, kept.spent))
+  /// The batch published with its messages, unless already completed.
+  pub(super) fn resumed(&mut self) -> rusqlite::Result<Option<Batch>> {
+    let row = self
+      .mem
+      .db
+      .query_row("select a,b,said,spent,paused from import_batch", [], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+      })
+      .optional()?;
+    Ok(row.map(|(a, b, said, spent, paused)| {
+      self.mem.paused = paused;
+      self.batch_of(a, b, said, spent)
+    }))
   }
 
   /// Why the import's summaries wait, as told and kept (None: they build).
@@ -357,13 +353,15 @@ impl Chat {
     if batch.open.iter().all(|&n| n == 0) {
       return self.digest();
     }
-    self.keep();
     self.tell_state();
   }
 
   fn digest(&mut self) {
+    if let Err(err) = self.mem.db.execute("delete from import_batch", []) {
+      eprintln!("acorn: completing import: {err}");
+      return;
+    }
     let Some(batch) = self.batch.take() else { return };
-    let _ = std::fs::remove_file(self.mem.dir.join(BATCH));
     self.eye = self.eye_from(self.eye.from.max(batch.b));
     self.show();
     self.all(Event::Note(format!(
@@ -378,6 +376,9 @@ impl Chat {
     if self.batch.is_none() {
       return "No import is running.".into();
     }
+    if let Err(err) = self.mem.db.execute("update import_batch set paused = ?", [!on]) {
+      return format!("The import could not be updated: {err}");
+    }
     self.mem.paused = !on;
     if !on {
       for (call, _, kind) in &self.compactions {
@@ -386,7 +387,6 @@ impl Chat {
         }
       }
     }
-    self.keep();
     self.tell_state();
     self.pump();
     self.change();
@@ -395,5 +395,107 @@ impl Chat {
     } else {
       "The import is paused.".into()
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::chat::tests::open;
+
+  #[tokio::test]
+  async fn concurrent_starts_publish_the_selected_export_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let export = dir.path().join("conversations.json");
+    std::fs::write(&export, r#"[{"name":"test","chat_messages":[{"sender":"human","text":"morning","created_at":"2025-01-01T08:00:00Z"},{"sender":"assistant","text":"hello","created_at":"2025-01-01T08:01:00Z"}]}]"#).unwrap();
+    let engine = open(dir.path());
+    engine.lock().found = import::export(&export).unwrap();
+    tokio::join!(
+      engine.clone().import(Want::default()),
+      engine.clone().import(Want::default())
+    );
+    let chat = engine.lock();
+    assert_eq!(chat.mem.count, 3);
+    assert_eq!(chat.mem.message(1).unwrap().text, "morning");
+    assert_eq!(chat.mem.message(2).unwrap().text, "hello");
+    assert!(chat.batch.is_none());
+    assert!(chat.mem.node(Part::new(1, 0)).is_some());
+  }
+
+  #[tokio::test]
+  async fn a_failed_import_leaves_nothing_staged_and_the_next_publishes() {
+    let dir = tempfile::tempdir().unwrap();
+    let export = dir.path().join("conversations.json");
+    std::fs::write(
+      &export,
+      r#"[{"name":"test","chat_messages":[{"sender":"human","text":"morning","created_at":"2025-01-01T08:00:00Z"}]}]"#,
+    )
+    .unwrap();
+    let engine = open(dir.path());
+    engine.lock().found = import::export(&export).unwrap();
+    let staged = || {
+      let chat = engine.lock();
+      let q = "select exists (select 1 from temp.sqlite_master where name = 'import_pages')";
+      chat.mem.db.query_row(q, [], |r| r.get::<_, bool>(0)).unwrap()
+    };
+    let refuse = "create temp trigger refuse before insert on msgs begin select raise(abort, 'refused'); end";
+    engine.lock().mem.db.execute_batch(refuse).unwrap();
+    engine.clone().import(Want::default()).await;
+    assert!(!staged());
+    assert!(engine.lock().mem.count == 0 && engine.lock().batch.is_none());
+    engine.lock().mem.db.execute_batch("drop trigger refuse").unwrap();
+    engine.clone().import(Want::default()).await;
+    assert!(!staged());
+    assert_eq!(engine.lock().mem.message(1).unwrap().text, "morning");
+  }
+
+  #[tokio::test]
+  async fn paused_import_recounts_a_purged_summary_and_resumes_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = open(dir.path());
+    {
+      let mut chat = engine.lock();
+      chat.mem.begin_import().unwrap();
+      chat
+        .mem
+        .stage_import(
+          ["first", "second"]
+            .map(|s| import::Msg {
+              kind: Kind::User,
+              text: s.into(),
+              date: "2025-01-01".into(),
+              more: false,
+            })
+            .to_vec(),
+        )
+        .unwrap();
+      chat.mem.finish_import(2).unwrap();
+      chat.batch = chat.resumed().unwrap();
+      chat.go(false);
+      chat.mem.store(&[(Part::leaf(0), "first".into())]).unwrap();
+    }
+    for (i, micros) in [(0, 125), (2, 200)] {
+      let meter = engine.lock().meter_at(crate::Served::Import, Some(Part::leaf(i)));
+      meter(crate::ai::Used {
+        effort: crate::effort::Effort::Low,
+        usage: Default::default(),
+        micros,
+        at: crate::now_ms(),
+      });
+    }
+    assert_eq!(engine.lock().importing().unwrap().open, [1, 1]);
+    engine.lock().purge(None, 0, false);
+    assert_eq!(engine.lock().importing().unwrap().open, [2, 1]);
+    engine.close();
+    drop(engine);
+    let engine = open(dir.path());
+    let progress = engine.lock().importing().unwrap();
+    assert_eq!(progress.why.as_deref(), Some(PAUSED));
+    assert_eq!(progress.spent, 0.000125);
+    assert_eq!(progress.open, [2, 1]);
+    engine.lock().go(true);
+    let mut chat = engine.lock();
+    assert!(chat.batch.is_none() && chat.resumed().unwrap().is_none());
+    assert!(chat.mem.node(Part::new(1, 0)).unwrap().contains(crate::memory::PURGED));
   }
 }

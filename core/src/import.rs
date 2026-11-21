@@ -541,7 +541,7 @@ fn node_merge(a: Node, b: Node) -> Node {
 /// A site's export, its zip (conversations.json in it) or that file alone,
 /// as sessions, one a chat: ChatGPT's (a tree, `mapping`) or Claude's
 /// (`chat_messages`); a file not a list of those is no export.
-fn export(file: &Path) -> Result<Vec<Session>, String> {
+pub(crate) fn export(file: &Path) -> Result<Vec<Session>, String> {
   let mut data = std::fs::read(file).map_err(|e| e.to_string())?;
   if data.starts_with(b"PK") {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| e.to_string())?;
