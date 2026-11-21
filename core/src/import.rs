@@ -202,7 +202,8 @@ fn session(source: Source, app: &str, place: &str) -> Option<Session> {
       date: m.date.clone(),
       size: size(m.kind, &m.text),
       n: heads.len(),
-    })
+    });
+    true
   });
   s.heads = heads;
   s.start = s.heads.first()?.date.clone();
@@ -210,10 +211,16 @@ fn session(source: Source, app: &str, place: &str) -> Option<Session> {
 }
 
 impl Session {
-  /// Its messages, its file read a line at a time.
-  fn read(&mut self, mut each: impl FnMut(&Msg)) {
+  /// Its messages, its file read a line at a time, stopping when `each` returns false.
+  fn read(&mut self, mut each: impl FnMut(&Msg) -> bool) {
     match self.source.clone() {
-      Source::Msgs(msgs) => msgs.iter().for_each(each),
+      Source::Msgs(msgs) => {
+        for m in msgs.iter() {
+          if !each(m) {
+            return;
+          }
+        }
+      }
       Source::Log(file) => {
         let Ok(f) = std::fs::File::open(&file) else { return };
         let mut date = String::new();
@@ -227,7 +234,11 @@ impl Session {
           if let Some(m) = msgs.last() {
             date.clone_from(&m.date);
           }
-          msgs.iter().for_each(&mut each);
+          for m in &msgs {
+            if !each(m) {
+              return;
+            }
+          }
         }
       }
     }
@@ -301,18 +312,25 @@ impl Session {
     [day, count_short(self.heads.len()), place]
   }
 
-  /// Its note, then the messages of its heads kept, read again.
-  pub fn body(&self, each: &mut impl FnMut(Msg)) {
-    each(self.note());
+  /// Its note, then the messages of its heads kept, read again; returns
+  /// false if `each` stopped early.
+  pub fn body(&self, each: &mut impl FnMut(Msg) -> bool) -> bool {
+    if !each(self.note()) {
+      return false;
+    }
     let kept: HashSet<usize> = self.heads.iter().map(|h| h.n).collect();
     let mut n = 0;
+    let mut ok = true;
     let mut me = self.clone();
     me.read(|m| {
-      if kept.contains(&n) {
-        each(m.clone());
+      if kept.contains(&n) && !each(m.clone()) {
+        ok = false;
+        return false;
       }
       n += 1;
+      true
     });
+    ok
   }
 }
 
@@ -919,5 +937,28 @@ mod tests {
     // the chat's own older line counts in the first merge
     assert_eq!(guess(1, &[10]), [[0], [0]]);
     assert!(guess(1, &[100])[1][0] > 0 && guess(0, &[100, 100])[1][0] == 0);
+  }
+
+  #[test]
+  fn body_stops_early_when_callback_returns_false() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("conversations.json");
+    std::fs::write(
+      &file,
+      r#"[{"name":"test","chat_messages":[
+        {"sender":"human","text":"one","created_at":"2025-01-01T08:00:00Z"},
+        {"sender":"assistant","text":"two","created_at":"2025-01-01T08:01:00Z"},
+        {"sender":"human","text":"three","created_at":"2025-01-01T08:02:00Z"}
+      ]}]"#,
+    )
+    .unwrap();
+    let sessions = export(&file).unwrap();
+    let mut seen = Vec::new();
+    let completed = sessions[0].body(&mut |m| {
+      seen.push(m.text);
+      seen.len() < 2
+    });
+    assert!(!completed);
+    assert_eq!(seen.len(), 2);
   }
 }
