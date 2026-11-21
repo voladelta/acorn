@@ -285,14 +285,14 @@ mod tests {
   use super::*;
 
   #[test]
-  fn a_session_ends_with_its_year_or_a_signout() {
+  fn expired_session_is_rejected_and_pruned() {
     let dir = tempfile::tempdir().unwrap();
     let st = Store::new(dir.path());
     let (id, code) = st.invite("Mom").unwrap();
     let (other, other_code) = st.invite("Dad").unwrap();
     let (_, session) = st.join(&code).unwrap().unwrap();
     let (_, others) = st.join(&other_code).unwrap().unwrap();
-    assert_eq!(who(&st.read().unwrap(), &session), Some(id.clone()));
+    assert_eq!(who(&st.read().unwrap(), &session), Some(id));
 
     // a session older than its cookie signs no one in, and is dropped
     st.change(|book| book.sessions[0].created = now() - SESSION_SECS)
@@ -300,11 +300,19 @@ mod tests {
     let book = st.read().unwrap();
     assert_eq!(who(&book, &session), None);
     assert_eq!(book.sessions.len(), 1, "the next change dropped it");
-    assert_eq!(who(&book, &others), Some(other.clone()));
+    assert_eq!(who(&book, &others), Some(other));
+  }
 
-    // signed out: every device of theirs, and the links not yet used
-    let (_, session) = st.join(&st.link(&id).unwrap()).unwrap().unwrap();
+  #[test]
+  fn signout_revokes_all_sessions_and_unused_links_for_that_user_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = Store::new(dir.path());
+    let (id, code) = st.invite("Mom").unwrap();
+    let (other, other_code) = st.invite("Dad").unwrap();
+    let (_, session) = st.join(&code).unwrap().unwrap();
+    let (_, others) = st.join(&other_code).unwrap().unwrap();
     let unused = st.link(&id).unwrap();
+
     assert_eq!(st.signout(&id).unwrap(), Some(1));
     let book = st.read().unwrap();
     assert_eq!(who(&book, &session), None);
