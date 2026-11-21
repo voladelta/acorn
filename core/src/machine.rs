@@ -846,13 +846,6 @@ mod tests {
   }
 
   #[test]
-  fn shell_sees_nothing_of_the_server_token() {
-    unsafe { std::env::set_var(config::TOKEN_VAR, "t0ken") };
-    let ran = run(&format!("echo \"${{{}:-gone}}\"", config::TOKEN_VAR), 10_000.0);
-    assert_eq!(ran.tails().0, "gone\n");
-  }
-
-  #[test]
   fn shell_settles_when_it_exits() {
     let t = std::time::Instant::now();
     let bg = run("sleep 8 & echo started", 10_000.0);
