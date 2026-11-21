@@ -865,18 +865,48 @@ mod tests {
       "2026-01-02T03:04:00.000Z",
     );
     assert_eq!(k, "2026-01-02T03:04:00.000Z  session in /x/y");
-    assert_eq!(path_short("/Users/me/code/a/b/app/src"), "~/code/…/app/src");
-    assert_eq!(path_short("/Users/me/code"), "~/code");
-    assert_eq!(count(2048, "new "), "2,048 new messages");
-    assert!(injected("<environment_context>") && !injected("<3 you"));
   }
 
   #[test]
-  fn guesses_price_the_tree() {
-    let small = guess(0, &[100, 100, 100, 100]);
-    assert!(small.iter().flatten().all(|&c| c == 0));
-    let big = guess(3, &[5000; 8]);
-    assert!(big[0].iter().all(|&c| c > 0));
-    assert!(usd(3, &[5000; 8]) > 0.0);
+  fn a_folder_and_a_count_read_at_a_glance() {
+    assert_eq!(path_short("/Users/me/code/a/b/app/src"), "~/code/…/app/src");
+    assert_eq!(path_short("/Users/me/code"), "~/code");
+    assert_eq!(count(2048, "new "), "2,048 new messages");
+  }
+
+  #[test]
+  fn what_codex_injects_is_told_from_what_a_person_said() {
+    assert!(injected("<environment_context>") && !injected("<3 you"));
+  }
+
+  /// `batch_of` finds level l's j-th node at `(a >> l) + j`: so a level
+  /// holds the nodes the new messages end, and no more.
+  #[test]
+  fn a_guess_has_the_nodes_the_messages_end() {
+    let levels = |a, n| guess(a, &vec![5000; n]).iter().map(Vec::len).collect::<Vec<_>>();
+    assert_eq!(levels(0, 8), [8, 4, 2, 1]);
+    assert_eq!(levels(3, 8), [8, 4, 2, 1]);
+    assert_eq!(levels(3, 2), [2, 1, 1]);
+    assert_eq!(levels(5, 1), [1, 1]);
+    assert_eq!(levels(4, 1), [1]);
+  }
+
+  #[test]
+  fn a_guess_prices_what_takes_a_call() {
+    assert_eq!(
+      guess(0, &[100; 4]),
+      [vec![0; 4], vec![0; 2], vec![0]],
+      "what fits is free"
+    );
+    let deep = guess(0, &[5000, 5000]);
+    let flat = guess(0, &[2 * LINE + 1]);
+    assert!(flat[0][0] > 0 && deep[0][0] > flat[0][0], "more to read costs more");
+    assert!(
+      deep[1][0] > flat[0][0],
+      "two summaries cost more to merge than a message their size"
+    );
+    // the chat's own older line counts in the first merge
+    assert_eq!(guess(1, &[10]), [[0], [0]]);
+    assert!(guess(1, &[100])[1][0] > 0 && guess(0, &[100, 100])[1][0] == 0);
   }
 }
