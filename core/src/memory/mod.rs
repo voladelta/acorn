@@ -291,6 +291,12 @@ struct Kept {
   batch: bool,
 }
 
+impl Kept {
+  fn end(&self) -> u64 {
+    self.parts.last().map_or(0, |&(l, i)| Part::new(l, i).span().1 + 1)
+  }
+}
+
 /// What ran: the chat's turn, the agents at work.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "WorkAs")]
@@ -454,8 +460,9 @@ impl Memory {
       .db
       .execute("delete from msgs where log = '' and i >= ?", [mem.count])?;
     mem.migrate_import()?;
-    mem.view = mem.opened(mem.view.high, saved.as_ref().map(|s| &s.view));
-    mem.seen = mem.opened(SEEN, saved.as_ref().map(|s| &s.seen));
+    mem.view = mem.opened(mem.view.high, mem.count, saved.as_ref().map(|s| &s.view));
+    let seen_end = saved.as_ref().map_or(mem.count, |s| s.seen.end().min(mem.count));
+    mem.seen = mem.opened(SEEN, seen_end, saved.as_ref().map(|s| &s.seen));
     for part in roots(mem.count)
       .into_iter()
       .flat_map(|p| mem.todo(p))
@@ -468,12 +475,14 @@ impl Memory {
     Ok(mem)
   }
 
-  /// A view as kept (none: the highest nodes built).
-  fn opened(&mut self, high: usize, kept: Option<&Kept>) -> View {
+  /// A view up to `end` as kept (none: the highest nodes built), caching
+  /// every built node past `end` so later `reach` and `merge` see it.
+  fn opened(&mut self, high: usize, end: u64, kept: Option<&Kept>) -> View {
     let keys: Option<HashSet<u64>> = kept.map(|k| k.parts.iter().map(|&(l, i)| Part::new(l, i).slot()).collect());
     let parts: Vec<Part> = roots(self.count)
       .into_iter()
       .flat_map(|p| self.down(p, keys.as_ref()))
+      .filter(|p| p.span().1 < end)
       .collect();
     let size = parts.iter().map(|&p| self.size(p)).sum();
     View {
@@ -783,11 +792,13 @@ impl Memory {
     for (part, text) in parts {
       let text = cut(text);
       self.ready(*part, false);
-      self.nodes.insert(part.slot(), text.to_owned());
+      let old = self.nodes.insert(part.slot(), text.to_owned()).map_or(0, |s| s.len());
       self.sides.remove(&part.span().1);
-      for view in [&mut self.view, &mut self.seen] {
-        if part.l == 0 && part.i < view.end() {
-          view.size += text.len();
+      if part.l == 0 {
+        for view in [&mut self.view, &mut self.seen] {
+          if part.i < view.end() && view.parts[view.cover(part.i)] == *part {
+            view.size = view.size + text.len() - old;
+          }
         }
       }
     }
@@ -1047,7 +1058,8 @@ pub fn line(part: Part, text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-  use super::Work;
+  use super::{Memory, Msg, Part, Work};
+  use crate::Kind;
 
   #[test]
   fn work_reads_as_saved_before() {
@@ -1061,5 +1073,25 @@ mod tests {
     assert_eq!(read(r#"["Acorn's turn", "Ann"]"#), typed);
     assert!(!read(r#"["Ann"]"#).turn);
     assert_eq!(read("[]"), Work::default());
+  }
+
+  #[test]
+  fn store_keeps_view_sizes_exact_on_overwrite_and_merged_parts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut mem = Memory::load(dir.path()).unwrap();
+    mem
+      .push(vec![Msg::new(Kind::User, "first"), Msg::new(Kind::Acorn, "second")])
+      .unwrap();
+    mem
+      .store(&[(Part::new(0, 0), "alpha".into()), (Part::new(0, 1), "beta".into())])
+      .unwrap();
+    mem.fit(false);
+    let exact = |mem: &Memory, parts: &[Part]| parts.iter().map(|&p| mem.size(p)).sum::<usize>();
+    assert_eq!(mem.view.size, exact(&mem, &mem.view.parts));
+    assert_eq!(mem.seen.size, exact(&mem, &mem.seen.parts));
+    // Overwriting an existing leaf updates view.size by the delta, not by adding again.
+    mem.store(&[(Part::new(0, 0), "longer-alpha".into())]).unwrap();
+    assert_eq!(mem.view.size, exact(&mem, &mem.view.parts));
+    assert_eq!(mem.seen.size, exact(&mem, &mem.seen.parts));
   }
 }

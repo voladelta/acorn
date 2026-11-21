@@ -203,4 +203,111 @@ mod tests {
     mem.purge(None, 1).unwrap();
     assert_eq!(mem.message(0).unwrap().text, "first");
   }
+
+  #[test]
+  fn reload_keeps_seen_at_its_frontier_while_import_is_unbuilt() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut mem = Memory::load(dir.path()).unwrap();
+    mem
+      .push(vec![Msg::new(Kind::User, "chat 0"), Msg::new(Kind::Acorn, "chat 1")])
+      .unwrap();
+    mem
+      .store(&[(Part::new(0, 0), "0".into()), (Part::new(0, 1), "1".into())])
+      .unwrap();
+    mem.fit(false);
+    assert_eq!(mem.seen.end(), 2);
+    mem.begin_import().unwrap();
+    mem
+      .stage_import(vec![
+        crate::import::Msg {
+          kind: Kind::User,
+          text: "imported 0".into(),
+          date: "2026-01-01T00:00:00Z".into(),
+          more: false,
+        },
+        crate::import::Msg {
+          kind: Kind::Acorn,
+          text: "imported 1".into(),
+          date: "2026-01-01T00:01:00Z".into(),
+          more: false,
+        },
+      ])
+      .unwrap();
+    mem.finish_import(2).unwrap();
+    mem.fit(false);
+    assert_eq!(mem.seen.end(), 2);
+    drop(mem);
+    let mem = Memory::load(dir.path()).unwrap();
+    assert_eq!(mem.count, 4);
+    assert_eq!(mem.seen.end(), 2);
+  }
+
+  #[test]
+  fn reload_caches_nodes_past_seen_when_view_already_merged_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut mem = Memory::load(dir.path()).unwrap();
+    mem
+      .push(vec![Msg::new(Kind::User, "chat 0"), Msg::new(Kind::Acorn, "chat 1")])
+      .unwrap();
+    mem
+      .store(&[(Part::new(0, 0), "0".into()), (Part::new(0, 1), "1".into())])
+      .unwrap();
+    mem.fit(false);
+    mem.begin_import().unwrap();
+    mem
+      .stage_import(vec![
+        crate::import::Msg {
+          kind: Kind::User,
+          text: "imported 2".into(),
+          date: "2026-01-01T00:00:00Z".into(),
+          more: false,
+        },
+        crate::import::Msg {
+          kind: Kind::Acorn,
+          text: "imported 3".into(),
+          date: "2026-01-01T00:01:00Z".into(),
+          more: false,
+        },
+      ])
+      .unwrap();
+    mem.finish_import(2).unwrap();
+    mem
+      .push(vec![Msg::new(Kind::User, "chat 4"), Msg::new(Kind::Acorn, "chat 5")])
+      .unwrap();
+    mem
+      .store(&[
+        (Part::new(0, 4), "summary 4".into()),
+        (Part::new(0, 5), "summary 5".into()),
+        (Part::new(1, 2), "merged 4-5".into()),
+      ])
+      .unwrap();
+    // Force chat view to merge (1, 2) while seen stays at 2 due to unbuilt import 2..4.
+    mem.view.high = 1;
+    mem.fit(true);
+    assert!(mem.view.parts.contains(&Part::new(1, 2)));
+    assert_eq!(mem.seen.end(), 2);
+    drop(mem);
+
+    let mut mem = Memory::load(dir.path()).unwrap();
+    assert_eq!(mem.seen.end(), 2);
+    assert!(mem.built(Part::leaf(4)));
+    assert!(mem.built(Part::leaf(5)));
+    assert!(mem.built(Part::new(1, 2)));
+
+    mem
+      .store(&[
+        (Part::new(0, 2), "summary 2".into()),
+        (Part::new(0, 3), "summary 3".into()),
+      ])
+      .unwrap();
+    mem.fit(false);
+    assert_eq!(mem.seen.end(), 6);
+    let blocks: String = mem
+      .compaction_blocks(Part::leaf(6))
+      .into_iter()
+      .map(|b| b.text)
+      .collect();
+    assert!(blocks.contains("summary 4"));
+    assert!(blocks.contains("summary 5"));
+  }
 }

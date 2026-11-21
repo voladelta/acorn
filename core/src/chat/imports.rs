@@ -185,17 +185,20 @@ impl Engine {
         let reader = tokio::task::spawn_blocking(move || {
           let mut chunk = Vec::with_capacity(CHUNK);
           for s in &picked {
-            if tx.is_closed() {
+            let ok = s.body(&mut |m| {
+              chunk.push(m);
+              chunk.len() < CHUNK
+                || tx
+                  .blocking_send(std::mem::replace(&mut chunk, Vec::with_capacity(CHUNK)))
+                  .is_ok()
+            });
+            if !ok {
               return;
             }
-            s.body(&mut |m| {
-              chunk.push(m);
-              if chunk.len() == CHUNK {
-                let _ = tx.blocking_send(std::mem::replace(&mut chunk, Vec::with_capacity(CHUNK)));
-              }
-            });
           }
-          let _ = tx.blocking_send(chunk);
+          if !chunk.is_empty() {
+            let _ = tx.blocking_send(chunk);
+          }
         });
         let mut said = 0;
         let mut sizes = Vec::with_capacity(expected);
