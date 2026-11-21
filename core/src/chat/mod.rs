@@ -17,6 +17,7 @@
 //! (`Guard`), before anyone else takes it.
 
 mod agents;
+mod goal;
 pub mod hub;
 mod imports;
 mod turns;
