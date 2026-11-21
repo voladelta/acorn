@@ -597,7 +597,11 @@ impl Memory {
   /// whole in a call: the view's HIGH bytes, PICS images (the last
   /// always).
   pub fn whole(&self, from: u64) -> u64 {
-    let high = config::get().view;
+    self.whole_in(from, config::get().view)
+  }
+
+  /// As `whole`, in `high` bytes.
+  pub fn whole_in(&self, from: u64, high: usize) -> u64 {
     let (mut size, mut pics) = (0, 0);
     let mut k = self.count;
     while k > from {
