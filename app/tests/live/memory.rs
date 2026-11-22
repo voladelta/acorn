@@ -5,6 +5,8 @@
 //! as it is now; a pasted key erased for good.
 
 use crate::kit::*;
+use acorn_core::Kind;
+use acorn_core::memory::{self, Msg};
 
 /// A fact asked to be kept is kept (facts.db), and used where it fits.
 pub fn facts() {
@@ -33,15 +35,52 @@ Allergies: chicken (itchy ears), amoxicillin (vomited 2024-02-11).
 Vet: Dr. Okafor, Maple Grove Animal Clinic, (503) 555-0182, clinic ID MG-2219. Insurance Trupanion policy TP-6610394, deductible $250.
 Scared of thunder; Adaptil collar replaced every 30 days.";
 
-const FILLER: &str = "Use no tools; reply only OK. Context for later, unrelated to my dog: our team's Q3 planning moved to the third floor room 3B, the projector there needs the USB-C dongle from IT, lunch is ordered from the Thai place on 5th, and parking validation is at the front desk until 6 pm.";
+/// A message of the team's, unrelated to the record: logged straight to
+/// memory, not said, so it needs no turn; at most a line's bytes, so it is
+/// its own line and needs no compaction either.
+fn filler(k: usize) -> String {
+  format!(
+    "({k}) Context for later, unrelated to my dog: our team's Q3 planning moved to the third floor room 3B, the projector there needs the USB-C dongle from IT, lunch is ordered from the Thai place on 5th, parking validation is at the front desk until 6 pm, and the office plants are watered on Tuesdays by facilities."
+  )
+}
 
-/// In a small memory (view 3000), a long record and a skill's use, then
-/// enough else that it compacts: details of the record recalled
-/// exactly from deep in the tree, and the skill, changed meanwhile,
-/// followed as it is now, not as remembered.
+/// The question on the record whose answers the chat's calls no longer
+/// see, once the record is merged; None: not yet.
+fn deep_question(record: u64) -> Option<(&'static str, [&'static str; 2], String)> {
+  let engine = acorn_core::chat::hub::ready("default").expect("Acorn's open chat");
+  let chat = engine.lock();
+  let view = &chat.mem.view;
+  let part = view.parts.get(view.cover(record))?;
+  if part.l == 0 {
+    return None;
+  }
+  let mut visible = chat.share().system;
+  for block in chat.mem.view_blocks(chat.mem.count) {
+    visible.push_str(&block.text);
+  }
+  visible.make_ascii_uppercase();
+  [
+    (
+      "What were Biscuit's bordetella vaccine lot and Trupanion policy number?",
+      ["BD2290", "TP-6610394"],
+    ),
+    (
+      "What were Biscuit's clinic ID and PetLink account number?",
+      ["MG-2219", "PL-44827"],
+    ),
+  ]
+  .into_iter()
+  .find(|(_, answers)| answers.iter().any(|v| !visible.contains(v)))
+  .map(|(question, answers)| (question, answers, part.name()))
+}
+
+/// In a small memory (the least view, 32 KB), a long record and a skill's
+/// use, then enough else logged that it compacts: details of the record
+/// recalled exactly from deep in the tree, and the skill, changed
+/// meanwhile, followed as it is now, not as remembered.
 pub fn deep_memory() {
   let when = "Use when asked to write release notes or a changelog";
-  let mut l = Live::start("deep_memory", &[("view", "3000")], |d| {
+  let mut l = Live::start("deep_memory", &[("view", "32000")], |d| {
     skill(
       &d.home().join("skills"),
       "changelog",
@@ -56,36 +95,28 @@ pub fn deep_memory() {
     "Write the release notes for v2: dark mode added, a crash on startup fixed.",
   );
   assert!(t.reply.contains("KESTREL"), "the skill followed: {}", t.reply);
-  let engine = acorn_core::chat::hub::ready("default").expect("Acorn's open chat");
-  let (question, answers) = (1..=10)
-    .find_map(|k| {
-      l.say("Acorn", "default", &format!("({k}) {FILLER}"));
-      let chat = engine.lock();
-      let view = &chat.mem.view;
-      let part = view.parts.get(view.cover(record))?;
-      if part.l == 0 {
-        return None;
-      }
-      let mut visible = chat.share().system;
-      for block in chat.mem.view_blocks(chat.mem.count) {
-        visible.push_str(&block.text);
-      }
-      visible.make_ascii_uppercase();
-      [
-        (
-          "What were Biscuit's bordetella vaccine lot and Trupanion policy number?",
-          ["BD2290", "TP-6610394"],
-        ),
-        (
-          "What were Biscuit's clinic ID and PetLink account number?",
-          ["MG-2219", "PL-44827"],
-        ),
-      ]
-      .into_iter()
-      .find(|(_, answers)| answers.iter().any(|v| !visible.contains(v)))
-      .inspect(|_| l.note(&format!("record {record} compacted into {}", part.name())))
-    })
-    .expect("the record must be merged and at least one requested detail absent from the visible context");
+  // the compactions their lines start run here; the app's runtime is its own
+  let runtime = tokio::runtime::Runtime::new().unwrap();
+  {
+    let _in = runtime.enter();
+    // 110 lines of about 330 bytes: past the view's 32 KB, so it merges
+    let engine = acorn_core::chat::hub::ready("default").expect("Acorn's open chat");
+    let mut chat = engine.lock();
+    let msgs: Vec<Msg> = (1..=110).map(|k| Msg::new(Kind::User, filler(k))).collect();
+    assert!(
+      msgs.iter().all(|m| m.text.len() + 6 <= memory::NODE),
+      "each its own line"
+    );
+    chat.mem.push(msgs).unwrap();
+    chat.pump();
+  }
+  l.until_within(
+    std::time::Duration::from_secs(600),
+    "the record merged, details of it out of the view",
+    |_| deep_question(record).is_some(),
+  );
+  let (question, answers, line) = deep_question(record).unwrap();
+  l.note(&format!("record {record} compacted into {line}"));
   let t = l.say("Acorn", "default", question);
   assert!(
     answers.iter().all(|v| t.replies.contains(v)),
