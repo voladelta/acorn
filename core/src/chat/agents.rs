@@ -302,7 +302,14 @@ impl Engine {
         });
         Out::ok(format!("Sent {}: the user sees it in the chat.", path.display()))
       }
-      "usage" => Out::ok(super::usage::told(num("days", 7).clamp(1, 366) as i64)),
+      "usage" => {
+        let days = num("days", 7).clamp(1, 366) as i64;
+        match tokio::task::spawn_blocking(move || super::usage::told(days)).await {
+          Ok(Ok(report)) => Out::ok(report),
+          Ok(Err(err)) => Out::fail(format!("Cannot read usage: {err:#}")),
+          Err(err) => Out::fail(err.to_string()),
+        }
+      }
       "set_timer" | "list_timers" | "cancel_timer" => {
         let chat = self.lock().id.clone();
         crate::timers::tool(&chat, name, &input).map_or_else(Out::fail, Out::ok)
