@@ -75,7 +75,7 @@ pub fn archived() -> Vec<Assistant> {
 
 /// Every assistant, the archived too: Acorn, Max, the bridges' (as
 /// Telegram App), then those made.
-fn everyone() -> Vec<Assistant> {
+pub(crate) fn everyone() -> Vec<Assistant> {
   let mut all = vec![Assistant::acorn()];
   if config::get().chat != MAX {
     all.push(Assistant::max());

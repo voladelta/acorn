@@ -149,6 +149,35 @@ pub fn whose(id: &str) -> &str {
 
 const WITH: &str = "with";
 
+/// Existing databases, including archived assistants and both ends' threads.
+/// Reading usage must not open an engine (which would resume its work).
+pub(super) fn databases() -> std::io::Result<Vec<PathBuf>> {
+  let ids: std::collections::BTreeSet<_> = assistant::everyone().into_iter().map(|a| a.id).collect();
+  let mut files = Vec::new();
+  let mut add = |dir: PathBuf| -> std::io::Result<()> {
+    let db = dir.join("chat.db");
+    if db.try_exists()? {
+      files.push(db);
+    }
+    Ok(())
+  };
+  for id in &ids {
+    let home = dir(id);
+    add(home.clone())?;
+    let threads = match std::fs::read_dir(home.join(WITH)) {
+      Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+      other => other?,
+    };
+    for entry in threads {
+      let entry = entry?;
+      if entry.file_name().to_str().is_some_and(|id| ids.contains(id)) {
+        add(entry.path())?;
+      }
+    }
+  }
+  Ok(files)
+}
+
 fn open(id: String, me: &Assistant, with: Option<&Assistant>) -> Result<Arc<Engine>, String> {
   let Some(heard) = HEARD.get() else {
     return Err("no one listens to the chats".into());
