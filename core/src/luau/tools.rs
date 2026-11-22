@@ -14,8 +14,8 @@ pub(super) fn bare(url: &str) -> String {
 }
 
 /// A field of an options table, if given.
-fn opt<T: mlua::FromLua>(opts: &Option<Table>, k: &str) -> mlua::Result<Option<T>> {
-  opts.as_ref().map_or(Ok(None), |t| t.get(k))
+fn opt<T: mlua::FromLua>(opts: Option<&Table>, k: &str) -> mlua::Result<Option<T>> {
+  opts.map_or(Ok(None), |t| t.get(k))
 }
 
 /// JSON as Luau: a null is no field at all, not a value to trip on.
@@ -102,7 +102,10 @@ fn told(out: Out) -> Result<String, String> {
 }
 
 async fn read(lua: Lua, who: Caller, (path, opts): (String, Option<Table>)) -> Told {
-  let (offset, limit) = (opt::<usize>(&opts, "offset")?, opt::<usize>(&opts, "limit")?);
+  let (offset, limit) = (
+    opt::<usize>(opts.as_ref(), "offset")?,
+    opt::<usize>(opts.as_ref(), "limit")?,
+  );
   let call = Call::start(&who.run, "read", &path);
   call.end(&lua, blocking(|| machine::text(&who.dir, &path, offset, limit)))
 }
@@ -125,18 +128,18 @@ async fn edit(
     "file_path": path,
     "old_string": &*old.to_str()?,
     "new_string": &*new.to_str()?,
-    "replace_all": opt::<bool>(&opts, "all")?.unwrap_or(false),
+    "replace_all": opt::<bool>(opts.as_ref(), "all")?.unwrap_or(false),
   });
   let call = Call::start(&who.run, "edit", &path);
   call.end(&lua, blocking(|| machine::edit(&who.dir, &input)))
 }
 
 async fn sh(lua: Lua, who: Caller, (cmd, opts): (String, Option<Table>)) -> Told {
-  let secs = opt::<f64>(&opts, "timeout")?
+  let secs = opt::<f64>(opts.as_ref(), "timeout")?
     .filter(|t| !t.is_nan())
     .unwrap_or(SH_TIMEOUT)
     .clamp(1.0, SH_TIMEOUT_MAX);
-  let workdir = opt::<String>(&opts, "cwd")?.map_or_else(|| who.dir.clone(), |d| who.dir.join(d));
+  let workdir = opt::<String>(opts.as_ref(), "cwd")?.map_or_else(|| who.dir.clone(), |d| who.dir.join(d));
   let call = Call::start(&who.run, "sh", &cmd);
   let cancel = call.cancel.clone();
   let got = match machine::shell(&cmd, &workdir, secs * 1000.0, cancel).await {
@@ -267,10 +270,10 @@ async fn http(lua: Lua, who: Caller, req: Table) -> Told {
 
 async fn web_search(lua: Lua, who: Caller, (query, opts): (String, Option<Table>)) -> Told {
   let mut input = json!({"query": query});
-  if let Some(n) = opt::<u64>(&opts, "count")? {
+  if let Some(n) = opt::<u64>(opts.as_ref(), "count")? {
     input["count"] = n.into();
   }
-  if let Some(q) = opt::<String>(&opts, "question")? {
+  if let Some(q) = opt::<String>(opts.as_ref(), "question")? {
     input["question"] = q.into();
   }
   let call = Call::start(&who.run, "web_search", &query);
@@ -281,7 +284,7 @@ async fn web_search(lua: Lua, who: Caller, (query, opts): (String, Option<Table>
 
 async fn web_fetch(lua: Lua, who: Caller, (url, opts): (String, Option<Table>)) -> Told {
   let mut input = json!({"url": url});
-  if let Some(at) = opt::<u64>(&opts, "at")? {
+  if let Some(at) = opt::<u64>(opts.as_ref(), "at")? {
     input["at"] = at.into();
   }
   let call = Call::start(&who.run, "web_fetch", &url);
@@ -308,7 +311,7 @@ async fn decide_all(lua: Lua, who: Caller, (state, questions): (Value, Value)) -
 
 /// relevant's items and keep option, as given: a list of strings, or a
 /// string split as its split option says.
-fn relevant_given(items: Value, opts: &Option<Table>) -> Result<(Vec<String>, f64), String> {
+fn relevant_given(items: Value, opts: Option<&Table>) -> Result<(Vec<String>, f64), String> {
   const ITEMS: &str = "relevant: give a list of strings, or a string";
   let pieces = match items {
     Value::String(text) => {
@@ -327,7 +330,7 @@ fn relevant_given(items: Value, opts: &Option<Table>) -> Result<(Vec<String>, f6
 
 async fn relevant(lua: Lua, who: Caller, (items, about, opts): (Value, String, Option<Table>)) -> Told {
   // Misused, it fails as a tool does, with its message alone.
-  let (pieces, keep) = match relevant_given(items, &opts) {
+  let (pieces, keep) = match relevant_given(items, opts.as_ref()) {
     Ok(given) => given,
     Err(why) => return Ok((false, why.into_lua(&lua)?)),
   };

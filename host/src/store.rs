@@ -162,7 +162,7 @@ impl Store {
       .write(true)
       .mode(0o600)
       .open(&tmp)
-      .and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes()).and_then(|_| f.sync_all()))
+      .and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes()).and_then(|()| f.sync_all()))
       .map_err(|e| format!("{}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, self.file()).map_err(|e| format!("host.json: {e}"))?;
     Ok(out)

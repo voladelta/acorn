@@ -2,7 +2,7 @@
 //! ==============
 //! One chat that never ends per assistant (`chat`, `assistant`), kept forever in a memory tree
 //! (`memory`, built in the background by `compactor`), answered by an
-//! agent on DeepSeek (`ai`) with tools on this Mac (`tools`, `machine`). The app (the `acorn` crate) only shows it: it sends
+//! agent on DeepSeek (`ai`) with tools on this machine (`tools`, `machine`). The app (the `acorn` crate) only shows it: it sends
 //! `Command`s and hears `Event`s (`wire`).
 //!
 //! A chat is kept in its chat.db (`memory`); what the user asked to keep

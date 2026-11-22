@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 
+[lints]
+workspace = true
+
 [features]
 # The engine: chats, memory, the agent and its tools, on this machine.
 # Without it, only what the app and the engine say to each other

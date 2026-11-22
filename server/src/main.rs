@@ -124,9 +124,7 @@ fn args() -> Args {
   let mut a = Args {
     addr: std::env::var("ACORN_ADDR").unwrap_or_else(|_| "127.0.0.1:8484".into()),
     unix: None,
-    web: std::env::var("ACORN_WEB")
-      .map(PathBuf::from)
-      .unwrap_or_else(|_| "web/dist".into()),
+    web: std::env::var("ACORN_WEB").map_or_else(|_| "web/dist".into(), PathBuf::from),
     secure: false,
   };
   let mut args = std::env::args().skip(1);

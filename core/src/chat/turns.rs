@@ -74,7 +74,7 @@ impl Engine {
           if !memory::is_image(&name) {
             text.push_str(&format!("\n[attached: {}]", at.join(&name).display()));
           }
-          names.push(name)
+          names.push(name);
         }
         _ => return self.tell(Event::Note("That file couldn't be kept.".into())),
       }
@@ -102,7 +102,7 @@ impl Engine {
       me.writing(async || {
         me.lock().push_via(Msg::new(Kind::Acorn, text), Some(TIMER));
       })
-      .await
+      .await;
     });
   }
 
@@ -113,7 +113,7 @@ impl Engine {
       me.writing(async || {
         me.lock().push(None, Kind::Note, &text);
       })
-      .await
+      .await;
     });
   }
 
@@ -128,7 +128,7 @@ impl Engine {
         chat.take(span);
         chat.change();
       })
-      .await
+      .await;
     });
   }
 

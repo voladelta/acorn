@@ -83,7 +83,7 @@ const SCENARIOS: &[Scenario] = &[
 const ONE: &str = "ACORN_LIVE_ONE";
 
 /// How long a scenario may run in all.
-const LIMIT: Duration = Duration::from_secs(1800);
+const LIMIT: Duration = Duration::from_mins(30);
 
 fn main() {
   if let Ok(name) = std::env::var(ONE) {

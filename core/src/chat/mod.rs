@@ -344,7 +344,7 @@ impl Engine {
       }
       tokio::select! {
           _ = fitted.changed() => {}
-          _ = halt.cancelled() => {}
+          () = halt.cancelled() => {}
       }
     }
   }
@@ -407,7 +407,11 @@ impl Chat {
   /// system prompt (its assistant's personality after Acorn's, a
   /// thread's asker, then the facts it sees), its assistant's effort.
   pub fn share(&self) -> ai::Ask {
-    let asks = self.with.as_ref().map(|a| a.asking()).unwrap_or_default();
+    let asks = self
+      .with
+      .as_ref()
+      .map(super::assistant::Assistant::asking)
+      .unwrap_or_default();
     let head = crate::tools::master(&self.me.work(), self.with.is_some())
       + &self.me.personality()
       + &asks
@@ -667,7 +671,7 @@ mod tests {
 
   /// A stream's pieces as shown, and what is still kept back.
   fn shown(secrets: &[&str], pieces: &[&str]) -> (String, String) {
-    let secrets: Vec<String> = secrets.iter().map(|s| s.to_string()).collect();
+    let secrets: Vec<String> = secrets.iter().map(std::string::ToString::to_string).collect();
     let mut tail = String::new();
     let out = pieces.iter().map(|p| veil(&secrets, &mut tail, p)).collect();
     (out, tail)
@@ -719,7 +723,10 @@ mod tests {
   /// letter by letter: what `ai::veil` makes of it whole.
   fn shown_as_whole(secrets: &[&str], text: &str, purged: &str) {
     let mut whole = text.to_string();
-    crate::ai::veil(&mut whole, &secrets.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    crate::ai::veil(
+      &mut whole,
+      &secrets.iter().map(std::string::ToString::to_string).collect::<Vec<_>>(),
+    );
     assert_eq!(whole, purged);
     let each: Vec<String> = text.chars().map(String::from).collect();
     let each: Vec<&str> = each.iter().map(String::as_str).collect();

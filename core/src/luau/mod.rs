@@ -6,7 +6,7 @@
 //! calls, so a global set in one (a file loaded, a table built) is there in
 //! the next; locals end with their call.
 //!
-//! Its tools are the Mac's and the web's, as hx names them: read, write,
+//! Its tools are the machine's and the web's, as hx names them: read, write,
 //! edit, sh, then web_search and web_fetch; besides, view shows an image and
 //! ocr reads a document's text (`ocr`). Each runs through `machine`, `web`
 //! or `ocr` in the caller's dir, so a write or edit still needs the file read
@@ -43,7 +43,7 @@ const CHUNK: Duration = Duration::from_secs(120);
 /// The most memory a VM holds.
 const MEMORY: usize = 1 << 30;
 /// How long a VM is kept unused.
-const IDLE: Duration = Duration::from_secs(30 * 60);
+const IDLE: Duration = Duration::from_mins(30);
 /// sh's timeout in seconds: by default, and the most a call may ask.
 const SH_TIMEOUT: f64 = 120.0;
 const SH_TIMEOUT_MAX: f64 = 600.0;

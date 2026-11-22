@@ -76,8 +76,8 @@ fn save(book: &Book) -> Result<(), String> {
   let text = serde_json::to_string_pretty(book).map_err(|e| e.to_string())?;
   let part = dir.join(format!("{FILE}.part"));
   std::fs::create_dir_all(dir)
-    .and_then(|_| std::fs::write(&part, text))
-    .and_then(|_| std::fs::rename(&part, dir.join(FILE)))
+    .and_then(|()| std::fs::write(&part, text))
+    .and_then(|()| std::fs::rename(&part, dir.join(FILE)))
     .map_err(|e| format!("{FILE}: {e}"))
 }
 
@@ -136,8 +136,8 @@ pub fn start() {
         }
         let wait = soonest.map_or(LOOK_MS, |at| (at - crate::now_ms()).clamp(0, LOOK_MS));
         tokio::select! {
-            _ = tokio::time::sleep(Duration::from_millis(wait as u64)) => {}
-            _ = CHANGED.notified() => {}
+            () = tokio::time::sleep(Duration::from_millis(wait as u64)) => {}
+            () = CHANGED.notified() => {}
         }
       }
     });
@@ -216,9 +216,10 @@ pub fn tool(chat: &str, name: &str, input: &Value) -> Result<String, String> {
       let book = BOOK.lock();
       let mut mine: Vec<&Timer> = book.timers.iter().filter(|t| t.chat == chat).collect();
       mine.sort_by_key(|t| t.next);
-      Ok(match mine.is_empty() {
-        true => "No timers.".into(),
-        false => mine.iter().map(|t| line(t, now)).collect::<Vec<_>>().join("\n"),
+      Ok(if mine.is_empty() {
+        "No timers.".into()
+      } else {
+        mine.iter().map(|t| line(t, now)).collect::<Vec<_>>().join("\n")
       })
     }
     "cancel_timer" => {

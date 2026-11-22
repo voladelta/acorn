@@ -171,17 +171,17 @@ fn fitted(bytes: &[u8]) -> Result<Fitted> {
     small: None,
     size: (w, h),
   };
-  if (w as u64) * (h as u64) > PIXELS {
+  if u64::from(w) * u64::from(h) > PIXELS {
     return Ok(as_is);
   }
   let img = image::load_from_memory(bytes).context(IMAGES_ARE)?;
-  let k = (FIT / w.max(h) as f64).min(1.0);
+  let k = (FIT / f64::from(w.max(h))).min(1.0);
   if !(k < 1.0 || bytes.len() > IMAGE) {
     return Ok(as_is);
   }
   let small = img.resize_exact(
-    ((w as f64 * k).round() as u32).max(1),
-    ((h as f64 * k).round() as u32).max(1),
+    ((f64::from(w) * k).round() as u32).max(1),
+    ((f64::from(h) * k).round() as u32).max(1),
     image::imageops::FilterType::Lanczos3,
   );
   let mut out = Vec::new();
@@ -259,7 +259,9 @@ mod tests {
     png[16..20].copy_from_slice(&40000u32.to_be_bytes());
     png[20..24].copy_from_slice(&40000u32.to_be_bytes());
     let crc = png[12..29].iter().fold(!0u32, |crc, &b| {
-      (0..8).fold(crc ^ b as u32, |c, _| (c >> 1) ^ (0xEDB8_8320 & (c & 1).wrapping_neg()))
+      (0..8).fold(crc ^ u32::from(b), |c, _| {
+        (c >> 1) ^ (0xEDB8_8320 & (c & 1).wrapping_neg())
+      })
     });
     png[29..33].copy_from_slice(&(!crc).to_be_bytes());
     assert!(image::load_from_memory(&png).is_err());

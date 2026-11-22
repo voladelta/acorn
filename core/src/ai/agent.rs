@@ -139,7 +139,7 @@ async fn turns(
       _ => None,
     } {
       if end.text.is_empty() {
-        end.text = step.why.clone();
+        end.text.clone_from(&step.why);
       }
       end.stop = Some(stop);
       return Ok(());
@@ -399,7 +399,7 @@ async fn request(ask: &Ask, on: &On, key: &str, body: &Value, cancel: &Cancellat
   }
   let mut flight = tokio::select! {
       flight = cache::wait(ask) => flight,
-      _ = cancel.cancelled() => return None,
+      () = cancel.cancelled() => return None,
   };
   let seat = pace::fly(MODEL, ask.yields.is_some(), cancel).await?;
   let (status, sent) = send(ask, on, key, body, &mut flight, cancel).await;
@@ -430,7 +430,7 @@ async fn send(
     .send();
   let res = tokio::select! {
       res = tokio::time::timeout(IDLE, post) => Some(res),
-      _ = cancel.cancelled() => None,
+      () = cancel.cancelled() => None,
   };
   let (after, step, ok) = match res {
     None => (None, fail("stopped", &[], Halt::Lost), false),
@@ -489,7 +489,7 @@ async fn refused(res: reqwest::Response, cancel: &CancellationToken) -> Step {
   // its why may stall as a stream does: a stop cuts it too
   let told = tokio::select! {
       told = tokio::time::timeout(IDLE, res.text()) => told,
-      _ = cancel.cancelled() => return fail("stopped", &[], Halt::Lost),
+      () = cancel.cancelled() => return fail("stopped", &[], Halt::Lost),
   };
   let why = reason(&told.ok().and_then(Result::ok).unwrap_or_default());
   if halt != Halt::Busy {
@@ -543,7 +543,7 @@ async fn stream(
   loop {
     let chunk = tokio::select! {
         biased;
-        _ = cancel.cancelled() => return fail("stopped", &seen.lock(), Halt::Lost),
+        () = cancel.cancelled() => return fail("stopped", &seen.lock(), Halt::Lost),
         chunk = tokio::time::timeout(IDLE, bytes.next()) => chunk,
     };
     let chunk = match chunk {
@@ -985,9 +985,10 @@ mod tests {
     }
 
     fn purged(&self) -> Vec<String> {
-      match self.0.load(std::sync::atomic::Ordering::SeqCst) {
-        true => vec![SECRET.into()],
-        false => vec![],
+      if self.0.load(std::sync::atomic::Ordering::SeqCst) {
+        vec![SECRET.into()]
+      } else {
+        vec![]
       }
     }
   }
@@ -1072,7 +1073,7 @@ mod tests {
   #[test]
   fn secrets_that_overlap_are_veiled_whole() {
     let veiled = |text: &str, secrets: &[&str]| {
-      let secrets: Vec<String> = secrets.iter().map(|s| s.to_string()).collect();
+      let secrets: Vec<String> = secrets.iter().map(std::string::ToString::to_string).collect();
       let mut text = text.to_string();
       crate::ai::veil(&mut text, &secrets);
       text

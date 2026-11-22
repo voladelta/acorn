@@ -1,11 +1,11 @@
 //! Machine
 //! =======
-//! What touches this Mac, as `luau`'s code calls it: a command run
+//! What touches this machine, as `luau`'s code calls it: a command run
 //! (`shell`), a file read (`text`), written (`write`) or edited (`edit`),
 //! each in its caller's dir under the work dir. They follow DeepSeek's
 //! harness (deepseek-harness: tool-bash, tool-fs, fs-local,
 //! fs-observation-policy): its arguments, results and errors; its
-//! foreground bash (no background jobs) on a Mac with no file sandbox.
+//! foreground bash (no background jobs) on a machine with no file sandbox.
 //!
 //! A caller may write over or edit a file only as it last read, wrote or
 //! edited it (`SEEN`): one it never read, or that changed since, is refused

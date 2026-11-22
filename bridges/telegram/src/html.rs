@@ -67,15 +67,14 @@ fn blocks(md: &str) -> Vec<String> {
 /// characters); a code block's pieces each fenced.
 fn cut(block: &str) -> Vec<String> {
   let code = block.trim_start().starts_with("```");
-  let (open, body) = match code {
-    true => {
-      let (first, rest) = block.split_once('\n').unwrap_or((block, ""));
-      (
-        first.trim().to_string(),
-        rest.trim_end().trim_end_matches("```").to_string(),
-      )
-    }
-    false => (String::new(), block.to_string()),
+  let (open, body) = if code {
+    let (first, rest) = block.split_once('\n').unwrap_or((block, ""));
+    (
+      first.trim().to_string(),
+      rest.trim_end().trim_end_matches("```").to_string(),
+    )
+  } else {
+    (String::new(), block.to_string())
   };
   let room = PIECE
     .saturating_sub(if code { open.chars().count() + 8 } else { 0 })
@@ -103,9 +102,10 @@ fn cut(block: &str) -> Vec<String> {
   if !cur.is_empty() {
     parts.push(cur);
   }
-  match code {
-    true => parts.into_iter().map(|p| format!("{open}\n{p}\n```")).collect(),
-    false => parts,
+  if code {
+    parts.into_iter().map(|p| format!("{open}\n{p}\n```")).collect()
+  } else {
+    parts
   }
 }
 

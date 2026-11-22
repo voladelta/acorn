@@ -7,7 +7,7 @@
 //! (PEERS), keeps facts and purges messages or takes a purge back (KEEP),
 //! and sets goals, reads usage, imports, exports and draws its memory
 //! (HOME); in a thread, where another assistant asks it something, it gets
-//! none of those. Its hands on this Mac and the web are luau alone
+//! none of those. Its hands on this machine and the web are luau alone
 //! (`luau`): code that reads, writes, edits and runs commands (`machine`),
 //! each caller in its own dir under the work dir, and searches and fetches
 //! the web (`web`). The agents themselves run in `chat::agents`.
@@ -172,7 +172,7 @@ A person the user wants to keep (\"hire a stylist called Marrie\") is a new
 assistant: create them.
 ";
 
-/// Where the tools run: this Mac, the work dir.
+/// Where the tools run: this machine, the work dir.
 fn mac(work: &Path) -> String {
   let work = work.display();
   format!(
@@ -182,7 +182,7 @@ fn mac(work: &Path) -> String {
   )
 }
 
-/// An agent's prompt: its part, then the view's and the Mac's docs.
+/// An agent's prompt: its part, then the view's and the machine's docs.
 pub fn sub(work: &Path) -> String {
   format!(
     "You are an agent Acorn delegated one task to: Acorn is an AI agent that works
@@ -444,7 +444,7 @@ fn keep() -> Vec<Spec> {
   ]
 }
 
-/// The hands: luau, whose code runs on this Mac (in the caller's own dir)
+/// The hands: luau, whose code runs on this machine (in the caller's own dir)
 /// and reads the web.
 fn kit() -> Vec<Spec> {
   vec![luau::tool()]
@@ -452,7 +452,7 @@ fn kit() -> Vec<Spec> {
 
 /// What a caller may use: an assistant with the user all; one answering
 /// in a thread (`thread`) its work tools alone; an agent its own and
-/// the Mac's.
+/// the machine's.
 pub fn list(who: &str, thread: bool) -> Vec<Spec> {
   let mut specs = own();
   if who == MAIN {

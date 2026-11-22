@@ -6,6 +6,9 @@ license.workspace = true
 version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 acorn-core = { path = "../../core" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

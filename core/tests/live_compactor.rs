@@ -112,7 +112,7 @@ async fn which_facts_survive_each_level() {
   };
   // all leaves and merges built: wait on settle, then on the top merges
   assert!(engine.settle(count, &CancellationToken::new()).await);
-  let deadline = Instant::now() + Duration::from_secs(900);
+  let deadline = Instant::now() + Duration::from_mins(15);
   loop {
     let built = {
       let chat = engine.lock();

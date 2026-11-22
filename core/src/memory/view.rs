@@ -290,7 +290,7 @@ impl Memory {
 
   /// The tree's levels: as many as the count's bits.
   pub fn levels(&self) -> u32 {
-    u64::BITS - self.count.leading_zeros()
+    self.count.bit_width()
   }
 }
 

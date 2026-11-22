@@ -180,9 +180,10 @@ pub fn sweep(tg: &Tg, now: i64) {
       .collect();
     let part = path.with_extension("part");
     let text = kept.iter().map(|l| format!("{l}\n")).collect::<String>();
-    let done = match kept.is_empty() {
-      true => std::fs::remove_file(&path),
-      false => std::fs::write(&part, text).and_then(|_| std::fs::rename(&part, &path)),
+    let done = if kept.is_empty() {
+      std::fs::remove_file(&path)
+    } else {
+      std::fs::write(&part, text).and_then(|()| std::fs::rename(&part, &path))
     };
     if let Err(err) = done {
       eprintln!("acorn: telegram: sweep {id}: {err}");
@@ -198,8 +199,8 @@ pub async fn sweeper(tg: Arc<Tg>) {
     let next = cron.next(&Local::now()).map(|t| t - Local::now());
     let wait = next.and_then(|d| d.to_std().ok()).unwrap_or(Duration::from_secs(3600));
     tokio::select! {
-        _ = tokio::time::sleep(wait) => {}
-        _ = tg.stop.cancelled() => return,
+        () = tokio::time::sleep(wait) => {}
+        () = tg.stop.cancelled() => return,
     }
   }
 }

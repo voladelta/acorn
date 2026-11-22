@@ -87,7 +87,7 @@ impl Runner {
         wait = FIRST_WAIT;
       }
       tokio::select! {
-        _ = tokio::time::sleep(wait) => {}
+        () = tokio::time::sleep(wait) => {}
         _ = stop.changed() => {}
       }
       wait = (wait * 2).min(MOST_WAIT);

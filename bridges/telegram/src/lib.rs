@@ -166,8 +166,8 @@ impl Tg {
     let text = serde_json::to_string_pretty(state).unwrap_or_default();
     let part = self.dir.join(format!("{FILE}.part"));
     let done = std::fs::create_dir_all(&self.dir)
-      .and_then(|_| std::fs::write(&part, text))
-      .and_then(|_| std::fs::rename(&part, self.dir.join(FILE)));
+      .and_then(|()| std::fs::write(&part, text))
+      .and_then(|()| std::fs::rename(&part, self.dir.join(FILE)));
     if let Err(err) = done {
       eprintln!("acorn: {FILE}: {err}");
     }
@@ -188,8 +188,8 @@ impl Tg {
         Err(Fail::Down(why)) => {
           eprintln!("acorn: telegram: {why}");
           tokio::select! {
-            _ = self.stop.cancelled() => return,
-            _ = tokio::time::sleep(wait) => {}
+            () = self.stop.cancelled() => return,
+            () = tokio::time::sleep(wait) => {}
           }
           wait = (wait * 2).min(Duration::from_secs(300));
         }
@@ -241,15 +241,15 @@ impl Tg {
             ));
           }
           tokio::select! {
-            _ = self.stop.cancelled() => return,
-            _ = tokio::time::sleep(Duration::from_secs(POLL / 2)) => {}
+            () = self.stop.cancelled() => return,
+            () = tokio::time::sleep(Duration::from_secs(POLL / 2)) => {}
           }
         }
         Err(why) => {
           eprintln!("acorn: telegram: {why}");
           tokio::select! {
-            _ = self.stop.cancelled() => return,
-            _ = tokio::time::sleep(wait) => {}
+            () = self.stop.cancelled() => return,
+            () = tokio::time::sleep(wait) => {}
           }
           wait = (wait * 2).min(Duration::from_secs(300));
         }
@@ -284,14 +284,11 @@ impl Tg {
     if let Some(change) = update.get("my_chat_member") {
       return self.member(change).await;
     }
-    let (msg, edited) = match ["message", "channel_post", "edited_message", "edited_channel_post"]
+    let found = ["message", "channel_post", "edited_message", "edited_channel_post"]
       .iter()
       .enumerate()
-      .find_map(|(k, key)| update.get(*key).map(|m| (m, k >= 2)))
-    {
-      Some(found) => found,
-      None => return,
-    };
+      .find_map(|(k, key)| update.get(*key).map(|m| (m, k >= 2)));
+    let Some((msg, edited)) = found else { return };
     let chat = &msg["chat"];
     match chat["type"].as_str() {
       Some("private") => self.private(msg, edited).await,
@@ -443,15 +440,16 @@ impl Tg {
     } else {
       ""
     };
-    let said = match allowed {
-      true => format!(
+    let said = if allowed {
+      format!(
         "I'm in «{}» ({}) now, keeping its last 24 hours.{deaf}",
         room.title, room.kind
-      ),
-      false => format!(
+      )
+    } else {
+      format!(
         "{by} added me to «{}» ({}). I'm not recording it: say \"allow {}\" to Telegram App to.{deaf}",
         room.title, room.kind, room.title
-      ),
+      )
     };
     self.tell_owner(&said).await;
   }

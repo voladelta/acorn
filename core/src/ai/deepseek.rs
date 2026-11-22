@@ -17,7 +17,7 @@ pub use crate::wire::MODEL;
 pub const URL: &str = "https://api.deepseek.com/responses";
 /// A request's most output tokens: DeepSeek's documented cap.
 pub const MAX_OUTPUT_TOKENS: u64 = 384_000;
-pub const IDLE: Duration = Duration::from_secs(1200);
+pub const IDLE: Duration = Duration::from_mins(20);
 
 /// What a request sends after the system prompt: the user's text and
 /// images, the model's output as its API gave it, its reply so far as

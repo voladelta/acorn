@@ -7,6 +7,21 @@ edition = "2024"
 license = "Apache-2.0"
 version = "0.1.0"
 
+# Beyond clippy's defaults: the idioms the code keeps to.
+[workspace.lints.clippy]
+assigning_clones = "warn"
+cast_lossless = "warn"
+duration_suboptimal_units = "warn"
+ignored_unit_patterns = "warn"
+manual_bit_width = "warn"
+manual_let_else = "warn"
+map_unwrap_or = "warn"
+match_bool = "warn"
+range_plus_one = "warn"
+redundant_closure_for_method_calls = "warn"
+ref_option = "warn"
+semicolon_if_nothing_returned = "warn"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

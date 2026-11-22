@@ -204,9 +204,9 @@ pub async fn mirror(tg: Arc<Tg>, mut events: UnboundedReceiver<Event>) {
 async fn typist(tg: Arc<Tg>, typing: Arc<Typing>) {
   loop {
     tokio::select! {
-        _ = tokio::time::sleep(TYPING) => {}
-        _ = typing.begun.notified() => {}
-        _ = tg.stop.cancelled() => return,
+        () = tokio::time::sleep(TYPING) => {}
+        () = typing.begun.notified() => {}
+        () = tg.stop.cancelled() => return,
     }
     let fresh = typing.last.lock().is_none_or(|t| t.elapsed() >= SHOWN);
     let at = tg.route.lock().room.map(|(chat, _)| chat).or(tg.owner());
