@@ -436,7 +436,7 @@ impl Chat {
       }
     }
     let said = if back {
-      self.mem.unpurge(agent, id, &self.secrets)
+      self.mem.unpurge(agent, id)
     } else {
       self.mem.purge(agent, id)
     };
@@ -449,7 +449,8 @@ impl Chat {
     said
   }
 
-  /// Every message holding `text` purged, the chat's and the agents',
+  /// Every message holding `text` purged, the chat's and the agents', for
+  /// good (not to be taken back, as none held before is: `kept_from`),
   /// and from now on `text` written `[purged]` in whatever is logged: a
   /// search's results, this very call, a reply. Answers what it erased.
   pub(super) fn purge_text(&mut self, text: &str) -> String {
@@ -476,6 +477,10 @@ impl Chat {
         Err(err) => return format!("The purge failed: {err}"),
       }
       last = Some(at);
+    }
+    // held for undo, it would come back: never, on disk too, and wiped
+    if let Err(err) = self.mem.kept_from(text) {
+      return format!("The purge failed: {err}");
     }
     // a summary may have copied it from its context; a fact may keep it
     let lines = match self.mem.sweep(text) {
@@ -512,7 +517,7 @@ impl Chat {
       what += &format!("; forgot the {facts} facts holding it");
     }
     format!(
-      "{what}; from now on it is written [purged] wherever a message would hold it, this call too. unpurge takes a message back by its id for ten minutes; then its old bytes are wiped from Acorn's files once the chat is idle."
+      "{what}; from now on it is written [purged] wherever a message would hold it, this call too. Purged as text, they can't be taken back (unpurge); their old bytes are wiped from Acorn's files once the chat is idle."
     )
   }
 
@@ -758,7 +763,14 @@ mod tests {
     let engine = open(dir.path());
     let mut chat = engine.lock();
     let msg = chat.push(None, crate::Kind::User, "my code is my-project-code-1234");
-    chat.purge_text("my-project-code-1234");
+    // purged by id first: no message shows it when its text is purged
+    let early = chat.push(None, crate::Kind::User, "again: my-project-code-1234");
+    chat.purge(None, early.id, false);
+    let said = chat.purge_text("my-project-code-1234");
+    assert!(said.contains("can't be taken back"), "{said}");
+    let said = chat.purge(None, early.id, true);
+    assert!(said.contains("stays purged"), "{said}");
+    assert_eq!(chat.mem.message(early.id).unwrap().text, crate::memory::PURGED);
     chat.purge_text("my-project-code-1234");
     assert_eq!(chat.secrets.len(), 1);
     let said = chat.purge(None, msg.id, true);

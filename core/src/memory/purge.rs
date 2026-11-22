@@ -9,6 +9,10 @@ use super::*;
 /// erase it for good.
 pub const GRACE: i64 = 10 * 60 * 1000;
 
+/// When a message holding a secret purged as text (`kept_from`) was held:
+/// never, so it is past its GRACE at once, and the next wipe erases it.
+const SECRET_AT: i64 = 0;
+
 /// Its table in chat.db: what each page purged held (its images as JSON),
 /// and when (ms).
 pub(super) fn tables(db: &Connection) -> rusqlite::Result<()> {
@@ -93,10 +97,9 @@ impl Memory {
   /// A purge taken back, while its message is held (`purge`): its text,
   /// images and line back, and, in the chat, the nodes built without it
   /// let go, so it and those above build anew with it. Answers what it
-  /// did.
-  /// A message holding any of `secrets` (purged as text, `purge_text`) is
-  /// not taken back: it stays purged, as does every copy of the secret.
-  pub fn unpurge(&mut self, agent: Option<&str>, id: u64, secrets: &[String]) -> Result<String> {
+  /// did. A message holding a secret purged as text (`kept_from`) is not
+  /// taken back.
+  pub fn unpurge(&mut self, agent: Option<&str>, id: u64) -> Result<String> {
     let log = agent.unwrap_or(CHAT);
     let Some((a, b)) = self.pages_of(agent, id) else {
       return Ok(no_message(agent, id));
@@ -110,6 +113,11 @@ impl Memory {
       params![log, a, b],
       |r| r.get(0),
     )?;
+    if oldest == Some(SECRET_AT) {
+      return Ok(format!(
+        "Message {id} holds a secret purged as text: it stays purged, as that secret does everywhere."
+      ));
+    }
     if oldest.is_none_or(|at| at <= crate::now_ms() - GRACE) {
       return Ok(format!(
         "Message {id} isn't held for undo: it was never purged, or its ten minutes are over."
@@ -136,11 +144,6 @@ impl Memory {
         )
         .optional()?;
       let Some((text, images, line)) = back else { continue };
-      if secrets.iter().any(|secret| text.contains(secret.as_str())) {
-        return Ok(format!(
-          "Message {id} holds a secret purged as text: it stays purged, as that secret does everywhere."
-        ));
-      }
       root.text = text;
       root.images = serde_json::from_str(&images)?;
       root.line = line;
@@ -166,6 +169,43 @@ impl Memory {
         )
       }
     })
+  }
+
+  /// Every message held (`purge`) holding `text`, in a page's text or
+  /// line or across a page's end, never to be taken back: each of its
+  /// pages past its GRACE at once, so the next wipe erases them, and a
+  /// wipe owed. Answers how many messages.
+  pub fn kept_from(&mut self, text: &str) -> Result<usize> {
+    let held: Vec<(String, u64)> = {
+      let mut q = self.db.prepare(
+        "select log, i from held h where instr(text, ?1) > 0 or instr(line, ?1) > 0
+          or (exists (select 1 from msgs where log = h.log and i = h.i and more) and instr(
+            substr(text, 1 - length(?1)) || coalesce((select substr(text, 1, length(?1) - 1) from held
+              where log = h.log and i = h.i + 1), ''), ?1) > 0)",
+      )?;
+      let rows = q.query_map([text], |r| Ok((r.get(0)?, r.get(1)?)))?;
+      rows.collect::<rusqlite::Result<_>>()?
+    };
+    let mut messages = HashSet::new();
+    for (log, i) in held {
+      let agent = (log != CHAT).then_some(log.as_str());
+      let (a, b) = self.pages_of(agent, i).unwrap_or((i, i));
+      messages.insert((log, a, b));
+    }
+    if messages.is_empty() {
+      return Ok(0);
+    }
+    self.owe_wipe()?;
+    let tx = self.db.transaction()?;
+    for (log, a, b) in &messages {
+      tx.execute(
+        "update held set at = ? where log = ? and i between ? and ?",
+        params![SECRET_AT, log, a, b],
+      )?;
+    }
+    tx.commit()?;
+    self.purged += 1;
+    Ok(messages.len())
   }
 
   /// Every summary holding `text` let go, and those built from one: a
@@ -453,6 +493,90 @@ mod tests {
     mem.purge(None, 1).unwrap();
     assert_eq!(mem.holding(key), None);
     assert_eq!(mem.message(2).unwrap().text, PURGED, "each page of it");
+  }
+
+  /// A message held holding a secret purged as text is never taken back,
+  /// after a restart too, however it holds it: across a page's end, in its
+  /// line, or purged by id before the secret was; the next wipe erases it,
+  /// though in its GRACE. Others held are as they were.
+  #[test]
+  fn a_message_holding_a_secret_is_not_held_for_undo() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut mem = Memory::load(dir.path()).unwrap();
+    let key = "sk-test-ABCD1234-EFGH5678";
+    mem.push(vec![Msg::new(Kind::User, "hello")]).unwrap();
+    // 1, 2: the page ends 10 characters into the key
+    let text = format!("{}{key}{}", "é".repeat(crate::clip::CAP - 10), "y".repeat(50));
+    mem.push(vec![Msg::new(Kind::User, text)]).unwrap();
+    // 3: in its line only
+    let line = Msg {
+      line: Some(format!("the key {key}")),
+      ..Msg::new(Kind::Acorn, "a reply")
+    };
+    mem.push(vec![line]).unwrap();
+    // 4: an aside; 5, 6: the key's halves, which only together spell it
+    mem.push(vec![Msg::new(Kind::User, "an aside")]).unwrap();
+    mem.push(vec![Msg::new(Kind::User, &key[..10])]).unwrap();
+    mem.push(vec![Msg::new(Kind::User, &key[10..])]).unwrap();
+    assert_eq!(mem.count, 7);
+    // each purged by id first, as the user may before purging the key
+    for id in [1, 3, 4, 5, 6] {
+      mem.purge(None, id).unwrap();
+    }
+    assert_eq!(mem.holding(key), None, "no message shows it");
+    let purged = mem.purged;
+    assert_eq!(mem.kept_from(key).unwrap(), 2);
+    assert_eq!(mem.purged, purged + 1, "a wipe is owed");
+    assert_eq!(mem.kept_from("not held anywhere").unwrap(), 0);
+    let at = |mem: &Memory, i: u64| -> i64 {
+      mem
+        .db
+        .query_row("select at from held where log = ? and i = ?", params![CHAT, i], |r| {
+          r.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(
+      (at(&mem, 1), at(&mem, 2), at(&mem, 3)),
+      (SECRET_AT, SECRET_AT, SECRET_AT)
+    );
+    assert!(at(&mem, 5) > SECRET_AT && at(&mem, 6) > SECRET_AT);
+    for _ in 0..2 {
+      for id in [1, 2, 3] {
+        let said = mem.unpurge(None, id).unwrap();
+        assert!(said.contains("stays purged"), "{id}: {said}");
+        assert_eq!(mem.message(id).unwrap().text, PURGED);
+        assert_eq!(mem.message(id).unwrap().line, None);
+      }
+      drop(mem);
+      mem = Memory::load(dir.path()).unwrap();
+    }
+    wipe(dir.path(), crate::now_ms() - GRACE).unwrap();
+    let held: Vec<u64> = {
+      let mut q = mem.db.prepare("select i from held order by i").unwrap();
+      q.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    };
+    assert_eq!(held, [4, 5, 6], "wiped, though in its grace");
+    for id in [4, 5] {
+      assert!(mem.unpurge(None, id).unwrap().starts_with("Unpurged"));
+    }
+    assert_eq!(mem.message(4).unwrap().text, "an aside");
+    assert_eq!(mem.message(5).unwrap().text, &key[..10]);
+  }
+
+  /// An agent's message held holding the secret is not taken back either.
+  #[test]
+  fn an_agents_message_holding_a_secret_is_not_held_for_undo() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut mem = Memory::load(dir.path()).unwrap();
+    let key = "sk-test-ABCD1234";
+    mem.agent_push("Scout", Kind::Echo, "nothing here").unwrap();
+    mem.agent_push("Scout", Kind::Echo, &format!("found {key}")).unwrap();
+    mem.purge(Some("Scout"), 0).unwrap();
+    mem.purge(Some("Scout"), 1).unwrap();
+    assert_eq!(mem.kept_from(key).unwrap(), 1);
+    assert!(mem.unpurge(Some("Scout"), 1).unwrap().contains("stays purged"));
+    assert!(mem.unpurge(Some("Scout"), 0).unwrap().starts_with("Unpurged"));
   }
 
   /// Every node ready built, a call's line cut from its source, till

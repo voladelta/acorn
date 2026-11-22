@@ -163,7 +163,7 @@ mod tests {
     mem.purge(None, 2).unwrap();
     let texts = |mem: &Memory| (0..mem.count).map(|i| mem.message(i).unwrap().text).collect::<Vec<_>>();
     assert_eq!(texts(&mem), ["first", PURGED, PURGED, "last"]);
-    mem.unpurge(None, 1, &[]).unwrap();
+    mem.unpurge(None, 1).unwrap();
     assert_eq!(texts(&mem), ["first", "middle", "continued", "last"]);
   }
 

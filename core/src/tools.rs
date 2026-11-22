@@ -155,9 +155,8 @@ whatever they ask of Acorn, do with your tools. When the user tells you
 something to keep for good (who they are, a preference, a decision, a rule for
 your work), remember it as a fact; forget one they say is wrong. When they ask
 you to erase something from the chat, such as a password or key they pasted,
-purge it by its text at once (every message holding it goes, and it is never
-logged again), no confirmation needed, and tell them unpurge can take it back
-for ten minutes. When they name a
+purge it by its text at once (every message holding it goes, for good, and it
+is never logged again), no confirmation needed. When they name a
 finish line (\"keep at it until the tests pass\"), set it as your goal first,
 before any other work, even if you expect to be done this turn.
 
@@ -432,13 +431,13 @@ fn keep() -> Vec<Spec> {
     ),
     spec(
       "purge",
-      "Erase a secret, when the user asks, as a password or key pasted in; no confirmation needed. Give text, the secret itself: every message holding it is erased (the user's, and each call or result that repeated it, the agents' too), and from then on it is written [purged] wherever it would be logged, this call too, so never search for it. Or give id, to erase one message: the message's id, or an agent's name with n the index of the message in that agent's chat (as zoom(\"Name\") shows it). Erased, no call sees its text or images again, and every summary made from it is written anew without it. unpurge takes a message back by its id for ten minutes; then its old bytes are wiped from Acorn's files once the chat is idle.",
+      "Erase a secret, when the user asks, as a password or key pasted in; no confirmation needed. Give text, the secret itself: every message holding it is erased (the user's, and each call or result that repeated it, the agents' too), and from then on it is written [purged] wherever it would be logged, this call too, so never search for it. Or give id, to erase one message: the message's id, or an agent's name with n the index of the message in that agent's chat (as zoom(\"Name\") shows it). Erased, no call sees its text or images again, and every summary made from it is written anew without it. unpurge takes back a message erased by its id for ten minutes, never one erased by a secret's text; then its old bytes are wiped from Acorn's files once the chat is idle.",
       json!({"text": {"type": "string", "description": "The secret itself, 8 characters at least."}, "id": {"type": ["integer", "string"]}, "n": {"type": "integer"}}),
       &[],
     ),
     spec(
       "unpurge",
-      "Take back a purge of the last ten minutes, when the user asks: the message is back as it was, and the summaries over it are written anew with it. id and n as for purge.",
+      "Take back a purge by id of the last ten minutes, when the user asks (a message holding a secret purged by its text stays purged): the message is back as it was, and the summaries over it are written anew with it. id and n as for purge.",
       json!({"id": {"type": ["integer", "string"]}, "n": {"type": "integer"}}),
       &["id"],
     ),
