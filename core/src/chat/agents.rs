@@ -181,6 +181,34 @@ impl Toolbox for Kit {
 /// The biggest file `send_file` sends (Telegram's most for a bot).
 const SEND_BYTES: u64 = 50 << 20;
 
+/// A field of a tool's input as a number, else `def`.
+fn num(input: &Value, k: &str, def: u64) -> u64 {
+  number(&input[k]).unwrap_or(def)
+}
+
+/// A field of a tool's input as text, trimmed; none: empty.
+fn text(input: &Value, k: &str) -> String {
+  input[k].as_str().unwrap_or_default().trim().to_string()
+}
+
+/// Whether a tool's id names an agent (a name), not a message (a number).
+fn names_agent(id: &str) -> bool {
+  id.starts_with(|c: char| c.is_ascii_alphabetic())
+}
+
+/// Work on the disk (SQLite, a file), off the async workers: what it
+/// gave, else why not (its own failure, or its task's).
+async fn off<T, E>(work: impl FnOnce() -> Result<T, E> + Send + 'static) -> Result<T, String>
+where
+  T: Send + 'static,
+  E: std::fmt::Display + Send + 'static,
+{
+  match tokio::task::spawn_blocking(work).await {
+    Ok(got) => got.map_err(|err| err.to_string()),
+    Err(err) => Err(err.to_string()),
+  }
+}
+
 impl Engine {
   async fn tool(
     self: Arc<Self>,
@@ -190,38 +218,15 @@ impl Engine {
     cancel: CancellationToken,
     halt: CancellationToken,
   ) -> Out {
-    let num = |k: &str, def: u64| number(&input[k]).unwrap_or(def);
-    let str = |k: &str| input[k].as_str().unwrap_or_default().trim().to_string();
+    let str = |k: &str| text(&input, k);
     match name {
-      "zoom" => {
-        if let Some(lines) = input["id"].as_str().and_then(|name| self.thread_lines(name)) {
-          self.lock().mem.look("zoom", 1);
-          return Out::ok(clip::page(&lines, num("at", 0) as usize));
-        }
-        let mut chat = self.lock();
-        let (n, at) = (num("n", 1), num("at", 0) as usize);
-        match &input["id"] {
-          Value::String(id) if id.starts_with(|c: char| c.is_ascii_alphabetic()) => {
-            let log = chat.mem.agent_show(id);
-            chat.mem.look("zoom", usize::from(!log.starts_with("No agent ")));
-            Out::ok(clip::page(&log, at))
-          }
-          id => {
-            let id = number(id).unwrap_or(u64::MAX);
-            let imgs = if n == 1 && at == 0 { chat.mem.images(id) } else { vec![] };
-            Out {
-              imgs,
-              ..Out::ok(chat.mem.zoom(id, n, at))
-            }
-          }
-        }
-      }
-      "date" => Out::ok(self.lock().mem.date(num("id", u64::MAX))),
+      "zoom" => self.zoom(&input),
+      "date" => Out::ok(self.lock().mem.date(num(&input, "id", u64::MAX))),
       "search" => Out::ok(
         self
           .lock()
           .mem
-          .search(memory::CHAT, &str("query"), num("n", 10) as usize),
+          .search(memory::CHAT, &str("query"), num(&input, "n", 10) as usize),
       ),
       "list_skills" => {
         Out::ok(crate::skills::list_for(&crate::skills::roots(&cwd, &str("dir")), &str("task"), &cancel).await)
@@ -229,81 +234,13 @@ impl Engine {
       "load_skill" => {
         crate::skills::load(&crate::skills::roots(&cwd, &str("dir")), &str("name")).map_or_else(Out::fail, Out::ok)
       }
-      "delegate" => {
-        let effort = match &input["effort"] {
-          Value::Null => None,
-          e => match e.as_str().and_then(Effort::parse) {
-            Some(effort) => Some(effort),
-            None => return no_effort(e),
-          },
-        };
-        let tasks: Vec<String> = input["tasks"]
-          .as_array()
-          .into_iter()
-          .flatten()
-          .map(|t| t.as_str().map_or_else(|| t.to_string(), str::to_string))
-          .collect();
-        Out::ok(self.delegate(tasks, effort, &halt).await)
-      }
+      "delegate" => self.delegate_tool(&input, &halt).await,
       "tell" => Out::ok(self.tell_agent(&str("name"), &str("message")).await),
-      "fire" => {
-        let mut chat = self.lock();
-        let name = Some(str("name")).filter(|n| !n.is_empty());
-        let at = chat
-          .working()
-          .into_iter()
-          .filter(|w| name.as_ref().is_none_or(|n| n == w))
-          .collect::<Vec<_>>();
-        chat.stop_agents(name.as_deref());
-        chat.change();
-        match (at.is_empty(), name) {
-          (true, Some(name)) => Out::fail(format!("No agent {name} at work.")),
-          (true, None) => Out::ok("No agent was at work."),
-          _ => Out::ok(format!("Fired {}.", at.join(", "))),
-        }
-      }
-      "goal" => {
-        let goal = Some(str("goal")).filter(|g| !g.is_empty());
-        let said = match &goal {
-          Some(goal) => {
-            format!("Goal set: {goal}. A check reads the chat as each turn would end, and you go on till it's met.")
-          }
-          None => "Goal dropped.".into(),
-        };
-        self.lock().set_goal(goal);
-        Out::ok(said)
-      }
-      "send_file" => {
-        let path = cwd.join(str("path"));
-        match tokio::fs::metadata(&path).await {
-          Ok(m) if !m.is_file() => return Out::fail(format!("{} is not a file.", path.display())),
-          Ok(m) if m.len() > SEND_BYTES => {
-            return Out::fail(format!("{} is over 50 MB, the most sent.", path.display()));
-          }
-          Ok(_) => {}
-          Err(err) => return Out::fail(format!("{}: {err}", path.display())),
-        }
-        let bytes = match tokio::fs::read(&path).await {
-          Ok(bytes) => bytes,
-          Err(err) => return Out::fail(format!("{}: {err}", path.display())),
-        };
-        let dir = self.lock().mem.dir.clone();
-        let name = match tokio::task::spawn_blocking(move || memory::media_add(&dir, &bytes)).await {
-          Ok(Ok(name)) => name,
-          Ok(Err(err)) => return Out::fail(format!("Not sent: {err}")),
-          Err(err) => return Out::fail(format!("Not sent: {err}")),
-        };
-        let msg = memory::Msg {
-          images: vec![name],
-          ..memory::Msg::new(Kind::Acorn, str("caption"))
-        };
-        self.lock().hold(move |chat| {
-          chat.push_msg(msg);
-        });
-        Out::ok(format!("Sent {}: the user sees it in the chat.", path.display()))
-      }
+      "fire" => self.fire(Some(str("name")).filter(|n| !n.is_empty())),
+      "goal" => self.goal_tool(Some(str("goal")).filter(|g| !g.is_empty())),
+      "send_file" => self.send_file(cwd.join(str("path")), str("caption")).await,
       "usage" => {
-        let days = num("days", 7).clamp(1, 366) as i64;
+        let days = num(&input, "days", 7).clamp(1, 366) as i64;
         match tokio::task::spawn_blocking(move || super::usage::told(days)).await {
           Ok(Ok(report)) => Out::ok(report),
           Ok(Err(err)) => Out::fail(format!("Cannot read usage: {err:#}")),
@@ -324,51 +261,9 @@ impl Engine {
       }),
       "list_assistants" => Out::ok(self.lock().peers(&str("query"))),
       "ask_assistant" => self.ask(&str("name"), &str("message")),
-      "remember" => {
-        let (me, chat, msg) = {
-          let chat = self.lock();
-          (chat.me.id.clone(), chat.id.clone(), chat.mem.count.saturating_sub(1))
-        };
-        let fact = crate::facts::Fact {
-          mine: str("for") == "me",
-          subject: str("subject"),
-          predicate: str("predicate"),
-          value: str("value"),
-          many: input["many"].as_bool().unwrap_or(false),
-          chat,
-          msg,
-        };
-        // SQLite, and a vacuum of its file, off the async workers
-        match tokio::task::spawn_blocking(move || crate::facts::remember(&me, fact)).await {
-          Ok(Ok(said)) => Out::ok(said),
-          Ok(Err(err)) => Out::fail(format!("Not kept: {err}")),
-          Err(err) => Out::fail(format!("Not kept: {err}")),
-        }
-      }
-      "forget" => {
-        let me = self.lock().me.id.clone();
-        let Some(id) = number(&input["id"]) else {
-          return Out::fail("Give id: the fact's number.");
-        };
-        match tokio::task::spawn_blocking(move || crate::facts::forget(&me, id)).await {
-          Ok(Ok(said)) => Out::ok(said),
-          Ok(Err(err)) => Out::fail(format!("Not forgotten: {err}")),
-          Err(err) => Out::fail(format!("Not forgotten: {err}")),
-        }
-      }
-      "purge" | "unpurge" => {
-        let (mut chat, back) = (self.lock(), name == "unpurge");
-        if let (false, Some(text)) = (back, input["text"].as_str()) {
-          return Out::ok(chat.purge_text(text));
-        }
-        match &input["id"] {
-          Value::String(name) if name.starts_with(|c: char| c.is_ascii_alphabetic()) => match input["n"].as_u64() {
-            Some(n) => Out::ok(chat.purge(Some(name), n, back)),
-            None => Out::fail("Give n: the index of the message in the agent's chat."),
-          },
-          id => Out::ok(chat.purge(None, number(id).unwrap_or(u64::MAX), back)),
-        }
-      }
+      "remember" => self.remember(&input).await,
+      "forget" => self.forget(&input).await,
+      "purge" | "unpurge" => self.purge_tool(&input, name == "unpurge"),
       "extend" => crate::extend::extend(
         &config::get().dir,
         &str("kind"),
@@ -376,38 +271,8 @@ impl Engine {
         input["text"].as_str().unwrap_or_default(),
       )
       .map_or_else(Out::fail, Out::ok),
-      "create_assistant" => {
-        let Some(effort) = Effort::parse(&str("effort")) else {
-          return no_effort(&input["effort"]);
-        };
-        match crate::assistant::add(
-          &str("name"),
-          &str("about"),
-          &str("instructions"),
-          &str("welcome"),
-          effort,
-        ) {
-          Ok(made) => self.listed(
-            format!("Created {}, {}; they are in the sidebar.", made.name, made.about),
-            made,
-          ),
-          Err(why) => Out::fail(why),
-        }
-      }
-      "archive_assistant" => {
-        let me = self.lock().me.id.clone();
-        match crate::assistant::archive(&str("name"), &me) {
-          Ok(gone) => {
-            super::hub::close(&gone.id);
-            self.lock().all(Event::Gone(gone.id.clone()));
-            Out::ok(format!(
-              "Archived {}: off the sidebar, their chat and files kept; restore_assistant brings them back.",
-              gone.name
-            ))
-          }
-          Err(why) => Out::fail(why),
-        }
-      }
+      "create_assistant" => self.create_assistant(&input),
+      "archive_assistant" => self.archive_assistant(&str("name")),
       "restore_assistant" => match crate::assistant::restore(&str("name")) {
         Ok(back) => self.listed(
           format!(
@@ -420,6 +285,188 @@ impl Engine {
       },
       "luau" => crate::luau::run(&input, cwd, cancel).await,
       _ => Out::fail(format!("No tool {name}.")),
+    }
+  }
+
+  /// A line of the chat opened (a message whole, with its images), an
+  /// agent's log, or a thread with another assistant.
+  fn zoom(&self, input: &Value) -> Out {
+    let at = num(input, "at", 0) as usize;
+    if let Some(lines) = input["id"].as_str().and_then(|name| self.thread_lines(name)) {
+      self.lock().mem.look("zoom", 1);
+      return Out::ok(clip::page(&lines, at));
+    }
+    let mut chat = self.lock();
+    let n = num(input, "n", 1);
+    match &input["id"] {
+      Value::String(id) if names_agent(id) => {
+        let log = chat.mem.agent_show(id);
+        chat.mem.look("zoom", usize::from(!log.starts_with("No agent ")));
+        Out::ok(clip::page(&log, at))
+      }
+      id => {
+        let id = number(id).unwrap_or(u64::MAX);
+        let imgs = if n == 1 && at == 0 { chat.mem.images(id) } else { vec![] };
+        Out {
+          imgs,
+          ..Out::ok(chat.mem.zoom(id, n, at))
+        }
+      }
+    }
+  }
+
+  async fn delegate_tool(self: &Arc<Self>, input: &Value, halt: &CancellationToken) -> Out {
+    let effort = match &input["effort"] {
+      Value::Null => None,
+      e => match e.as_str().and_then(Effort::parse) {
+        Some(effort) => Some(effort),
+        None => return no_effort(e),
+      },
+    };
+    let tasks: Vec<String> = input["tasks"]
+      .as_array()
+      .into_iter()
+      .flatten()
+      .map(|t| t.as_str().map_or_else(|| t.to_string(), str::to_string))
+      .collect();
+    Out::ok(self.delegate(tasks, effort, halt).await)
+  }
+
+  /// The agent named, or every one at work (None), fired.
+  fn fire(&self, name: Option<String>) -> Out {
+    let mut chat = self.lock();
+    let at = chat
+      .working()
+      .into_iter()
+      .filter(|w| name.as_ref().is_none_or(|n| n == w))
+      .collect::<Vec<_>>();
+    chat.stop_agents(name.as_deref());
+    chat.change();
+    match (at.is_empty(), name) {
+      (true, Some(name)) => Out::fail(format!("No agent {name} at work.")),
+      (true, None) => Out::ok("No agent was at work."),
+      _ => Out::ok(format!("Fired {}.", at.join(", "))),
+    }
+  }
+
+  /// The chat's goal set, or dropped (None).
+  fn goal_tool(&self, goal: Option<String>) -> Out {
+    let said = match &goal {
+      Some(goal) => {
+        format!("Goal set: {goal}. A check reads the chat as each turn would end, and you go on till it's met.")
+      }
+      None => "Goal dropped.".into(),
+    };
+    self.lock().set_goal(goal);
+    Out::ok(said)
+  }
+
+  /// A file shown to the user: kept with the chat's media, in a message
+  /// of the assistant's.
+  async fn send_file(&self, path: PathBuf, caption: String) -> Out {
+    match tokio::fs::metadata(&path).await {
+      Ok(m) if !m.is_file() => return Out::fail(format!("{} is not a file.", path.display())),
+      Ok(m) if m.len() > SEND_BYTES => {
+        return Out::fail(format!("{} is over 50 MB, the most sent.", path.display()));
+      }
+      Ok(_) => {}
+      Err(err) => return Out::fail(format!("{}: {err}", path.display())),
+    }
+    let bytes = match tokio::fs::read(&path).await {
+      Ok(bytes) => bytes,
+      Err(err) => return Out::fail(format!("{}: {err}", path.display())),
+    };
+    let dir = self.lock().mem.dir.clone();
+    let name = match off(move || memory::media_add(&dir, &bytes)).await {
+      Ok(name) => name,
+      Err(why) => return Out::fail(format!("Not sent: {why}")),
+    };
+    let msg = memory::Msg {
+      images: vec![name],
+      ..memory::Msg::new(Kind::Acorn, caption)
+    };
+    self.lock().hold(move |chat| {
+      chat.push_msg(msg);
+    });
+    Out::ok(format!("Sent {}: the user sees it in the chat.", path.display()))
+  }
+
+  async fn remember(&self, input: &Value) -> Out {
+    let (me, chat, msg) = {
+      let chat = self.lock();
+      (chat.me.id.clone(), chat.id.clone(), chat.mem.count.saturating_sub(1))
+    };
+    let fact = crate::facts::Fact {
+      mine: text(input, "for") == "me",
+      subject: text(input, "subject"),
+      predicate: text(input, "predicate"),
+      value: text(input, "value"),
+      many: input["many"].as_bool().unwrap_or(false),
+      chat,
+      msg,
+    };
+    off(move || crate::facts::remember(&me, fact))
+      .await
+      .map_or_else(|why| Out::fail(format!("Not kept: {why}")), Out::ok)
+  }
+
+  async fn forget(&self, input: &Value) -> Out {
+    let me = self.lock().me.id.clone();
+    let Some(id) = number(&input["id"]) else {
+      return Out::fail("Give id: the fact's number.");
+    };
+    off(move || crate::facts::forget(&me, id))
+      .await
+      .map_or_else(|why| Out::fail(format!("Not forgotten: {why}")), Out::ok)
+  }
+
+  /// A text, a message of the chat or one of an agent's purged, or
+  /// (`back`) a message taken back.
+  fn purge_tool(&self, input: &Value, back: bool) -> Out {
+    let mut chat = self.lock();
+    if let (false, Some(text)) = (back, input["text"].as_str()) {
+      return Out::ok(chat.purge_text(text));
+    }
+    match &input["id"] {
+      Value::String(name) if names_agent(name) => match input["n"].as_u64() {
+        Some(n) => Out::ok(chat.purge(Some(name), n, back)),
+        None => Out::fail("Give n: the index of the message in the agent's chat."),
+      },
+      id => Out::ok(chat.purge(None, number(id).unwrap_or(u64::MAX), back)),
+    }
+  }
+
+  fn create_assistant(&self, input: &Value) -> Out {
+    let Some(effort) = Effort::parse(&text(input, "effort")) else {
+      return no_effort(&input["effort"]);
+    };
+    match crate::assistant::add(
+      &text(input, "name"),
+      &text(input, "about"),
+      &text(input, "instructions"),
+      &text(input, "welcome"),
+      effort,
+    ) {
+      Ok(made) => self.listed(
+        format!("Created {}, {}; they are in the sidebar.", made.name, made.about),
+        made,
+      ),
+      Err(why) => Out::fail(why),
+    }
+  }
+
+  fn archive_assistant(&self, name: &str) -> Out {
+    let me = self.lock().me.id.clone();
+    match crate::assistant::archive(name, &me) {
+      Ok(gone) => {
+        super::hub::close(&gone.id);
+        self.lock().all(Event::Gone(gone.id.clone()));
+        Out::ok(format!(
+          "Archived {}: off the sidebar, their chat and files kept; restore_assistant brings them back.",
+          gone.name
+        ))
+      }
+      Err(why) => Out::fail(why),
     }
   }
 
