@@ -3,7 +3,7 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-/// `eval`, with no plugins, whatever this Mac has.
+/// `eval`, with no plugins, whatever this machine has.
 async fn eval(cwd: PathBuf, code: &str, budget: Duration, cancel: CancellationToken) -> Out {
   eval_with(Path::new("/nonexistent"), cwd, code, budget, cancel).await
 }

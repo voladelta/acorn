@@ -227,7 +227,7 @@ async fn attempt(req: &Req, cancel: &CancellationToken) -> Result<Response, Stri
     }
     let res = tokio::select! {
         res = sent.send() => res,
-        _ = cancel.cancelled() => return Err("stopped".into()),
+        () = cancel.cancelled() => return Err("stopped".into()),
     };
     let why = match res {
       Ok(res) if res.status().is_success() || redirect(&res).is_some() => return Ok(res),
@@ -277,7 +277,7 @@ async fn piece(res: &mut Response, cancel: &CancellationToken) -> Result<Option<
       got = res.chunk() => got
         .map(|c| c.map(|c| c.to_vec()))
         .map_err(|err| err.without_url().to_string()),
-      _ = cancel.cancelled() => Err("stopped".into()),
+      () = cancel.cancelled() => Err("stopped".into()),
   }
 }
 

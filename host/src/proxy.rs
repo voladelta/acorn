@@ -121,23 +121,13 @@ fn session(req: &Request) -> Option<String> {
 }
 
 async fn forward(State(host): State<Arc<Host>>, mut req: Request) -> Response {
-  let denied = || (StatusCode::UNAUTHORIZED, "Open your invite link.\n").into_response();
   let Some(value) = session(&req) else {
     return denied();
   };
-  // the book is read from disk, and the session hashed, off the async workers
-  let whose = {
-    let host = host.clone();
-    tokio::task::spawn_blocking(move || host.store.read().map(|book| store::who(&book, &value))).await
-  };
-  let user = match whose {
-    Ok(Ok(Some(user))) => user,
-    Ok(Ok(None)) => return denied(),
-    Ok(Err(e)) => {
-      eprintln!("acorn-host: {e}");
-      return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-    Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+  let user = match whose(&host, value).await {
+    Ok(Some(user)) => user,
+    Ok(None) => return denied(),
+    Err(code) => return code.into_response(),
   };
   let runner = host.runner(&user);
 
@@ -155,29 +145,16 @@ async fn forward(State(host): State<Arc<Host>>, mut req: Request) -> Response {
     headers.remove(hop);
   }
   headers.insert(header::HOST, HeaderValue::from_static("localhost"));
-  let started = Instant::now();
-  let sock = runner.sock();
-  let stream = loop {
-    // the token is read at each start of the server
-    let token = runner.token();
-    if !token.is_empty()
-      && let Some(held) = runner::hold(&sock)
-      && let Ok(s) = tokio::net::UnixStream::connect(held.path()).await
-    {
-      req
-        .headers_mut()
-        .insert(header::COOKIE, format!("acorn_token={token}").parse().unwrap());
-      break s;
-    }
-    if started.elapsed() >= UP_WAIT {
-      return (
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Your Acorn is starting. Try again in a moment.\n",
-      )
-        .into_response();
-    }
-    tokio::time::sleep(Duration::from_millis(100)).await;
+  let Some((stream, token)) = reach(&runner).await else {
+    return (
+      StatusCode::SERVICE_UNAVAILABLE,
+      "Your Acorn is starting. Try again in a moment.\n",
+    )
+      .into_response();
   };
+  req
+    .headers_mut()
+    .insert(header::COOKIE, format!("acorn_token={token}").parse().unwrap());
   let (mut send, conn) = match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await {
     Ok(pair) => pair,
     Err(e) => return bad_gateway(e),
@@ -206,6 +183,46 @@ async fn forward(State(host): State<Arc<Host>>, mut req: Request) -> Response {
       Response::from_parts(parts, Body::new(body))
     }
     Err(e) => bad_gateway(e),
+  }
+}
+
+fn denied() -> Response {
+  (StatusCode::UNAUTHORIZED, "Open your invite link.\n").into_response()
+}
+
+/// Whose session a cookie's value is, if anyone's; the status to answer
+/// with when the book can't be read.
+async fn whose(host: &Arc<Host>, value: String) -> Result<Option<String>, StatusCode> {
+  // the book is read from disk, and the session hashed, off the async workers
+  let host = host.clone();
+  match tokio::task::spawn_blocking(move || host.store.read().map(|book| store::who(&book, &value))).await {
+    Ok(Ok(user)) => Ok(user),
+    Ok(Err(e)) => {
+      eprintln!("acorn-host: {e}");
+      Err(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+    Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+  }
+}
+
+/// A connection to a person's server and the token it takes, waited for
+/// while it starts: UP_WAIT at most.
+async fn reach(runner: &Runner) -> Option<(tokio::net::UnixStream, String)> {
+  let started = Instant::now();
+  let sock = runner.sock();
+  loop {
+    // the token is read at each start of the server
+    let token = runner.token();
+    if !token.is_empty()
+      && let Some(held) = runner::hold(&sock)
+      && let Ok(stream) = tokio::net::UnixStream::connect(held.path()).await
+    {
+      return Some((stream, token));
+    }
+    if started.elapsed() >= UP_WAIT {
+      return None;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
   }
 }
 

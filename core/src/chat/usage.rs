@@ -85,8 +85,8 @@ struct Usage {
 /// line a day and kind, newest first, then their total; then a line a day
 /// of what zooms and searches found.
 pub(super) fn told(days: i64) -> anyhow::Result<String> {
-  let mut all: std::collections::BTreeMap<(String, String), Spend> = Default::default();
-  let mut looks: std::collections::BTreeMap<String, [i64; 4]> = Default::default();
+  let mut all = std::collections::BTreeMap::<(String, String), Spend>::new();
+  let mut looks = std::collections::BTreeMap::<String, [i64; 4]>::new();
   let from = crate::now_ms() - days * 86_400_000;
   read_chats(|db| {
     for u in usage(db, from)? {

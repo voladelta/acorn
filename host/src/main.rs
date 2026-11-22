@@ -5,7 +5,7 @@ use acorn_host::runner::{self, Plan};
 use acorn_host::sandbox;
 use acorn_host::store::{self, Store};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -122,7 +122,7 @@ fn day(secs: u64) -> String {
 
 /// `<data>/config.json`: the DeepSeek key (DEEPSEEK_API_KEY wins) and each
 /// person's budget, USD a day.
-fn config(data: &std::path::Path) -> (String, f64) {
+fn config(data: &Path) -> (String, f64) {
   let file = data.join("config.json");
   let conf: HashMap<String, serde_json::Value> = match std::fs::read_to_string(&file) {
     Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("{}: {e}", file.display()))),
@@ -165,36 +165,8 @@ fn beside(name: &str) -> PathBuf {
 fn serve(a: Args) {
   let server =
     std::path::absolute(a.server.clone().unwrap_or_else(|| beside("acorn-server"))).unwrap_or_else(|e| fail(e));
-  let web = std::path::absolute(a.web.clone().unwrap_or_else(|| {
-    let near = server
-      .parent()
-      .map(|d| d.join("web"))
-      .filter(|d| d.join("index.html").exists());
-    near.unwrap_or_else(|| "web/dist".into())
-  }))
-  .unwrap_or_else(|e| fail(e));
-  if !web.join("index.html").exists() {
-    fail(format!(
-      "no web window in {} (--web; cd web && bun run build)",
-      web.display()
-    ));
-  }
-  if a.sandbox {
-    if let Err(why) = sandbox::check() {
-      fail(format!("{why}\n(--no-sandbox runs without one, for development only)"));
-    }
-  } else {
-    let ip = a
-      .addr
-      .rsplit_once(':')
-      .map_or(a.addr.as_str(), |(h, _)| h)
-      .trim_matches(['[', ']']);
-    let loopback = ip == "localhost" || ip.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
-    if !loopback {
-      fail(format!("--no-sandbox listens on loopback only, not {}", a.addr));
-    }
-    eprintln!("acorn-host: WARNING: no sandbox: each person's agent can read every other person's files and the key");
-  }
+  let web = web(&a, &server);
+  walled(&a);
   store::make_dir(&a.data).unwrap_or_else(|e| fail(e));
   let (key, budget) = config(&a.data);
   if key.is_empty() {
@@ -227,36 +199,82 @@ fn serve(a: Args) {
       .unwrap_or_else(|e| fail(format!("can't listen on {}: {e}", a.addr)));
     let addr = listener.local_addr().map_or(a.addr.clone(), |a| a.to_string());
     println!("acorn-host: on http://{addr}, {} people", book.people.len());
-    let app = proxy::app(host.clone());
-    let (stop, stopped) = tokio::sync::watch::channel(false);
-    tokio::spawn(async move {
-      let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("a TERM handler");
-      tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
-        _ = term.recv() => {}
-      }
-      let _ = stop.send(true);
-    });
-    let mut on_stop = stopped.clone();
-    let serving = tokio::spawn(async move {
-      let _ = axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-          let _ = on_stop.wait_for(|&s| s).await;
-        })
-        .await;
-    });
-    let mut on_stop = stopped;
-    let _ = on_stop.wait_for(|&s| s).await;
-    // every server gets its TERM at once, and 10 s; the polls open on them
-    // end with them
-    let runners: Vec<_> = host.runners.lock().unwrap().values().cloned().collect();
-    let ends: Vec<_> = runners
-      .into_iter()
-      .map(|r| tokio::spawn(async move { r.end(Duration::from_secs(10)).await }))
-      .collect();
-    for end in ends {
-      let _ = end.await;
-    }
-    let _ = tokio::time::timeout(Duration::from_secs(2), serving).await;
+    run(&host, listener).await;
   });
+}
+
+/// The built web window: `--web`, else `web` beside the server, else
+/// web/dist here.
+fn web(a: &Args, server: &Path) -> PathBuf {
+  let web = std::path::absolute(a.web.clone().unwrap_or_else(|| {
+    let near = server
+      .parent()
+      .map(|d| d.join("web"))
+      .filter(|d| d.join("index.html").exists());
+    near.unwrap_or_else(|| "web/dist".into())
+  }))
+  .unwrap_or_else(|e| fail(e));
+  if !web.join("index.html").exists() {
+    fail(format!(
+      "no web window in {} (--web; cd web && bun run build)",
+      web.display()
+    ));
+  }
+  web
+}
+
+/// Fails unless people are kept apart: by a sandbox that works here, or
+/// (`--no-sandbox`) by listening on loopback only.
+fn walled(a: &Args) {
+  if a.sandbox {
+    if let Err(why) = sandbox::check() {
+      fail(format!("{why}\n(--no-sandbox runs without one, for development only)"));
+    }
+    return;
+  }
+  let ip = a
+    .addr
+    .rsplit_once(':')
+    .map_or(a.addr.as_str(), |(h, _)| h)
+    .trim_matches(['[', ']']);
+  let loopback = ip == "localhost" || ip.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
+  if !loopback {
+    fail(format!("--no-sandbox listens on loopback only, not {}", a.addr));
+  }
+  eprintln!("acorn-host: WARNING: no sandbox: each person's agent can read every other person's files and the key");
+}
+
+/// Serves until Ctrl-C or a TERM, then ends every person's server.
+async fn run(host: &Arc<Host>, listener: tokio::net::TcpListener) {
+  let app = proxy::app(host.clone());
+  let (stop, stopped) = tokio::sync::watch::channel(false);
+  tokio::spawn(async move {
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("a TERM handler");
+    tokio::select! {
+      _ = tokio::signal::ctrl_c() => {}
+      _ = term.recv() => {}
+    }
+    let _ = stop.send(true);
+  });
+  let mut on_stop = stopped.clone();
+  let serving = tokio::spawn(async move {
+    let _ = axum::serve(listener, app)
+      .with_graceful_shutdown(async move {
+        let _ = on_stop.wait_for(|&s| s).await;
+      })
+      .await;
+  });
+  let mut on_stop = stopped;
+  let _ = on_stop.wait_for(|&s| s).await;
+  // every server gets its TERM at once, and 10 s; the polls open on them
+  // end with them
+  let runners: Vec<_> = host.runners.lock().unwrap().values().cloned().collect();
+  let ends: Vec<_> = runners
+    .into_iter()
+    .map(|r| tokio::spawn(async move { r.end(Duration::from_secs(10)).await }))
+    .collect();
+  for end in ends {
+    let _ = end.await;
+  }
+  let _ = tokio::time::timeout(Duration::from_secs(2), serving).await;
 }

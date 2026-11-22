@@ -186,7 +186,7 @@ impl Engine {
       .join("Downloads")
       .join(format!("acorn-memory-{}.json", stamp()));
     let me = self.clone();
-    let wrote = tokio::task::spawn_blocking(move || me.dump(&file).map(|_| file)).await;
+    let wrote = tokio::task::spawn_blocking(move || me.dump(&file).map(|()| file)).await;
     wrote
       .map_err(|err| err.to_string())?
       .map_err(|err| format!("The memory was not saved: {err}."))
@@ -268,7 +268,7 @@ impl Engine {
   pub(super) async fn tree(self: &Arc<Self>) -> Result<PathBuf, String> {
     let file = std::env::temp_dir().join(format!("acorn-tree-{}.html", stamp()));
     let me = self.clone();
-    let made = tokio::task::spawn_blocking(move || me.page(&file).map(|_| file)).await;
+    let made = tokio::task::spawn_blocking(move || me.page(&file).map(|()| file)).await;
     let file = made
       .map_err(|err| err.to_string())?
       .map_err(|err| format!("No tree page: {err}."))?;

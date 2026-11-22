@@ -1,11 +1,11 @@
 //! Machine
 //! =======
-//! What touches this Mac, as `luau`'s code calls it: a command run
+//! What touches this machine, as `luau`'s code calls it: a command run
 //! (`shell`), a file read (`text`), written (`write`) or edited (`edit`),
 //! each in its caller's dir under the work dir. They follow DeepSeek's
 //! harness (deepseek-harness: tool-bash, tool-fs, fs-local,
 //! fs-observation-policy): its arguments, results and errors; its
-//! foreground bash (no background jobs) on a Mac with no file sandbox.
+//! foreground bash (no background jobs) on a machine with no file sandbox.
 //!
 //! A caller may write over or edit a file only as it last read, wrote or
 //! edited it (`SEEN`): one it never read, or that changed since, is refused
@@ -171,21 +171,7 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
     timeout.clamp(0.0, MAX_TIMEOUT_MS)
   };
   SHELLS.lock().retain(|&pid, exited| group(pid, exited));
-  let mut cmd = tokio::process::Command::new("bash");
-  cmd
-    .arg("-c")
-    .arg(command)
-    .current_dir(workdir)
-    .envs(ENV)
-    .env("ACORN_RUN", &*RUN)
-    .stdin(std::process::Stdio::null())
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped())
-    .process_group(0);
-  for key in config::hidden() {
-    cmd.env_remove(key);
-  }
-  let mut child = cmd.spawn().map_err(|err| err.to_string())?;
+  let mut child = bash(command, workdir).spawn().map_err(|err| err.to_string())?;
   let pid = child.id().map_or(0, |p| p as i32);
   let exited = Arc::new(AtomicBool::new(false));
   let mut reap = Reap(pid, exited.clone());
@@ -263,6 +249,26 @@ pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: Cancella
     timed_out,
     status,
   })
+}
+
+/// `bash -c command` in `workdir`, to be the leader of its own process
+/// group: marked ACORN_RUN, its streams piped, what is hidden kept from it.
+fn bash(command: &str, workdir: &Path) -> tokio::process::Command {
+  let mut cmd = tokio::process::Command::new("bash");
+  cmd
+    .arg("-c")
+    .arg(command)
+    .current_dir(workdir)
+    .envs(ENV)
+    .env("ACORN_RUN", &*RUN)
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped())
+    .process_group(0);
+  for key in config::hidden() {
+    cmd.env_remove(key);
+  }
+  cmd
 }
 
 /// A command's process group, with whether its shell exited: killed, if
@@ -655,29 +661,7 @@ pub fn edit(cwd: &Path, input: &Value) -> Result<String, String> {
   }
   let raw = std::str::from_utf8(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
     .map_err(|_| format!("cannot edit \"{}\": invalid UTF-8 text", t.shown))?;
-  let crlf = {
-    let sample = crate::clip::head(raw, 4096);
-    let crlfs = sample.matches("\r\n").count();
-    crlfs > sample.matches('\n').count() - crlfs
-  };
-  let content = raw.replace("\r\n", "\n");
-  let (old, new) = (old.replace("\r\n", "\n"), new.replace("\r\n", "\n"));
-  let n = content.matches(old.as_str()).count();
-  if n == 0 {
-    return Err(format!("old_string was not found in \"{}\"", t.shown));
-  }
-  if n > 1 && !all {
-    return Err(format!(
-      "old_string matched {n} times in \"{}\"; provide a more specific old_string or set replace_all to true",
-      t.shown
-    ));
-  }
-  let edited = content.replace(old.as_str(), &new);
-  let edited = if crlf {
-    edited.replace("\r\n", "\n").replace('\n', "\r\n")
-  } else {
-    edited
-  };
+  let edited = replaced(raw, old, new, all, &t.shown)?;
   let key = commit(&t, &edited, Some(&meta))?;
   let made = fs::metadata(&key).map_err(|e| e.to_string())?;
   see(cwd, &key, Seen::Present(version(&made)));
@@ -688,6 +672,34 @@ pub fn edit(cwd: &Path, input: &Value) -> Result<String, String> {
     )
   } else {
     format!("The file {} has been updated successfully.", key.display())
+  })
+}
+
+/// A text with `old` replaced by `new`: its one occurrence, or (`all`)
+/// each. Line endings don't count in the match, and the result keeps the
+/// text's own (CRLF if most of its start is).
+fn replaced(raw: &str, old: &str, new: &str, all: bool, shown: &str) -> Result<String, String> {
+  let crlf = {
+    let sample = crate::clip::head(raw, 4096);
+    let crlfs = sample.matches("\r\n").count();
+    crlfs > sample.matches('\n').count() - crlfs
+  };
+  let content = raw.replace("\r\n", "\n");
+  let (old, new) = (old.replace("\r\n", "\n"), new.replace("\r\n", "\n"));
+  let n = content.matches(old.as_str()).count();
+  if n == 0 {
+    return Err(format!("old_string was not found in \"{shown}\""));
+  }
+  if n > 1 && !all {
+    return Err(format!(
+      "old_string matched {n} times in \"{shown}\"; provide a more specific old_string or set replace_all to true"
+    ));
+  }
+  let edited = content.replace(old.as_str(), &new);
+  Ok(if crlf {
+    edited.replace("\r\n", "\n").replace('\n', "\r\n")
+  } else {
+    edited
   })
 }
 

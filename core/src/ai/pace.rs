@@ -99,8 +99,8 @@ pub async fn yielded(keys: &[&str], cancel: &CancellationToken) {
       return;
     }
     tokio::select! {
-        _ = freed => {}
-        _ = cancel.cancelled() => return,
+        () = freed => {}
+        () = cancel.cancelled() => return,
     }
   }
 }
@@ -227,7 +227,7 @@ pub async fn fly(model: &str, yields: bool, cancel: &CancellationToken) -> Optio
   };
   tokio::select! {
       got = &mut rx => got.ok().map(|round| Seat::new(model, round)),
-      _ = cancel.cancelled() => {
+      () = cancel.cancelled() => {
           // let in as it stopped: its seat, dropped, goes to the next
           rx.close();
           drop(rx.try_recv().ok().map(|round| Seat::new(model, round)));

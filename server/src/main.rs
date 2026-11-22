@@ -2,7 +2,7 @@
 //! ============
 //! Acorn's engines on this machine, its window in a browser. It opens
 //! every chat (`hub`), keeps what they say as numbered events, and serves
-//! the web window (web/dist: `cd web && npm run build`) and its API:
+//! the web window (web/dist: `cd web && bun run build`) and its API:
 //!
 //! - `GET /api/hello`: the assistants, and the last event's number;
 //! - `GET /api/events?after=N`: the events after N, waiting up to 25 s
@@ -33,7 +33,7 @@ use axum::{Json, Router};
 use std::collections::{HashMap, VecDeque};
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -112,29 +112,47 @@ fn main() {
   tokio::runtime::Runtime::new().expect("runtime").block_on(serve());
 }
 
-async fn serve() {
+/// What the command line asks for, the environment where it is silent.
+struct Args {
+  addr: String,
+  unix: Option<PathBuf>,
+  web: PathBuf,
+  secure: bool,
+}
+
+fn args() -> Args {
+  let mut a = Args {
+    addr: std::env::var("ACORN_ADDR").unwrap_or_else(|_| "127.0.0.1:8484".into()),
+    unix: None,
+    web: std::env::var("ACORN_WEB").map_or_else(|_| "web/dist".into(), PathBuf::from),
+    secure: false,
+  };
   let mut args = std::env::args().skip(1);
-  let mut addr = std::env::var("ACORN_ADDR").unwrap_or_else(|_| "127.0.0.1:8484".into());
-  let mut unix: Option<PathBuf> = None;
-  let mut secure = false;
-  let mut web = std::env::var("ACORN_WEB")
-    .map(PathBuf::from)
-    .unwrap_or_else(|_| "web/dist".into());
   while let Some(arg) = args.next() {
     match arg.as_str() {
-      "--addr" => addr = args.next().expect("--addr HOST:PORT"),
-      "--web" => web = args.next().expect("--web DIR").into(),
-      "--unix" => unix = Some(args.next().expect("--unix PATH").into()),
-      "--secure" => secure = true,
+      "--addr" => a.addr = args.next().expect("--addr HOST:PORT"),
+      "--web" => a.web = args.next().expect("--web DIR").into(),
+      "--unix" => a.unix = Some(args.next().expect("--unix PATH").into()),
+      "--secure" => a.secure = true,
       _ => {
         eprintln!("usage: acorn-server [--addr HOST:PORT | --unix PATH] [--web DIR] [--secure]");
         std::process::exit(2);
       }
     }
   }
+  a
+}
+
+async fn serve() {
+  let Args {
+    addr,
+    unix,
+    web,
+    secure,
+  } = args();
   if !web.join("index.html").exists() {
     eprintln!(
-      "acorn-server: no web window in {} (cd web && npm ci && npm run build)",
+      "acorn-server: no web window in {} (cd web && bun install && bun run build)",
       web.display()
     );
     std::process::exit(1);
@@ -166,32 +184,7 @@ async fn serve() {
   });
   tokio::task::spawn_blocking(hub::open_all);
 
-  let app = Router::new()
-    .route("/api/hello", get(hello))
-    .route("/api/events", get(events))
-    .route("/api/cmd", post(cmd).layer(DefaultBodyLimit::max(CMD_BYTES)))
-    .route("/api/image", get(image))
-    .fallback_service(ServeDir::new(&web))
-    .layer(
-      CompressionLayer::new().compress_when(
-        // a video or a sound is compressed already, and asked for in ranges
-        DefaultPredicate::new()
-          .and(NotForContentType::const_new("video/"))
-          .and(NotForContentType::const_new("audio/")),
-      ),
-    )
-    .layer(middleware::from_fn_with_state(server.clone(), guard))
-    .with_state(server.clone());
-
-  // A service stops with a TERM: end as Ctrl-C does, so `end` kills the
-  // agents' jobs (a browser ignoring TERM would hold the stop up).
-  let stop = async {
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("a TERM handler");
-    tokio::select! {
-      _ = tokio::signal::ctrl_c() => {}
-      _ = term.recv() => {}
-    }
-  };
+  let app = app(&server, &web);
   if let Some(path) = unix {
     // a socket left by a run that was killed
     let _ = std::fs::remove_file(&path);
@@ -199,7 +192,7 @@ async fn serve() {
       .unwrap_or_else(|err| panic!("acorn-server: can't listen on {}: {err}", path.display()));
     println!("Acorn: on {}", path.display());
     axum::serve(listener, app)
-      .with_graceful_shutdown(stop)
+      .with_graceful_shutdown(stopped())
       .await
       .expect("acorn-server");
   } else {
@@ -212,11 +205,42 @@ async fn serve() {
     };
     println!("Acorn: http://{host}/?token={}", server.token);
     axum::serve(listener, app)
-      .with_graceful_shutdown(stop)
+      .with_graceful_shutdown(stopped())
       .await
       .expect("acorn-server");
   }
   acorn_core::machine::end();
+}
+
+/// The API and the web window, behind the token.
+fn app(server: &Server, web: &Path) -> Router {
+  Router::new()
+    .route("/api/hello", get(hello))
+    .route("/api/events", get(events))
+    .route("/api/cmd", post(cmd).layer(DefaultBodyLimit::max(CMD_BYTES)))
+    .route("/api/image", get(image))
+    .fallback_service(ServeDir::new(web))
+    .layer(
+      CompressionLayer::new().compress_when(
+        // a video or a sound is compressed already, and asked for in ranges
+        DefaultPredicate::new()
+          .and(NotForContentType::const_new("video/"))
+          .and(NotForContentType::const_new("audio/")),
+      ),
+    )
+    .layer(middleware::from_fn_with_state(server.clone(), guard))
+    .with_state(server.clone())
+}
+
+/// Ends on Ctrl-C or a TERM. A service stops with a TERM: end as Ctrl-C
+/// does, so `end` kills the agents' jobs (a browser ignoring TERM would
+/// hold the stop up).
+async fn stopped() {
+  let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("a TERM handler");
+  tokio::select! {
+    _ = tokio::signal::ctrl_c() => {}
+    _ = term.recv() => {}
+  }
 }
 
 /// The server's token: `ACORN_TOKEN` wins; otherwise keep it in $ACORN_DIR.

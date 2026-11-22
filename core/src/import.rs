@@ -1,7 +1,7 @@
 //! Import
 //! ======
 //! A person's past Claude and ChatGPT chats (APPS), read into their chat:
-//! those on this Mac (Claude Code's and Codex's logs) and those on the
+//! those on this machine (Claude Code's and Codex's logs) and those on the
 //! websites, from the zip each mails on request (`export`). A session (a
 //! log; a site's chat) is read twice: for its messages' heads (the count
 //! and the estimate), then the heads picked (`Want`): a note, then its
@@ -30,7 +30,7 @@ const LINE: usize = 480;
 /// (its own too); fit on 5,617 compaction calls of real imports.
 const PRICE: (f64, f64, f64) = (187.0, 735.0, 628.0);
 
-/// The apps a session is of: each its program on this Mac and its website.
+/// The apps a session is of: each its program on this machine and its website.
 pub const APPS: [&str; 2] = ["Claude", "ChatGPT"];
 
 /// Where each app's website gives its export, a zip it emails.
@@ -169,9 +169,9 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
   for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
     let path = e.path();
     if path.is_dir() {
-      walk(&path, out)
+      walk(&path, out);
     } else {
-      out.push(path)
+      out.push(path);
     }
   }
 }
@@ -370,7 +370,7 @@ pub fn path_short(path: &str) -> String {
   let parts: Vec<&str> = p.split('/').collect();
   let head = if parts[0].is_empty() { 2 } else { 1 };
   if parts.len() > head + 3 {
-    let mut out = parts[..head + 1].to_vec();
+    let mut out = parts[..=head].to_vec();
     out.push("…");
     out.extend(&parts[parts.len() - 2..]);
     out.join("/")
@@ -567,7 +567,7 @@ pub(crate) fn export(file: &Path) -> Result<Vec<Session>, String> {
       .file_names()
       .flatten()
       .find(|n| n == "conversations.json" || n.ends_with("/conversations.json"))
-      .map(|n| n.into_owned());
+      .map(std::borrow::Cow::into_owned);
     let Some(name) = name else {
       return Err("No conversations.json in the zip.".into());
     };

@@ -93,50 +93,9 @@ export function Composer() {
 
   return (
     <div class="flex flex-col gap-2">
-      {ui.pics.length ? (
-        <div class="flex flex-wrap gap-2">
-          {ui.pics.map((p, k) => (
-            <div key={p.url} class="group relative">
-              {p.image ? (
-                <img src={p.url} alt={p.name} class="size-14 rounded-lg border object-cover" />
-              ) : (
-                <div title={p.name} class="flex h-14 max-w-[160px] items-center gap-1.5 rounded-lg border bg-muted px-2.5 text-xs">
-                  <span aria-hidden="true">📄</span>
-                  <span class="truncate">{p.name}</span>
-                </div>
-              )}
-              <button
-                type="button"
-                aria-label={`Drop ${p.name || `file ${k + 1}`}`}
-                class="absolute -top-1.5 -right-1.5 flex size-5 cursor-pointer items-center justify-center rounded-full bg-foreground text-background"
-                onClick={() => store.dropPic(k)}
-              >
-                <X class="size-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
+      {ui.pics.length ? <Attached pics={ui.pics} /> : null}
       <div class="relative flex items-end gap-2.5">
-        {naming ? (
-          <div role="listbox" class="absolute bottom-full left-0 z-20 mb-2 min-w-[230px] rounded-xl border border-border bg-popover py-1 text-popover-foreground shadow-lg">
-            {naming.found.map((name, k) => (
-              <div
-                key={name}
-                role="option"
-                aria-selected={k === picked}
-                class={cn('flex cursor-pointer items-baseline gap-2.5 px-3 py-1.5 hover:bg-accent', k === picked && 'bg-accent')}
-                onMouseDown={(e: MouseEvent) => {
-                  e.preventDefault();
-                  take(name);
-                }}
-              >
-                <span class="font-serif text-[15px] font-medium">{`@${name}`}</span>
-                <span class="truncate text-[12.5px] text-muted-foreground">{ui.assistants.find((a) => a.name === name)?.about ?? ''}</span>
-              </div>
-            ))}
-          </div>
-        ) : null}
+        {naming ? <Names found={naming.found} picked={picked} assistants={ui.assistants} onTake={take} /> : null}
         <Tip tip="Attach images, videos, sounds or PDFs">
           <Button variant="ghost" size="icon" className="mb-0.5 rounded-full text-muted-foreground hover:text-foreground" aria-label="Attach files" onClick={() => files.current?.click()}>
             <Plus class="size-4" />
@@ -190,6 +149,57 @@ export function Composer() {
           <ArrowUp class="size-4" />
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** The files attached to the draft, each with a button to drop it. */
+function Attached(props: { pics: store.Pic[] }) {
+  return (
+    <div class="flex flex-wrap gap-2">
+      {props.pics.map((p, k) => (
+        <div key={p.url} class="group relative">
+          {p.image ? (
+            <img src={p.url} alt={p.name} class="size-14 rounded-lg border object-cover" />
+          ) : (
+            <div title={p.name} class="flex h-14 max-w-[160px] items-center gap-1.5 rounded-lg border bg-muted px-2.5 text-xs">
+              <span aria-hidden="true">📄</span>
+              <span class="truncate">{p.name}</span>
+            </div>
+          )}
+          <button
+            type="button"
+            aria-label={`Drop ${p.name || `file ${k + 1}`}`}
+            class="absolute -top-1.5 -right-1.5 flex size-5 cursor-pointer items-center justify-center rounded-full bg-foreground text-background"
+            onClick={() => store.dropPic(k)}
+          >
+            <X class="size-3" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The assistants an `@` word may name, over the box: the picked one lit. */
+function Names(props: { found: string[]; picked: number; assistants: store.Ui['assistants']; onTake: (name: string) => void }) {
+  return (
+    <div role="listbox" class="absolute bottom-full left-0 z-20 mb-2 min-w-[230px] rounded-xl border border-border bg-popover py-1 text-popover-foreground shadow-lg">
+      {props.found.map((name, k) => (
+        <div
+          key={name}
+          role="option"
+          aria-selected={k === props.picked}
+          class={cn('flex cursor-pointer items-baseline gap-2.5 px-3 py-1.5 hover:bg-accent', k === props.picked && 'bg-accent')}
+          onMouseDown={(e: MouseEvent) => {
+            e.preventDefault();
+            props.onTake(name);
+          }}
+        >
+          <span class="font-serif text-[15px] font-medium">{`@${name}`}</span>
+          <span class="truncate text-[12.5px] text-muted-foreground">{props.assistants.find((a) => a.name === name)?.about ?? ''}</span>
+        </div>
+      ))}
     </div>
   );
 }

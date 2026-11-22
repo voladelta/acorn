@@ -120,7 +120,7 @@ impl Bot {
       let sent = request().timeout(timeout).send();
       let res = tokio::select! {
           res = sent => res,
-          _ = cancel.cancelled() => return Err(Fail::Stopped),
+          () = cancel.cancelled() => return Err(Fail::Stopped),
       };
       let why = match res {
         Ok(res) => {
@@ -149,8 +149,8 @@ impl Bot {
         return Err(Fail::Down(why));
       }
       tokio::select! {
-          _ = tokio::time::sleep(wait) => {}
-          _ = cancel.cancelled() => return Err(Fail::Stopped),
+          () = tokio::time::sleep(wait) => {}
+          () = cancel.cancelled() => return Err(Fail::Stopped),
       }
       wait = (wait * 2).min(MOST_WAIT);
     }
@@ -176,7 +176,7 @@ impl Bot {
         .timeout(Duration::from_secs(120))
         .send()
         .await
-        .and_then(|r| r.error_for_status())
+        .and_then(reqwest::Response::error_for_status)
         .map_err(down)?;
       if res.content_length().is_some_and(|s| s > FILE_BYTES) {
         return Err(over());
@@ -193,7 +193,7 @@ impl Bot {
     };
     tokio::select! {
         got = get => got,
-        _ = cancel.cancelled() => Err(Fail::Stopped),
+        () = cancel.cancelled() => Err(Fail::Stopped),
     }
   }
 }

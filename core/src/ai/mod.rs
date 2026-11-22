@@ -286,7 +286,7 @@ pub fn ask(ask: Ask, on: On) -> Call {
 /// A while, or till cancelled.
 pub async fn nap(time: Duration, cancel: &CancellationToken) {
   tokio::select! {
-      _ = tokio::time::sleep(time) => {}
-      _ = cancel.cancelled() => {}
+      () = tokio::time::sleep(time) => {}
+      () = cancel.cancelled() => {}
   }
 }

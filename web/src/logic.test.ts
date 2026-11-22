@@ -123,7 +123,7 @@ test('a chat resynced asks for all it shows', () => {
 test('what the view no longer shows is dropped', () => {
   const node = (text: string) => ({ text, to: '2026-10-26T10:00:00.000Z' });
   let m: Model = empty();
-  m = hear(m, { Know: { whole: [[0, entry('user', 'a')], [1, entry('acorn', 'b')]], nodes: [] } }).m;
+  m = hear(m, { Know: { whole: [[0, entry('user', 'a')], [1, entry('unii', 'b')]], nodes: [] } }).m;
   m = hear(m, { View: { parts: [[0, 1], [1, 1]], turn: 0 } }).m;
   m = hear(m, { Entry: { agent: null, id: null, entry: entry('mind', 'hm') } }).m;
   assert.deepEqual([m.whole.size, m.minds.size], [2, 1], 'the view as it is shown is all kept');

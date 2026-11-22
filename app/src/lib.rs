@@ -755,10 +755,10 @@ fn names_menu(ui: Ui, menu: Menu, take: impl Fn(String) + Copy + 'static) -> imp
   };
   let found = move || naming.get_untracked().map(|(_, found, _)| found).unwrap_or_default();
   on_key_with("up", keys, move |_| {
-    pick.update(|p| *p = (*p + found().len().max(1) - 1) % found().len().max(1))
+    pick.update(|p| *p = (*p + found().len().max(1) - 1) % found().len().max(1));
   });
   on_key_with("down", keys, move |_| {
-    pick.update(|p| *p = (*p + 1) % found().len().max(1))
+    pick.update(|p| *p = (*p + 1) % found().len().max(1));
   });
   on_key_with("tab", keys, move |_| {
     if let Some(name) = found().get(pick.get_untracked()).cloned() {
@@ -766,7 +766,7 @@ fn names_menu(ui: Ui, menu: Menu, take: impl Fn(String) + Copy + 'static) -> imp
     }
   });
   on_key_with("escape", KeyOptions { repeat: false, ..keys }, move |_| {
-    hushed.set(naming.get_untracked().map(|(start, ..)| start))
+    hushed.set(naming.get_untracked().map(|(start, ..)| start));
   });
   overlay()
     .anchor_bounds(move || at.get().unwrap_or_default())

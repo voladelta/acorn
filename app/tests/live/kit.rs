@@ -203,7 +203,13 @@ impl Live {
 
   /// The sidebar's names, as shown.
   pub fn sidebar(&self) -> Vec<String> {
-    let texts: Vec<String> = self.app.screen().texts().iter().map(|t| t.to_string()).collect();
+    let texts: Vec<String> = self
+      .app
+      .screen()
+      .texts()
+      .iter()
+      .map(std::string::ToString::to_string)
+      .collect();
     let at = texts.iter().position(|t| t == "ASSISTANTS").map_or(0, |k| k + 1);
     texts[at..]
       .iter()

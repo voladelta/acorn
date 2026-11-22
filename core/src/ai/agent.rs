@@ -100,14 +100,8 @@ async fn turns(
     return Err(format!("no API key: set {}", config::KEY_VAR));
   }
   let tools: Vec<Spec> = ask.tools.as_ref().map(|t| t.specs()).unwrap_or_default();
-  let parts = ask
-    .blocks
-    .iter()
-    .filter(|b| !b.text.is_empty())
-    .map(|b| b.text.clone())
-    .collect();
   let mut items = vec![Item::User {
-    parts,
+    parts: parts(ask.blocks.iter().map(|b| &b.text)),
     imgs: ask.imgs.clone(),
   }];
   let mut room = MAX_OUTPUT_TOKENS;
@@ -120,28 +114,12 @@ async fn turns(
     let step = heard.till_cut(step(ask, on, key, body, &cut), &cut).await;
     if step.halt == Halt::Fail
       && let Some(left) = super::deepseek::left(&step.why)
+      && fit(left, &mut room, &mut items, on)
     {
-      // each pass sends less: less room, or fewer results
-      if left >= LEAST && left < room {
-        room = left;
-        continue;
-      }
-      if shed(&mut items) {
-        room = MAX_OUTPUT_TOKENS;
-        on(Event::Entry {
-          kind: Kind::Mind,
-          text: "This call outgrew the model's context: its older tool results were dropped.".into(),
-          of: None,
-        });
-        continue;
-      }
+      continue;
     }
     for e in &step.entries {
-      on(Event::Entry {
-        kind: e.kind,
-        text: e.text.clone(),
-        of: e.of.clone(),
-      });
+      tell(on, e.kind, &e.text, e.of.clone());
     }
     if cancel.is_cancelled() {
       return Ok(());
@@ -150,12 +128,7 @@ async fn turns(
     // cut before it gave a whole output (one that raced the cut runs
     // no tools: each answers it wasn't run)
     if cut.is_cancelled() && step.halt == Halt::Lost {
-      let said: Vec<&str> = step
-        .entries
-        .iter()
-        .filter(|e| e.kind == Kind::Acorn)
-        .map(|e| e.text.as_str())
-        .collect();
+      let said = said(&step.entries);
       if !said.is_empty() {
         items.push(Item::Said(said.join("\n\n")));
       }
@@ -166,78 +139,118 @@ async fn turns(
       _ => None,
     } {
       if end.text.is_empty() {
-        end.text = step.why.clone();
+        end.text.clone_from(&step.why);
       }
       end.stop = Some(stop);
       return Ok(());
     } else {
       items.push(Item::Turn(step.out));
       for u in step.uses {
-        let out = if cut.is_cancelled() {
-          Out::fail(UNRUN)
-        } else {
-          let out = heard.till_cut(tool(ask, &tools, u.name, u.input, &cut), &cut).await;
-          if cut.is_cancelled() {
-            Out {
-              text: format!("{}\n{CUT}", out.text),
-              ..out
-            }
-          } else {
-            out
-          }
-        };
+        let out = used_tool(ask, &tools, u.name, u.input, heard, &cut).await;
         if cancel.is_cancelled() {
           return Ok(());
         }
-        let out = if out.fail {
-          Out {
-            text: format!("Error: {}", out.text),
-            ..out
-          }
-        } else {
-          out
-        };
-        on(Event::Entry {
-          kind: Kind::Echo,
-          text: out.text.clone(),
-          of: Some(u.id.clone()),
-        });
+        tell(on, Kind::Echo, &out.text, Some(u.id.clone()));
         backs.push((u.id, out));
       }
     }
     let says = heard.all();
     if backs.is_empty() && says.is_empty() {
       end.ok = true;
-      end.text = step
-        .entries
-        .iter()
-        .filter(|e| e.kind == Kind::Acorn)
-        .map(|e| e.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n\n");
+      end.text = said(&step.entries).join("\n\n");
       return Ok(());
     }
     for say in &says {
-      on(Event::Entry {
-        kind: Kind::User,
-        text: say.text.clone(),
-        of: None,
-      });
+      tell(on, Kind::User, &say.text, None);
     }
     if !backs.is_empty() {
       items.push(Item::Back(backs));
     }
     if !says.is_empty() {
-      let parts = says
-        .iter()
-        .filter(|s| !s.text.is_empty())
-        .map(|s| s.text.clone())
-        .collect();
+      let parts = parts(says.iter().map(|s| &s.text));
       let imgs = says.into_iter().flat_map(|s| s.imgs).collect();
       items.push(Item::User { parts, imgs });
     }
   }
   Ok(())
+}
+
+/// A message done, told.
+fn tell(on: &On, kind: Kind, text: &str, of: Option<String>) {
+  on(Event::Entry {
+    kind,
+    text: text.to_string(),
+    of,
+  });
+}
+
+/// The texts a user's item is made of: those that say something.
+fn parts<'a>(texts: impl Iterator<Item = &'a String>) -> Vec<String> {
+  texts.filter(|t| !t.is_empty()).cloned().collect()
+}
+
+/// What a step's output said: its replies.
+fn said(entries: &[super::deepseek::Entry]) -> Vec<&str> {
+  entries
+    .iter()
+    .filter(|e| e.kind == Kind::Acorn)
+    .map(|e| e.text.as_str())
+    .collect()
+}
+
+/// A request past the model's context, with `left` of it for its output,
+/// made to fit: each pass sends less, less room or fewer results. Whether
+/// it goes again.
+fn fit(left: u64, room: &mut u64, items: &mut [Item], on: &On) -> bool {
+  if left >= LEAST && left < *room {
+    *room = left;
+    return true;
+  }
+  if shed(items) {
+    *room = MAX_OUTPUT_TOKENS;
+    tell(
+      on,
+      Kind::Mind,
+      "This call outgrew the model's context: its older tool results were dropped.",
+      None,
+    );
+    return true;
+  }
+  false
+}
+
+/// A tool call of a step's output, answered: run, unless a message cut in
+/// first; one cut as it ran says so after what it did; a failure reads
+/// as an error.
+async fn used_tool(
+  ask: &Ask,
+  tools: &[Spec],
+  name: String,
+  input: Value,
+  heard: &mut Heard<'_>,
+  cut: &CancellationToken,
+) -> Out {
+  let out = if cut.is_cancelled() {
+    Out::fail(UNRUN)
+  } else {
+    let out = heard.till_cut(tool(ask, tools, name, input, cut), cut).await;
+    if cut.is_cancelled() {
+      Out {
+        text: format!("{}\n{CUT}", out.text),
+        ..out
+      }
+    } else {
+      out
+    }
+  };
+  if out.fail {
+    Out {
+      text: format!("Error: {}", out.text),
+      ..out
+    }
+  } else {
+    out
+  }
 }
 
 /// The older half (by size) of the tool results a call still holds,
@@ -355,11 +368,12 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
       .filter(|&s| s.is_finite() && s > 0.0)
       .unwrap_or_else(|| 2f64.powi(k as i32 - 1))
       .min(300.0);
-    on(Event::Entry {
-      kind: Kind::Mind,
-      text: format!("The AI service is busy: asking again in {wait} s."),
-      of: None,
-    });
+    tell(
+      on,
+      Kind::Mind,
+      &format!("The AI service is busy: asking again in {wait} s."),
+      None,
+    );
     let jitter = rand::random::<f64>() * 0.5;
     nap(Duration::from_secs_f64(wait + jitter), cancel).await;
   }
@@ -385,7 +399,7 @@ async fn request(ask: &Ask, on: &On, key: &str, body: &Value, cancel: &Cancellat
   }
   let mut flight = tokio::select! {
       flight = cache::wait(ask) => flight,
-      _ = cancel.cancelled() => return None,
+      () = cancel.cancelled() => return None,
   };
   let seat = pace::fly(MODEL, ask.yields.is_some(), cancel).await?;
   let (status, sent) = send(ask, on, key, body, &mut flight, cancel).await;
@@ -416,64 +430,20 @@ async fn send(
     .send();
   let res = tokio::select! {
       res = tokio::time::timeout(IDLE, post) => Some(res),
-      _ = cancel.cancelled() => None,
+      () = cancel.cancelled() => None,
   };
   let (after, step, ok) = match res {
     None => (None, fail("stopped", &[], Halt::Lost), false),
-    Some(Err(_)) => (
-      None,
-      fail(
-        &format!("no word from the API in {} s", IDLE.as_secs()),
-        &[],
-        Halt::Busy,
-      ),
-      false,
-    ),
+    Some(Err(_)) => (None, silent(&[]), false),
     Some(Ok(Err(err))) => (None, fail(&err.to_string(), &[], Halt::Busy), false),
     Some(Ok(Ok(res))) => {
       status = res.status().as_u16();
-      let header = |name: &str| {
-        res
-          .headers()
-          .get(name)
-          .and_then(|v| v.to_str().ok())
-          .map(str::to_string)
-      };
-      let after = header("retry-after").and_then(|v| retry_after(&v));
+      let after = header(&res, "retry-after").and_then(|v| retry_after(&v));
       if res.status().is_success() {
         let step = stream(res, on, flight, &seen, cancel, &mut got, &mut read).await;
         (after, step, true)
       } else {
-        let id = header("x-request-id")
-          .or_else(|| header("x-deepseek-request-id"))
-          .map_or(String::new(), |id| format!(" [{id}]"));
-        let should = header("x-should-retry");
-        let busy = [408, 409, 429].contains(&status) || status >= 500;
-        let passing = should.as_deref() == Some("true") || (should.as_deref() != Some("false") && busy);
-        // its why may stall as a stream does: a stop cuts it too
-        let told = tokio::select! {
-            told = tokio::time::timeout(IDLE, res.text()) => Some(told),
-            _ = cancel.cancelled() => None,
-        };
-        let halt = match status {
-          _ if passing => Halt::Busy,
-          400 | 413 | 422 => Halt::Fail,
-          _ => Halt::Down,
-        };
-        match told {
-          None => (None, fail("stopped", &[], Halt::Lost), false),
-          Some(told) => {
-            let why = reason(&told.ok().and_then(Result::ok).unwrap_or_default());
-            if halt != Halt::Busy {
-              eprintln!("{MODEL}: HTTP {status}{id}: {}", clip::head(&why, 300));
-            }
-            let why = match halt {
-              Halt::Busy => format!("HTTP {status}{id}: {why}"),
-              _ => format!("the AI service refused the request (HTTP {status}): {why}"),
-            };
-            (after, fail(&why, &[], halt), false)
-          }
-        }
+        (after, refused(res, cancel).await, false)
       }
     }
   };
@@ -489,6 +459,56 @@ async fn send(
     });
   }
   (status, Sent { after, step })
+}
+
+/// A header of a response, if it is text.
+fn header(res: &reqwest::Response, name: &str) -> Option<String> {
+  res
+    .headers()
+    .get(name)
+    .and_then(|v| v.to_str().ok())
+    .map(str::to_string)
+}
+
+/// A response that refused the request, as the step it ends: busy where
+/// the service says to ask again (else by its status), failed where the
+/// request is at fault, else down.
+async fn refused(res: reqwest::Response, cancel: &CancellationToken) -> Step {
+  let status = res.status().as_u16();
+  let id = header(&res, "x-request-id")
+    .or_else(|| header(&res, "x-deepseek-request-id"))
+    .map_or(String::new(), |id| format!(" [{id}]"));
+  let should = header(&res, "x-should-retry");
+  let busy = [408, 409, 429].contains(&status) || status >= 500;
+  let passing = should.as_deref() == Some("true") || (should.as_deref() != Some("false") && busy);
+  let halt = match status {
+    _ if passing => Halt::Busy,
+    400 | 413 | 422 => Halt::Fail,
+    _ => Halt::Down,
+  };
+  // its why may stall as a stream does: a stop cuts it too
+  let told = tokio::select! {
+      told = tokio::time::timeout(IDLE, res.text()) => told,
+      () = cancel.cancelled() => return fail("stopped", &[], Halt::Lost),
+  };
+  let why = reason(&told.ok().and_then(Result::ok).unwrap_or_default());
+  if halt != Halt::Busy {
+    eprintln!("{MODEL}: HTTP {status}{id}: {}", clip::head(&why, 300));
+  }
+  let why = match halt {
+    Halt::Busy => format!("HTTP {status}{id}: {why}"),
+    _ => format!("the AI service refused the request (HTTP {status}): {why}"),
+  };
+  fail(&why, &[], halt)
+}
+
+/// A request the API said nothing to for IDLE: busy.
+fn silent(seen: &[Live]) -> Step {
+  fail(
+    &format!("no word from the API in {} s", IDLE.as_secs()),
+    seen,
+    Halt::Busy,
+  )
 }
 
 /// What a request's stream read: the bytes of its output, and whether it
@@ -523,17 +543,11 @@ async fn stream(
   loop {
     let chunk = tokio::select! {
         biased;
-        _ = cancel.cancelled() => return fail("stopped", &seen.lock(), Halt::Lost),
+        () = cancel.cancelled() => return fail("stopped", &seen.lock(), Halt::Lost),
         chunk = tokio::time::timeout(IDLE, bytes.next()) => chunk,
     };
     let chunk = match chunk {
-      Err(_) => {
-        return fail(
-          &format!("no word from the API in {} s", IDLE.as_secs()),
-          &seen.lock(),
-          Halt::Busy,
-        );
-      }
+      Err(_) => return silent(&seen.lock()),
       Ok(None) => return fail("the stream ended early", &seen.lock(), Halt::Busy),
       Ok(Some(Err(err))) => return fail(&err.to_string(), &seen.lock(), Halt::Busy),
       Ok(Some(Ok(chunk))) => chunk,
@@ -971,9 +985,10 @@ mod tests {
     }
 
     fn purged(&self) -> Vec<String> {
-      match self.0.load(std::sync::atomic::Ordering::SeqCst) {
-        true => vec![SECRET.into()],
-        false => vec![],
+      if self.0.load(std::sync::atomic::Ordering::SeqCst) {
+        vec![SECRET.into()]
+      } else {
+        vec![]
       }
     }
   }
@@ -1058,7 +1073,7 @@ mod tests {
   #[test]
   fn secrets_that_overlap_are_veiled_whole() {
     let veiled = |text: &str, secrets: &[&str]| {
-      let secrets: Vec<String> = secrets.iter().map(|s| s.to_string()).collect();
+      let secrets: Vec<String> = secrets.iter().map(std::string::ToString::to_string).collect();
       let mut text = text.to_string();
       crate::ai::veil(&mut text, &secrets);
       text

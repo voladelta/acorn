@@ -6,7 +6,7 @@
 //! calls, so a global set in one (a file loaded, a table built) is there in
 //! the next; locals end with their call.
 //!
-//! Its tools are the Mac's and the web's, as hx names them: read, write,
+//! Its tools are the machine's and the web's, as hx names them: read, write,
 //! edit, sh, then web_search and web_fetch; besides, view shows an image and
 //! ocr reads a document's text (`ocr`). Each runs through `machine`, `web`
 //! or `ocr` in the caller's dir, so a write or edit still needs the file read
@@ -43,7 +43,7 @@ const CHUNK: Duration = Duration::from_secs(120);
 /// The most memory a VM holds.
 const MEMORY: usize = 1 << 30;
 /// How long a VM is kept unused.
-const IDLE: Duration = Duration::from_secs(30 * 60);
+const IDLE: Duration = Duration::from_mins(30);
 /// sh's timeout in seconds: by default, and the most a call may ask.
 const SH_TIMEOUT: f64 = 120.0;
 const SH_TIMEOUT_MAX: f64 = 600.0;
@@ -365,81 +365,94 @@ async fn eval_with(dir: &Path, cwd: PathBuf, code: &str, budget: Duration, cance
   out
 }
 
+/// The globals a program has besides its tools: what it prints, its
+/// variables, JSON, and what the prelude asks of its run.
+fn builtins(lua: &Lua, env: &Table, run: &Arc<Mutex<Run>>) -> mlua::Result<()> {
+  let g = lua.globals();
+  let r = run.clone();
+  g.set(
+    "__emit",
+    lua.create_function(move |_, s: mlua::LuaString| {
+      let mut run = r.lock();
+      run.out.push_str(&s.to_string_lossy());
+      run.out.push('\n');
+      Ok(())
+    })?,
+  )?;
+  let vars_env = env.clone();
+  g.set(
+    "vars",
+    lua.create_function(move |lua, ()| {
+      let t = lua.create_table()?;
+      for (k, v) in vars_env.pairs::<Value, Value>().flatten() {
+        t.set(k, v)?;
+      }
+      Ok(t)
+    })?,
+  )?;
+  let json = lua.create_table()?;
+  json.set(
+    "encode",
+    lua.create_function(|lua, v: Value| {
+      let v: Json = lua.from_value(v)?;
+      Ok(v.to_string())
+    })?,
+  )?;
+  json.set(
+    "decode",
+    lua.create_function(|lua, s: String| {
+      let v: Json = serde_json::from_str(&s).map_err(|e| mlua::Error::runtime(format!("json.decode: {e}")))?;
+      lua.to_value(&v)
+    })?,
+  )?;
+  g.set("json", json)?;
+  let r = run.clone();
+  g.set("__loading", lua.create_function(move |_, ()| Ok(r.lock().loading))?)?;
+  // A call given up where Luau can't wait lives till collected, and its
+  // wait would blind the time limit: so collected now, as its error passes.
+  let r = run.clone();
+  g.set(
+    "__give_up",
+    lua.create_function(move |lua, ()| {
+      if r.lock().waiting > 0 {
+        lua.gc_collect()?;
+        lua.gc_collect()?;
+      }
+      Ok(())
+    })?,
+  )?;
+  Ok(())
+}
+
+/// Ends a run that is stopped, or past its time.
+fn limit(lua: &Lua, run: &Arc<Mutex<Run>>) {
+  let r = run.clone();
+  lua.set_interrupt(move |_| {
+    let run = r.lock();
+    if run.cancel.is_cancelled() {
+      return Err(mlua::Error::runtime("stopped"));
+    }
+    // mlua polls a tool's future from Luau: that wait is the tool's, and
+    // its own timeout ends it.
+    if run.waiting == 0 && run.deadline.is_some_and(|t| Instant::now() > t) {
+      return Err(mlua::Error::runtime("time budget exceeded (infinite loop?)"));
+    }
+    Ok(VmState::Continue)
+  });
+}
+
 impl Vm {
   fn new(cwd: &Path, dir: &Path) -> mlua::Result<Vm> {
     let lua = Lua::new();
     let run = Arc::new(Mutex::new(Run::default()));
     let g = lua.globals();
     let env = lua.create_table()?;
-    let r = run.clone();
-    g.set(
-      "__emit",
-      lua.create_function(move |_, s: mlua::LuaString| {
-        let mut run = r.lock();
-        run.out.push_str(&s.to_string_lossy());
-        run.out.push('\n');
-        Ok(())
-      })?,
-    )?;
-    let vars_env = env.clone();
-    g.set(
-      "vars",
-      lua.create_function(move |lua, ()| {
-        let t = lua.create_table()?;
-        for (k, v) in vars_env.pairs::<Value, Value>().flatten() {
-          t.set(k, v)?;
-        }
-        Ok(t)
-      })?,
-    )?;
-    let json = lua.create_table()?;
-    json.set(
-      "encode",
-      lua.create_function(|lua, v: Value| {
-        let v: Json = lua.from_value(v)?;
-        Ok(v.to_string())
-      })?,
-    )?;
-    json.set(
-      "decode",
-      lua.create_function(|lua, s: String| {
-        let v: Json = serde_json::from_str(&s).map_err(|e| mlua::Error::runtime(format!("json.decode: {e}")))?;
-        lua.to_value(&v)
-      })?,
-    )?;
-    g.set("json", json)?;
-    let r = run.clone();
-    g.set("__loading", lua.create_function(move |_, ()| Ok(r.lock().loading))?)?;
-    // A call given up where Luau can't wait lives till collected, and its
-    // wait would blind the time limit: so collected now, as its error passes.
-    let r = run.clone();
-    g.set(
-      "__give_up",
-      lua.create_function(move |lua, ()| {
-        if r.lock().waiting > 0 {
-          lua.gc_collect()?;
-          lua.gc_collect()?;
-        }
-        Ok(())
-      })?,
-    )?;
+    builtins(&lua, &env, &run)?;
     tools(&lua, cwd, &run)?;
     lua.load(PRELUDE).set_name("=prelude").exec()?;
     lua.sandbox(true)?;
     lua.set_memory_limit(MEMORY)?;
-    let r = run.clone();
-    lua.set_interrupt(move |_| {
-      let run = r.lock();
-      if run.cancel.is_cancelled() {
-        return Err(mlua::Error::runtime("stopped"));
-      }
-      // mlua polls a tool's future from Luau: that wait is the tool's, and
-      // its own timeout ends it.
-      if run.waiting == 0 && run.deadline.is_some_and(|t| Instant::now() > t) {
-        return Err(mlua::Error::runtime("time budget exceeded (infinite loop?)"));
-      }
-      Ok(VmState::Continue)
-    });
+    limit(&lua, &run);
     let host = g.get("__host")?;
     Ok(Vm {
       lua,

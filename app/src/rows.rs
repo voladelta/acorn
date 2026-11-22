@@ -449,7 +449,7 @@ pub fn pending(images: Signal<Vec<Vec<u8>>>) -> impl IntoElement {
   )
 }
 
-/// The attach button: images picked from this Mac.
+/// The attach button: images picked from this machine.
 pub fn attach(images: Signal<Vec<Vec<u8>>>) {
   let request = nsh_core::picker::PickRequest::new(true, 20);
   spawn(async move {

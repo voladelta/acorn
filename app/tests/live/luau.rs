@@ -354,7 +354,7 @@ pub fn image() {
 pub fn plugins() {
   let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins");
   let mut l = Live::start("luau_plugins", &[], |d| {
-    std::fs::create_dir_all(d.home().join("plugins")).unwrap()
+    std::fs::create_dir_all(d.home().join("plugins")).unwrap();
   });
   let plugins = l.dirs().home().join("plugins");
   let ask = |l: &mut Live, tag: &str, what: &str| -> String {
