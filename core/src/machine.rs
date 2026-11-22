@@ -156,7 +156,7 @@ impl Ran {
 
 /// Runs a command with `bash -c` in `workdir`, in its own process group,
 /// every process marked ACORN_RUN, its streams kept apart. On its timeout
-/// (ms, at most MAX_TIMEOUT_MS) the group gets SIGTERM, then SIGKILL after
+/// (ms, 0 to MAX_TIMEOUT_MS; NaN: the most) the group gets SIGTERM, then SIGKILL after
 /// GRACE if any of it is left (the shell, or a job it started).
 /// It ends when the shell has exited and its streams have closed, or GRACE
 /// after the shell exited, whatever still holds them (a job left running).
@@ -165,7 +165,11 @@ impl Ran {
 /// name another.
 /// A stop kills the group and ends the wait at once.
 pub async fn shell(command: &str, workdir: &Path, timeout: f64, cancel: CancellationToken) -> Result<Ran, String> {
-  let timeout = timeout.min(MAX_TIMEOUT_MS);
+  let timeout = if timeout.is_nan() {
+    MAX_TIMEOUT_MS
+  } else {
+    timeout.clamp(0.0, MAX_TIMEOUT_MS)
+  };
   SHELLS.lock().retain(|&pid, exited| group(pid, exited));
   let mut cmd = tokio::process::Command::new("bash");
   cmd
@@ -739,6 +743,12 @@ mod tests {
     // SAFETY: getuid cannot fail.
     assert_eq!(meta.uid(), unsafe { libc::getuid() });
     assert_eq!(meta.mode() & 0o777, 0o700);
+  }
+
+  #[test]
+  fn shell_takes_any_timeout() {
+    run("true", -1.0); // no panic: at once timed out
+    assert_eq!(run("echo hi", f64::NAN).tails().0.trim(), "hi");
   }
 
   fn run(command: &str, timeout: f64) -> Ran {

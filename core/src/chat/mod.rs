@@ -436,7 +436,7 @@ impl Chat {
       }
     }
     let said = if back {
-      self.mem.unpurge(agent, id)
+      self.mem.unpurge(agent, id, &self.secrets)
     } else {
       self.mem.purge(agent, id)
     };
@@ -457,7 +457,9 @@ impl Chat {
     if text.chars().count() < SECRET {
       return format!("Give text of {SECRET} characters at least: the secret itself.");
     }
-    self.secrets.push(text.to_string());
+    if !self.secrets.iter().any(|s| s == text) {
+      self.secrets.push(text.to_string());
+    }
     for (call, _, _) in &self.compactions {
       call.stop();
     }
@@ -749,5 +751,23 @@ mod tests {
     // one overlapping itself
     shown_as_whole(&["abcd-abcd"], "abcd-abcd-abcd.", "[purged].");
     shown_as_whole(&["ééé"], "éééé, éé.", "[purged], éé.");
+  }
+  #[tokio::test]
+  async fn a_message_holding_a_secret_stays_purged() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = open(dir.path());
+    let mut chat = engine.lock();
+    let msg = chat.push(None, crate::Kind::User, "my code is my-project-code-1234");
+    chat.purge_text("my-project-code-1234");
+    chat.purge_text("my-project-code-1234");
+    assert_eq!(chat.secrets.len(), 1);
+    let said = chat.purge(None, msg.id, true);
+    assert!(said.contains("stays purged"), "{said}");
+    assert_eq!(chat.mem.message(msg.id).unwrap().text, crate::memory::PURGED);
+    let other = chat.push(None, crate::Kind::User, "my aside");
+    chat.purge(None, other.id, false);
+    let said = chat.purge(None, other.id, true);
+    assert!(said.starts_with("Unpurged"), "{said}");
+    assert_eq!(chat.mem.message(other.id).unwrap().text, "my aside");
   }
 }

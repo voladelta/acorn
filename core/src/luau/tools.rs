@@ -109,6 +109,7 @@ pub(super) fn tools(lua: &Lua, cwd: &Path, run: &Arc<Mutex<Run>>) -> mlua::Resul
       let (dir, r) = (dir.clone(), r.clone());
       async move {
         let secs = opt::<f64>(&opts, "timeout")?
+          .filter(|t| !t.is_nan())
           .unwrap_or(SH_TIMEOUT)
           .clamp(1.0, SH_TIMEOUT_MAX);
         let workdir = opt::<String>(&opts, "cwd")?.map_or_else(|| dir.clone(), |d| dir.join(d));

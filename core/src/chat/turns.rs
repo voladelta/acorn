@@ -33,9 +33,16 @@ pub(super) fn whole_line(root: &memory::Root) -> String {
   format!("{}+0|{}\n", root.i, root.show())
 }
 
-pub(super) fn latest(mem: &memory::Memory, from: u64, end: u64) -> crate::Say {
+/// Every message from `from` on, whole, but the pages of those `new`
+/// (the turn's, told apart): what came between or after them (a reminder,
+/// a note, the reply to a message left as the call ended) kept with the
+/// rest.
+pub(super) fn latest(mem: &memory::Memory, from: u64, new: &[Span]) -> crate::Say {
   let mut say = crate::Say::default();
-  for id in from..end {
+  for id in from..mem.count {
+    if new.iter().any(|m| (m.id..m.end).contains(&id)) {
+      continue;
+    }
     if let Some(root) = mem.message(id) {
       if say.text.is_empty() {
         say
@@ -182,7 +189,7 @@ impl Engine {
         .map(|m| chat.mem.say(m.id.max(from), m.end))
         .collect();
       let text = says.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("\n\n");
-      let mut latest = latest(&chat.mem, from, msgs.first().map_or(chat.mem.count, |m| m.id));
+      let mut latest = latest(&chat.mem, from, &msgs);
       latest.imgs.extend(says.into_iter().flat_map(|s| s.imgs));
       chat.eye = chat.eye_from(from);
       chat.show();
@@ -693,12 +700,43 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn a_reply_after_a_message_left_goes_whole_with_the_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    let (call, halt) = {
+      let mut chat = engine.lock();
+      let call = ai::ask(chat.share(), Arc::new(|_| {}));
+      chat.phase = Phase::Calling {
+        call: call.handle.clone(),
+        asked: false,
+        open: 0,
+      };
+      let msg = chat.push(None, Kind::User, "cut in");
+      chat.take(msg);
+      call.handle.stop();
+      (call, chat.halt.clone())
+    };
+    while !call.done.is_finished() {
+      tokio::task::yield_now().await;
+    }
+    // logged after the message the call left: its reply, then a notice
+    engine.lock().push(None, Kind::Acorn, "the reply");
+    engine.lock().push(None, Kind::Note, "a notice");
+    engine.clone().ended(call, halt).await;
+    let chat = engine.lock();
+    let tail = latest(&chat.mem, chat.from(), &chat.wait);
+    assert!(tail.text.contains("the reply"));
+    assert!(tail.text.contains("a notice"));
+    assert!(!tail.text.contains("cut in"));
+  }
+
+  #[tokio::test]
   async fn unbuilt_tail_goes_whole_before_the_waiting_messages() {
     let dir = tempfile::tempdir().unwrap();
     let engine = crate::chat::tests::open(dir.path());
     let mut chat = engine.lock();
     assert_eq!(chat.from(), 0);
-    assert!(latest(&chat.mem, 0, 0).text.is_empty());
+    assert!(latest(&chat.mem, 0, &[]).text.is_empty());
     chat
       .mem
       .push(vec![
@@ -708,7 +746,7 @@ mod tests {
       .unwrap();
     chat.wait.push(Span { id: 1, end: 2 });
     assert_eq!(chat.from(), 0);
-    let tail = latest(&chat.mem, chat.from(), 1);
+    let tail = latest(&chat.mem, chat.from(), &chat.wait);
     assert!(
       tail
         .text
@@ -716,7 +754,7 @@ mod tests {
     );
     assert!(!tail.text.contains("1+0|"));
     assert!(tail.imgs.is_empty());
-    assert!(latest(&chat.mem, 2, 3).text.is_empty());
+    assert!(latest(&chat.mem, 2, &[]).text.is_empty());
   }
 
   #[tokio::test]

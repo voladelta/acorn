@@ -94,7 +94,9 @@ impl Memory {
   /// images and line back, and, in the chat, the nodes built without it
   /// let go, so it and those above build anew with it. Answers what it
   /// did.
-  pub fn unpurge(&mut self, agent: Option<&str>, id: u64) -> Result<String> {
+  /// A message holding any of `secrets` (purged as text, `purge_text`) is
+  /// not taken back: it stays purged, as does every copy of the secret.
+  pub fn unpurge(&mut self, agent: Option<&str>, id: u64, secrets: &[String]) -> Result<String> {
     let log = agent.unwrap_or(CHAT);
     let Some((a, b)) = self.pages_of(agent, id) else {
       return Ok(no_message(agent, id));
@@ -134,6 +136,11 @@ impl Memory {
         )
         .optional()?;
       let Some((text, images, line)) = back else { continue };
+      if secrets.iter().any(|secret| text.contains(secret.as_str())) {
+        return Ok(format!(
+          "Message {id} holds a secret purged as text: it stays purged, as that secret does everywhere."
+        ));
+      }
       root.text = text;
       root.images = serde_json::from_str(&images)?;
       root.line = line;

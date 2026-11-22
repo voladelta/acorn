@@ -200,7 +200,7 @@ fn purge_unpurge_and_wal_erasure() {
   );
 
   // taken back: its text, and the nodes over it built anew with it
-  let said = mem.unpurge(None, 5).unwrap();
+  let said = mem.unpurge(None, 5, &[]).unwrap();
   assert!(said.starts_with("Unpurged message 5"), "{said}");
   assert_eq!(mem.message(5).unwrap().text, format!("my key is {SECRET}"));
   assert!(mem.node(Part::new(0, 5)).is_none() && mem.node(Part::new(3, 0)).is_none());
@@ -208,7 +208,7 @@ fn purge_unpurge_and_wal_erasure() {
   assert!(mem.node(Part::new(0, 5)).is_some_and(|t| t.contains(SECRET)));
   assert!(mem.node(Part::new(3, 0)).is_some());
   assert!(mem.search(memory::CHAT, "hunter2", 10).starts_with("5|"));
-  assert!(mem.unpurge(None, 5).unwrap().contains("isn't held"));
+  assert!(mem.unpurge(None, 5, &[]).unwrap().contains("isn't held"));
   mem.purge(None, 5).unwrap();
 
   build(&mut mem);
@@ -227,7 +227,7 @@ fn purge_unpurge_and_wal_erasure() {
   assert!(on_disk(&dir, SECRET), "held in its grace, a wipe leaves it");
   let cutoff = acorn_core::now_ms() - memory::GRACE;
   mem.db.execute("update held set at = ?", [cutoff]).unwrap();
-  assert!(mem.unpurge(None, 5).unwrap().contains("ten minutes are over"));
+  assert!(mem.unpurge(None, 5, &[]).unwrap().contains("ten minutes are over"));
   assert_eq!(
     mem.message(5).unwrap().text,
     PURGED,
