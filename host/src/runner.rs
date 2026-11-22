@@ -106,9 +106,6 @@ impl Runner {
     let token = self.token();
     let log = open_log(&self.run.join("server.log"))?;
     let sock = self.sock();
-    let server_args = |c: &mut std::process::Command| {
-      c.arg(&plan.server).arg("--unix").arg(&sock).arg("--web").arg(&plan.web);
-    };
     // the pipe bwrap tells its child's pid through
     let mut info: Option<(OwnedFd, OwnedFd)> = None;
     let mut cmd = if plan.sandbox {
@@ -122,15 +119,13 @@ impl Runner {
         info_fd: Some(w.as_raw_fd()),
       };
       let mut c = std::process::Command::new("bwrap");
-      c.args(sandbox.args());
-      server_args(&mut c);
+      c.args(sandbox.args()).arg(&plan.server);
       info = Some((r, w));
       c
     } else {
-      let mut c = std::process::Command::new(&plan.server);
-      c.arg("--unix").arg(&sock).arg("--web").arg(&plan.web);
-      c
+      std::process::Command::new(&plan.server)
     };
+    cmd.arg("--unix").arg(&sock).arg("--web").arg(&plan.web);
     cmd.env_clear();
     for var in ["PATH", "LANG", "TZ"] {
       if let Some(v) = std::env::var_os(var) {
@@ -170,25 +165,7 @@ impl Runner {
     *self.pid.lock().unwrap() = outer;
     if let Some((r, w)) = info {
       drop(w);
-      // bwrap writes {"child-pid": N} and closes it; N is its init in the
-      // namespace, whose child is the server
-      let text = tokio::task::spawn_blocking(move || {
-        let mut f = std::fs::File::from(r);
-        let mut s = String::new();
-        let _ = std::io::Read::read_to_string(&mut f, &mut s);
-        s
-      })
-      .await
-      .unwrap_or_default();
-      let init = serde_json::from_str::<serde_json::Value>(&text)
-        .ok()
-        .and_then(|v| v["child-pid"].as_i64())
-        .map(|p| p as i32);
-      let child = match init {
-        Some(pid) => first_child(pid).await,
-        None => None,
-      };
-      *self.pid.lock().unwrap() = child.or(outer);
+      *self.pid.lock().unwrap() = sandboxed(r).await.or(outer);
     }
     let status = child.wait().await.map_err(|e| e.to_string())?;
     *self.pid.lock().unwrap() = None;
@@ -287,6 +264,25 @@ fn pipe() -> Result<(OwnedFd, OwnedFd), String> {
     return Err(format!("pipe: {}", std::io::Error::last_os_error()));
   }
   Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+}
+
+/// The server's pid in a sandbox, from the pipe bwrap tells its child's
+/// through: it writes {"child-pid": N} and closes it; N is its init in the
+/// namespace, whose child is the server.
+async fn sandboxed(told: OwnedFd) -> Option<i32> {
+  let text = tokio::task::spawn_blocking(move || {
+    let mut f = std::fs::File::from(told);
+    let mut s = String::new();
+    let _ = std::io::Read::read_to_string(&mut f, &mut s);
+    s
+  })
+  .await
+  .unwrap_or_default();
+  let init = serde_json::from_str::<serde_json::Value>(&text)
+    .ok()
+    .and_then(|v| v["child-pid"].as_i64())
+    .map(|p| p as i32)?;
+  first_child(init).await
 }
 
 /// The first child of `pid`, waited for a moment (bwrap's init forks it).
