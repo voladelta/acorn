@@ -19,7 +19,6 @@ import { type Command, type Entry, type Event, type Kind, type Live, livePush, M
 
 const WAIT = 'summarizing…';
 const SUMS = 'summarizing earlier messages…';
-const GOAL = 'checking the goal…';
 const FOLD = 'Overview: the whole chat in the fewest blocks. Esc goes back.';
 const FOLDING = 'finding the fewest blocks…';
 
@@ -315,7 +314,7 @@ export function tail(m: Model): Row[] {
   const load: Row[] = m.page === null && importing ? [{ t: 'cap', text: progressShow(importing) }] : [];
   const wait = m.state?.wait ?? 'None';
   if (m.page !== null || rows.length || wait === 'None') return [...rows, ...load];
-  const cap = wait === 'Summaries' ? SUMS : wait === 'Goal' ? GOAL : `waiting for ${MODEL}…`;
+  const cap = wait === 'Summaries' ? SUMS : `waiting for ${MODEL}…`;
   return [{ t: 'cap', text: cap }, ...load];
 }
 

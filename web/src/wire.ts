@@ -46,13 +46,12 @@ export interface Progress {
   open: number[];
 }
 
-export type Wait = 'None' | 'Summaries' | 'Model' | 'Goal';
+export type Wait = 'None' | 'Summaries' | 'Model';
 
 export interface State {
   busy: boolean;
   wait: Wait;
   agents: string[];
-  goal: string | null;
   importing: Progress | null;
   today: Spend | null;
 }

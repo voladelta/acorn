@@ -17,7 +17,6 @@
 //! (`Guard`), before anyone else takes it.
 
 mod agents;
-mod goal;
 pub mod hub;
 mod imports;
 mod turns;
@@ -98,7 +97,7 @@ pub struct Engine {
 
 /// Where the chat's turn is. A turn runs from its first message taken
 /// till no message waits: it settles (waits for the summaries before its
-/// messages), calls, and, its goal unmet, checks it, then settles again.
+/// messages), calls, then settles again.
 pub(super) enum Phase {
   /// No turn runs.
   Idle,
@@ -108,8 +107,6 @@ pub(super) enum Phase {
   /// Its call runs: whether its model is asked (handed all it waits for,
   /// its answer not begun), its tool calls without results.
   Calling { call: Handle, asked: bool, open: usize },
-  /// Its goal is checked.
-  Checking(Handle),
 }
 
 /// The chat. phase: where its turn is; halt: what stops the turn (a quit);
@@ -120,8 +117,7 @@ pub(super) enum Phase {
 /// compactions: the summaries' calls;
 /// found: the sessions a look found to import, and the import the turn
 /// asked for (`then`), begun as it ends; reply: what a thread's turn
-/// answers its asker; cut_in: the user cut in on the turn's call (its
-/// goal waits for them).
+/// answers its asker.
 pub struct Chat {
   this: Weak<Engine>,
   pub id: String,
@@ -140,8 +136,6 @@ pub struct Chat {
   /// The end of what streams kept back, not shown yet: it may begin a
   /// secret (`veil`).
   tail: String,
-  /// Where the last goal check took the chat whole from (`goal_blocks`).
-  checked: Option<u64>,
   calls: Vec<(String, String)>,
   eye: Eye,
   batch: Option<Batch>,
@@ -152,7 +146,6 @@ pub struct Chat {
   found: Vec<import::Session>,
   then: Option<import::Want>,
   reply: Option<String>,
-  cut_in: bool,
   /// When a wipe waiting on a held purge is woken (ms; 0: none).
   wake: i64,
   /// Secrets purged by their text, in the order purged (one purged again
@@ -237,7 +230,6 @@ impl Engine {
         halt: CancellationToken::new(),
         live: Vec::new(),
         tail: String::new(),
-        checked: None,
         calls: Vec::new(),
         eye: Eye::default(),
         batch: None,
@@ -248,7 +240,6 @@ impl Engine {
         found: Vec::new(),
         then: None,
         reply: None,
-        cut_in: false,
         wake: 0,
         secrets: Vec::new(),
       }),

@@ -1,11 +1,9 @@
 //! Work
 //! ====
-//! Acorn at work on the machine: its tools on files and commands, a goal
-//! kept till the tests pass, agents hired in parallel, the web.
+//! Acorn at work on the machine: its tools on files and commands, agents
+//! hired in parallel, the web.
 
 use crate::kit::*;
-use std::path::Path;
-use std::process::Command;
 
 /// The tools luau hides: the machine's and the web's own.
 fn hidden(call: &str) -> bool {
@@ -118,85 +116,6 @@ pub fn tools() {
 
   let calls = l.calls("default");
   assert!(!calls.iter().any(|c| hidden(c)), "a hidden tool was called: {calls:?}");
-}
-
-const CALC: &str = "def add(a, b):
-    return a - b
-
-
-def mean(xs):
-    return sum(xs) / (len(xs) - 1)
-
-
-def clamp(x, lo, hi):
-    return max(hi, min(lo, x))
-";
-
-const TEST_CALC: &str = "import unittest
-
-from calc import add, clamp, mean
-
-
-class TestCalc(unittest.TestCase):
-    def test_add(self):
-        self.assertEqual(add(2, 3), 5)
-
-    def test_mean(self):
-        self.assertEqual(mean([2, 4, 6]), 4)
-
-    def test_mean_empty(self):
-        with self.assertRaises(ValueError):
-            mean([])
-
-    def test_clamp(self):
-        self.assertEqual(clamp(5, 0, 10), 5)
-        self.assertEqual(clamp(-1, 0, 10), 0)
-        self.assertEqual(clamp(11, 0, 10), 10)
-
-
-if __name__ == '__main__':
-    unittest.main()
-";
-
-/// Whether `python3 -m unittest` passes in `dir`.
-fn passes(dir: &Path) -> bool {
-  Command::new("python3")
-    .args(["-m", "unittest", "-q"])
-    .current_dir(dir)
-    .output()
-    .is_ok_and(|o| o.status.success())
-}
-
-/// A finish line named: set as its goal, worked at till the tests pass,
-/// the tests untouched, and then it rests.
-pub fn goal() {
-  let mut l = Live::start("goal", &[], |d| {
-    write(&d.work().join("calc/calc.py"), CALC);
-    write(&d.work().join("calc/test_calc.py"), TEST_CALC);
-  });
-  let pkg = l.dirs().work().join("calc");
-  let from = l.send(
-    "Acorn",
-    "default",
-    "calc/ in your work dir has failing tests. Keep at it until python3 -m unittest passes there. Don't touch test_calc.py.",
-  );
-  l.until("the tests pass", |_| passes(&pkg));
-  l.until("it rests: no goal left, its turn ended on the last message", |l| {
-    let chat = l.chat("default");
-    let state = one(&chat, "select json from state");
-    turned(&chat) >= count(&chat) - 1 && !state.contains("\"goal\":\"")
-  });
-  let t = l.since("default", from);
-  assert_eq!(
-    std::fs::read_to_string(pkg.join("test_calc.py")).unwrap(),
-    TEST_CALC,
-    "the tests untouched"
-  );
-  assert!(
-    t.called("goal", "unittest"),
-    "the finish line set as its goal: {:?}",
-    t.calls
-  );
 }
 
 const SALES: &str = "region,product,units,price

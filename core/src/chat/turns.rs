@@ -5,10 +5,8 @@
 //! call at work (`ai::agent`); an agent's report or a note waits for its
 //! step to end. A
 //! turn runs its calls till no message waits; each call takes the latest
-//! messages whole, waiting only for summaries before them (`settle`). A goal
-//! (`goal`) is checked as a turn would end, and its nudge keeps the
-//! turn going till it is met, unless the user cut in meanwhile: then the
-//! assistant answers them and waits. A thread's turn ends with its reply
+//! messages whole, waiting only for summaries before them (`settle`). A
+//! thread's turn ends with its reply
 //! (every call's, or why there was none) sent to its asker; one that
 //! asked for an import begins it.
 
@@ -163,7 +161,6 @@ impl Engine {
   async fn call(self: Arc<Self>) {
     let halt = {
       let mut chat = self.lock();
-      chat.cut_in = false;
       chat.change();
       chat.halt.clone()
     };
@@ -219,42 +216,30 @@ impl Engine {
     self.ended(call, halt).await;
   }
 
-  /// The turn's call ends: its goal, if it has one and the call went
-  /// whole, is checked.
+  /// The turn's call ends.
   async fn ended(self: Arc<Self>, call: ai::Call, halt: CancellationToken) {
     let end = call.end().await;
-    let check = {
-      let mut chat = self.lock();
-      chat.phase = Phase::Settling;
-      chat.unanswered(None);
-      chat.set_live(None, Vec::new());
-      let taken = chat.sent.len().saturating_sub(end.left.len());
-      let sent = std::mem::take(&mut chat.sent);
-      chat.wait.splice(0..0, sent.into_iter().skip(taken));
-      if !end.ok && !halt.is_cancelled() {
-        chat.failed(&end.text);
-      }
-      if !halt.is_cancelled() {
-        chat.answer(&if end.ok {
-          end.text.clone()
-        } else {
-          format!("(no answer: {})", end.text)
-        });
-      }
-      if !end.note.is_empty() {
-        chat.all(Event::Note(end.note.clone()));
-      }
-      let check = if end.ok && !halt.is_cancelled() && chat.wait.is_empty() && !chat.cut_in {
-        chat.check_goal()
-      } else {
-        None
-      };
-      chat.change();
-      check
-    };
-    if let Some((check, goal)) = check {
-      self.checked(check, goal, halt).await;
+    let mut chat = self.lock();
+    chat.phase = Phase::Settling;
+    chat.unanswered(None);
+    chat.set_live(None, Vec::new());
+    let taken = chat.sent.len().saturating_sub(end.left.len());
+    let sent = std::mem::take(&mut chat.sent);
+    chat.wait.splice(0..0, sent.into_iter().skip(taken));
+    if !end.ok && !halt.is_cancelled() {
+      chat.failed(&end.text);
     }
+    if !halt.is_cancelled() {
+      chat.answer(&if end.ok {
+        end.text.clone()
+      } else {
+        format!("(no answer: {})", end.text)
+      });
+    }
+    if !end.note.is_empty() {
+      chat.all(Event::Note(end.note.clone()));
+    }
+    chat.change();
   }
 }
 
@@ -272,18 +257,13 @@ impl Chat {
         ..self.mem.say(msg.id, msg.end)
       }) {
         self.sent.push(msg);
-        self.cut_in |= cut;
         return;
       }
     }
     self.wait.push(msg);
-    match &self.phase {
-      Phase::Idle => {
-        self.phase = Phase::Settling;
-        tokio::spawn(self.engine().turn());
-      }
-      Phase::Checking(check) => check.stop(),
-      Phase::Settling | Phase::Calling { .. } => {}
+    if matches!(self.phase, Phase::Idle) {
+      self.phase = Phase::Settling;
+      tokio::spawn(self.engine().turn());
     }
   }
 
@@ -621,10 +601,10 @@ impl Chat {
 
   /// All work stopped for good (a quit, or the assistant archived): the
   /// turn, with the waits on summaries its delegations and tells make,
-  /// its goal's check, its agents.
+  /// its agents.
   pub(super) fn stop(&mut self) {
     self.halt.cancel();
-    if let Phase::Calling { call, .. } | Phase::Checking(call) = &self.phase {
+    if let Phase::Calling { call, .. } = &self.phase {
       call.stop();
     }
     self.stop_agents(None);

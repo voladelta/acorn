@@ -79,18 +79,15 @@ pub enum Wait {
   Summaries,
   /// The model's first piece (a request out, no tool running).
   Model,
-  /// The check of the goal the turn works to.
-  Goal,
 }
 
 /// The chat's state: a turn runs; what it waits on; the agents at work;
-/// the goal it works to; an import's progress; what every call used today.
+/// an import's progress; what every call used today.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct State {
   pub busy: bool,
   pub wait: Wait,
   pub agents: Vec<String>,
-  pub goal: Option<String>,
   pub importing: Option<Progress>,
   pub today: Option<Spend>,
 }

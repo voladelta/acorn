@@ -63,7 +63,6 @@ pub fn tool_glyph(name: &str) -> &'static str {
     "extend" => "🌱",
     "list_assistants" | "search_assistants" => "👥",
     "ask_assistant" => "🗣️",
-    "goal" => "🎯",
     "usage" => "💵",
     "import" => "📥",
     "export" => "💾",

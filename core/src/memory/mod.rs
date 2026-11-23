@@ -24,7 +24,7 @@
 //!
 //! Files: chat.db (SQLite, WAL) holds the messages (`msgs`, log ''), each
 //! agent's log (`msgs`, log its name) and effort (`agents`), the nodes by
-//! slot (`nodes`), the views, the chat's goal and what ran (`state`,
+//! slot (`nodes`), the views and what ran (`state`,
 //! written over), a full-text index of the messages' texts (`search`,
 //! FTS5), kept by triggers on `msgs`, so no write can leave it behind, and
 //! what each zoom and search found (`looks`: how many hits, when).
@@ -341,20 +341,18 @@ impl From<WorkAs> for Work {
   }
 }
 
-/// The state row: the chat's view, the compactions', the goal and work.
+/// The state row: the chat's view, the compactions', and work.
 #[derive(Serialize, Deserialize, Default)]
 struct Saved {
   view: Kept,
   seen: Kept,
   #[serde(default)]
-  goal: Option<String>,
-  #[serde(default)]
   work: Work,
 }
 
 /// The chat's memory. db: chat.db, shared with `chat::usage`; count: the
-/// pages logged whole; open: those after, not whole yet; goal: the
-/// user's, till met or dropped; work: what ran, as last saved; nodes: the
+/// pages logged whole; open: those after, not whole yet; work: what ran,
+/// as last saved; nodes: the
 /// texts of the views' nodes built and of those above them, by slot;
 /// agents: their logs' lengths; ready: the nodes not built whose halves
 /// are, by side and level, in order; busy: nodes building, by slot, with
@@ -369,7 +367,6 @@ pub struct Memory {
   pub db: Connection,
   pub count: u64,
   pub open: u64,
-  pub goal: Option<String>,
   pub work: Work,
   nodes: HashMap<u64, String>,
   agents: HashMap<String, u64>,
@@ -426,7 +423,6 @@ impl Memory {
       db,
       count: 0,
       open: 0,
-      goal: None,
       work: Work::default(),
       nodes: HashMap::new(),
       agents: HashMap::new(),
@@ -451,7 +447,6 @@ impl Memory {
       wipe: Wipe::Idle,
     };
     if let Some(s) = &saved {
-      mem.goal.clone_from(&s.goal);
       mem.work.clone_from(&s.work);
     }
     mem.count = mem
@@ -508,7 +503,6 @@ impl Memory {
     let saved = Saved {
       view: kept(&self.view),
       seen: kept(&self.seen),
-      goal: self.goal.clone(),
       work: self.work.clone(),
     };
     self.db.execute(
@@ -597,11 +591,7 @@ impl Memory {
   /// whole in a call: the view's HIGH bytes, PICS images (the last
   /// always).
   pub fn whole(&self, from: u64) -> u64 {
-    self.whole_in(from, config::get().view)
-  }
-
-  /// As `whole`, in `high` bytes.
-  pub fn whole_in(&self, from: u64, high: usize) -> u64 {
+    let high = config::get().view;
     let (mut size, mut pics) = (0, 0);
     let mut k = self.count;
     while k > from {
