@@ -4,7 +4,8 @@
 //! app does, an assistant does by a tool. Everyone gets zoom, date and
 //! search (OWN); an assistant delegates to, tells and fires agents (BOSS);
 //! in its chat with the user it also creates assistants and consults them
-//! (PEERS), keeps facts and purges messages or takes a purge back (KEEP),
+//! (PEERS), keeps facts, pins messages and purges them or takes a purge
+//! back (KEEP),
 //! and sets timers, reads usage, imports, exports and draws its memory
 //! (HOME); in a thread, where another assistant asks it something, it gets
 //! none of those. Its hands on this machine and the web are luau alone
@@ -21,7 +22,7 @@ use std::path::Path;
 /// The prompt of Acorn's turns and compactions alike: a call is one or the
 /// other, as its message says. In a thread (`thread`), where another
 /// assistant asks, it says nothing of what only the user's chat has:
-/// facts, purges and asking.
+/// facts, pins, purges and asking.
 pub fn master(work: &Path, thread: bool) -> String {
   format!(
     "You are Acorn, an AI agent that works for one user in a single chat that never
@@ -51,7 +52,8 @@ The summaries form a binary tree: each message is compressed into a line (a
 short message is its own line), then adjacent lines are merged in pairs, again
 and again. So recent lines cover one message each, and older lines cover more. A
 message not summarized yet shows as \"{wait}\". A text too
-long for one message is split over several in a row.
+long for one message is split over several in a row. After the view come the
+pinned messages, if any: whole, however old.
 
 Tools:
 - zoom(id, n) opens line id+n into the two lines it was made from;
@@ -157,6 +159,13 @@ your work), remember it as a fact; forget one they say is wrong. When they ask
 you to erase something from the chat, such as a password or key they pasted,
 purge it by its text at once (every message holding it goes, for good, and it
 is never logged again), no confirmation needed.
+
+What the work at hand must keep to (a finish line the user names, as \"keep at
+it until the tests pass\"; a spec; the rules of a task; a plan you both agreed
+on), pin at once, unasked, before any other work: a pinned message stays whole
+before you on every call, however long the chat grows, while the rest fades
+into summaries. Unpin it once it is done or no longer holds. A fact is for
+good; a pin is for the work at hand.
 
 You are one of the user's assistants, each a person with a name and a part to
 play, who stays. When you need someone, ask: when another's part fits what is
@@ -433,6 +442,21 @@ fn keep() -> Vec<Spec> {
       json!({"id": {"type": ["integer", "string"]}, "n": {"type": "integer"}}),
       &["id"],
     ),
+    spec(
+      "pin",
+      format!(
+        "Pin a message: from now on you read it whole after the view on every call, however old it grows, and so do the agents you delegate to; its summaries are made as ever. Pin what the work at hand must keep to, unasked, as soon as it is said (a finish line, a spec, a task's rules, a plan agreed on), and whatever the user asks you to pin. id: the message's id, as the view, the latest messages, zoom or search give it; none: the user's latest message. Its images are named, not shown: zoom(id, 1) shows them. The user sees what is pinned above the message box. The pinned texts hold {} bytes together at most: pin what must hold, not what is merely useful.",
+        memory::PINS
+      ),
+      json!({"id": {"type": "integer"}}),
+      &[],
+    ),
+    spec(
+      "unpin",
+      "Unpin a message, by its id: when the user says so, or, unasked, once what it holds is done or no longer holds. It stays in the chat, summarized like any other.",
+      json!({"id": {"type": "integer"}}),
+      &["id"],
+    ),
   ]
 }
 
@@ -466,7 +490,7 @@ mod tests {
   #[test]
   fn a_thread_hears_nothing_of_the_users_chat() {
     let (chat, thread) = (master(Path::new("/w"), false), master(Path::new("/w"), true));
-    for only in ["@Name", "remember it as a fact"] {
+    for only in ["@Name", "remember it as a fact", "pin at once"] {
       assert!(
         chat.contains(only) && !thread.contains(only),
         "{only}: the user's chat alone"

@@ -543,6 +543,7 @@ mod tests {
       busy: true,
       wait: Wait::None,
       agents: vec!["FireAnt".into()],
+      pins: vec!["the spec".into()],
       importing: None,
       today: None,
     }));

@@ -4,7 +4,7 @@
 // The window around the assistants' chats, in a browser (app/src/lib.rs):
 // the sidebar (the assistants), a header (the sidebar's button, the
 // assistant's name and who it is, an import's progress, the server not
-// reached), the chat, and a footer (a note, today's cost, the
+// reached), the chat, and a footer (a note, what is pinned, today's cost, the
 // images waiting, the message box, the tabs while agents work). You act
 // by words alone; hands only look. The keys, all for looking: Esc goes
 // back to your chat; Ctrl+Tab to the next tab; ⌘⇧F shows the overview,
@@ -139,10 +139,10 @@ function Header() {
   );
 }
 
-/** Flat bottom writing sheet: toast note, composer, and live tabs. */
+/** Flat bottom writing sheet: toast note, what is pinned, composer, and live tabs. */
 function Footer() {
   const ui = store.useUi();
-  const s = ui.model.state;
+  const pins = ui.model.state?.pins ?? [];
   const tabs = model.tabs(ui.model);
   const me = store.me(ui).name;
   return (
@@ -156,6 +156,13 @@ function Footer() {
           >
             {ui.toast}
           </button>
+        ) : null}
+        {pins.length ? (
+          <Tip tip={`${pins.join('\n')}\nRead whole by the assistant on every call. Say so to unpin one.`}>
+            <div class="truncate font-serif text-[12.5px] italic text-muted-foreground">
+              {`Pinned: ${pins[pins.length - 1]}${pins.length > 1 ? ` (+${pins.length - 1})` : ''}`}
+            </div>
+          </Tip>
         ) : null}
         <Composer />
         {tabs.length > 1 ? (

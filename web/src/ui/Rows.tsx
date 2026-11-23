@@ -44,6 +44,8 @@ const GLYPHS: Record<string, string> = {
   list_assistants: '👥',
   search_assistants: '👥',
   ask_assistant: '🗣️',
+  pin: '📌',
+  unpin: '📌',
   usage: '💵',
   import: '📥',
   export: '💾',

@@ -263,6 +263,10 @@ impl Engine {
       "remember" => self.remember(&input).await,
       "forget" => self.forget(&input).await,
       "purge" | "unpurge" => self.purge_tool(&input, name == "unpurge"),
+      "pin" | "unpin" => self
+        .lock()
+        .pin(number(&input["id"]), name == "unpin")
+        .map_or_else(Out::fail, Out::ok),
       "extend" => crate::extend::extend(
         &config::get().dir,
         &str("kind"),
@@ -605,7 +609,7 @@ impl Engine {
     Some(format!("{}\n{}", thread_head(&asks.name), lines.join("\n")))
   }
 
-  /// The chat's view and whole tail; else why there is
+  /// The chat's view, pins and whole tail; else why there is
   /// none (work stopped).
   async fn view(&self, halt: &CancellationToken) -> Result<View, String> {
     let from = {
@@ -618,6 +622,7 @@ impl Engine {
     let chat = self.lock();
     let latest = super::turns::latest(&chat.mem, from, &[]);
     let mut blocks = chat.mem.view_blocks(from);
+    blocks.extend(super::turns::pinned(&chat.mem, from));
     if !latest.text.is_empty() {
       blocks.push(Block::new(latest.text, true));
     }

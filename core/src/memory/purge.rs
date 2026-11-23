@@ -288,7 +288,7 @@ impl Memory {
       .map(|(log, i)| ((log != CHAT).then_some(log), i))
   }
 
-  fn pages_of(&self, agent: Option<&str>, id: u64) -> Option<(u64, u64)> {
+  pub(super) fn pages_of(&self, agent: Option<&str>, id: u64) -> Option<(u64, u64)> {
     let (mut a, mut b) = (id, id);
     match agent {
       Some(name) => {
@@ -378,7 +378,7 @@ impl Memory {
   }
 }
 
-fn no_message(agent: Option<&str>, id: u64) -> String {
+pub(super) fn no_message(agent: Option<&str>, id: u64) -> String {
   match agent {
     Some(name) => format!("No message {id} in {name}'s chat."),
     None => format!("No message {id}."),
@@ -386,7 +386,7 @@ fn no_message(agent: Option<&str>, id: u64) -> String {
 }
 
 /// A message's pages, said if more than one.
-fn pages(a: u64, b: u64) -> String {
+pub(super) fn pages(a: u64, b: u64) -> String {
   if a == b {
     String::new()
   } else {

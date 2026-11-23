@@ -444,6 +444,22 @@ impl Chat {
     said
   }
 
+  /// A message pinned (`Memory::pin`; no id: the user's latest that a
+  /// call was given, not one still waiting), or (`back`) unpinned: saved,
+  /// and the app told.
+  pub(super) fn pin(&mut self, id: Option<u64>, back: bool) -> Result<String, String> {
+    let said = match (back, id) {
+      (false, id) => self.mem.pin(id, self.wait.first().map_or(u64::MAX, |m| m.id)),
+      (true, Some(id)) => self.mem.unpin(id),
+      (true, None) => Err("Give id: the pinned message's.".into()),
+    };
+    if said.is_ok() {
+      self.save();
+      self.tell_state();
+    }
+    said
+  }
+
   /// Every message holding `text` purged, the chat's and the agents', for
   /// good (not to be taken back, as none held before is: `kept_from`),
   /// and from now on `text` written `[purged]` in whatever is logged: a

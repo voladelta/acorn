@@ -140,6 +140,35 @@ pub fn deep_memory() {
 
 /// A pasted key, erased when asked: no message or summary holds it, then
 /// no byte of the chat's files, and asked later it is not known.
+/// A finish line named for the work ahead is pinned unasked (the word
+/// "pin" never said), and unpinned when told the work is done.
+pub fn pin() {
+  let mut l = Live::start("pin", &[], |_| {});
+  let chat = l.chat("default");
+  let pins = |chat: &std::path::Path| one(chat, "select json_extract(json, '$.pins') from state");
+  let t = l.say(
+    "Acorn",
+    "default",
+    "For the release work we start now, keep to this until I say it's out: CHANGELOG updated, version bumped to 2.4.0, tag v2.4.0 pushed, nothing else touched. Just say noted.",
+  );
+  assert!(
+    t.calls.iter().any(|c| c.starts_with("pin {")),
+    "pinned unasked: {:?}",
+    t.calls
+  );
+  let kept = one(
+    &chat,
+    "select text from msgs where log = '' and i = (select value from state, json_each(json, '$.pins'))",
+  );
+  assert!(kept.contains("2.4.0"), "the pin is the checklist: {kept}");
+  let t = l.say(
+    "Acorn",
+    "default",
+    "The release is out, that work is over. Unpin its checklist.",
+  );
+  assert_eq!(pins(&chat), "[]", "unpinned: {}", t.reply);
+}
+
 pub fn purge() {
   const KEY: &str = "sk-proj-ZZTESTKEY4471acornXYZ";
   let mut l = Live::start("purge", &[], |_| {});
