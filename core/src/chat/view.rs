@@ -28,6 +28,7 @@ impl Chat {
       busy: self.busy(),
       wait,
       agents: self.working(),
+      pins: self.mem.pinned().iter().map(memory::head).collect(),
       importing: self.importing(),
       today: self.today(),
     }

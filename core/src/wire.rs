@@ -82,12 +82,13 @@ pub enum Wait {
 }
 
 /// The chat's state: a turn runs; what it waits on; the agents at work;
-/// an import's progress; what every call used today.
+/// how each pinned message begins, oldest first; an import's progress; what every call used today.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct State {
   pub busy: bool,
   pub wait: Wait,
   pub agents: Vec<String>,
+  pub pins: Vec<String>,
   pub importing: Option<Progress>,
   pub today: Option<Spend>,
 }

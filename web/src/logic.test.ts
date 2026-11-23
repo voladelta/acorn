@@ -80,7 +80,7 @@ test('the chat shows blocks, then the turn whole', () => {
 });
 
 test('a message is the only act', () => {
-  let m = hear(empty(), { State: { busy: true, wait: 'None', agents: ['FireAnt'], importing: null, today: null } }).m;
+  let m = hear(empty(), { State: { busy: true, wait: 'None', agents: ['FireAnt'], pins: ['the spec'], importing: null, today: null } }).m;
   assert.equal(act(m, { t: 'send', text: ' ', images: [] }).cmds.length, 0, 'an empty Enter stops nothing');
   m = act(m, { t: 'goto', name: 'FireAnt' }).m;
   m = act(m, { t: 'fold', on: true }).m;
@@ -153,7 +153,7 @@ test('what the view no longer shows is dropped', () => {
 });
 
 test('the page of an agent done is dropped once left', () => {
-  const state = (agents: string[]) => ({ State: { busy: true, wait: 'None' as const, agents, importing: null, today: null } });
+  const state = (agents: string[]) => ({ State: { busy: true, wait: 'None' as const, agents, pins: [], importing: null, today: null } });
   let m = hear(empty(), state(['RedAnt', 'BlueOwl'])).m;
   m = act(m, { t: 'goto', name: 'RedAnt' }).m;
   m = act(m, { t: 'goto', name: 'BlueOwl' }).m;

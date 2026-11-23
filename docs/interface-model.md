@@ -5,12 +5,13 @@ Status: built · Last updated: 2026-11-23
 **As built, where it differs from the text below:**
 - Consult goes one level deep: an assistant answering in a thread has its work tools only (no `ask_assistant`, facts, import or delegating), so asks can't loop.
 - `usage` sums every chat and thread; the footer's cost is the shown chat's today.
-- Goals are gone: no `goal` tool, no check as a turn ends, no line above the box (issues 6 and 7 below read as found then).
+- Goals are gone: no `goal` tool, no check as a turn ends, no line above the box (issues 6 and 7 below read as found then). Pins took their place above the box: a message the assistant reads whole on every call, pinned by it unasked or when told.
+- Agents read the chat's pins and set none; a thread has none (an assistant answering in one has no `pin`).
 - Slash words are gone. Dropping files on the window adds their paths to the message being written ("import this").
 - Esc goes back to your chat from an agent's page, a thread or the overview.
 - An assistant made before abouts shows its name alone.
 - `@Name` is the one word the box reads itself: alone, it opens your chat with that assistant (no call); in a message, the words go to the one you talk to, whose prompt reads `@Name` as "ask them". The box suggests names as you type `@`: ↑ and ↓ pick one, Return or Tab takes it (Return sends a word already a name), a click takes the one clicked, Esc closes the names for that word.
-- An assistant answering in a thread hears nothing of what only your chat has: no facts, purges, asking or `@Name`.
+- An assistant answering in a thread hears nothing of what only your chat has: no facts, pins, purges, asking or `@Name`.
 - An assistant remembers its threads in its chat with you: each turn sees each thread's latest 8 lines ("Your threads", after the agents at work), and `zoom("Acorn")` gives one whole. Talk to Max the day after he warned Acorn, and he knows.
 - "Hire" a named person who should stay ("hire a stylist called Marrie") makes an assistant; agents get tasks by `delegate`, so the user's word and the tool never collide.
 - One `import` tool finds, starts, pauses and resumes an import (its `do`).
@@ -119,6 +120,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Agent | hands for one task | The assistant delegates one task to a freelancer; it works in the background, reports once and is gone. "Fire Scout" ends it early. |
 | Fact | knowledge across chats | "Remember X" and every assistant (or one) knows X until you say forget it. |
 | Search | find what no summary mentions | The assistant searches the messages for a word or name, then opens the hits. |
+| Pin | keep what the work must keep to in sight | Name a finish line, a spec or a plan and the assistant pins that message, unasked; "pin that" and "unpin it" work too. It reads the pinned messages whole on every call; the line above the box shows the latest. |
 | Purge | erase a secret | "Purge the message with my token": it and its summaries vanish; "unpurge it" brings it back within ten minutes, then it is wiped from disk. |
 | Create assistant | more people | Ask for someone with a name and an about; they appear in the sidebar and stay. |
 | Growing | an assistant extends itself | It sees what it has (`abilities`); taught a way of working, it writes a skill; short of a service or routine, a plugin (`extend`), checked before it goes in, the old one kept in the attic. |
@@ -159,6 +161,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Ask another assistant | `list_assistants`, `ask_assistant`; `@Name` in a message | – |
 | Create / archive / restore an assistant | `create_assistant` (name, about, effort, instructions, welcome), `archive_assistant`, `restore_assistant` | – |
 | Remember / forget / purge / unpurge | `remember`, `forget`, `purge`, `unpurge` | – |
+| Pin / unpin | `pin`, `unpin` | – |
 | Usage, import, export, tree | `usage`, `import` (find, start, pause, resume), `export`, `tree` | – |
 | Switch assistant | `@Name` alone (voice later: "let me talk to Max") | sidebar, Cmd+B |
 | Open / collapse a block | – | click |
@@ -187,6 +190,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Summarizing | the compactor at work | compressing |
 | Fact | something remembered across chats | memory |
 | Search | find the messages holding a word | grep |
+| Pin / Unpin | keep a message whole before every call / let it fade into summaries | goal, sticky |
 | Purge / Unpurge | erase a message / take that back within ten minutes | delete, redact |
 | Skill | a how-to the user keeps for a kind of task | recipe, playbook |
 
@@ -200,6 +204,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Create assistant | row appears in the sidebar with its about | – |
 | Delegate | a tab while it works; its report framed under its name | "fire it" |
 | `@Name` alone | that assistant's chat shown | Esc, or the sidebar |
+| Pin | "Pinned: …" above the box; the others in its tooltip | "unpin it"; a purge unpins its message for good |
 | Purge | the message vanishes | no confirmation; "unpurge it" brings it back within ten minutes, after which it is wiped for good |
 | Import | sessions and price stated, then asked | your yes; "pause the import" |
 

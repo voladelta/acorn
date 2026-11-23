@@ -11,7 +11,7 @@
 //! (`hear`), and both answer what to send it. The page: the sidebar
 //! (`side`: the assistants), a header (the sidebar's button, the
 //! assistant's name and who it is, an import's progress, the server not
-//! reached), the chat, and a footer (a note, today's cost, the
+//! reached), the chat, and a footer (a note, what is pinned, today's cost, the
 //! images waiting, the message box, the tabs while agents work).
 //!
 //! The chat shown is in step with its engine, or stale: events were lost,
@@ -505,7 +505,7 @@ fn chip(label: impl Fn() -> String + 'static) -> View {
     .child(text(label).text_size(px(13.5)).font_weight(FontWeight::MEDIUM))
 }
 
-/// The note shown, today's cost, the images waiting, the
+/// The note shown, what is pinned, today's cost, the images waiting, the
 /// message box, the tabs.
 fn footer(ui: Ui) -> impl IntoElement {
   view().px_5().pt_2().pb_3().items_center().child(
@@ -537,8 +537,14 @@ fn footer(ui: Ui) -> impl IntoElement {
   )
 }
 
-/// Today's cost, at the right.
+/// What is pinned (how many if several, then the latest: a long one is
+/// cut, the count never), at the left; today's
+/// cost, at the right.
 fn status_row(ui: Ui) -> impl IntoElement {
+  let pins = move || {
+    ui.model
+      .with(|m| m.state.as_ref().map_or_else(Vec::new, |s| s.pins.clone()))
+  };
   let today = move || {
     ui.model.with(|m| {
       m.state
@@ -552,6 +558,28 @@ fn status_row(ui: Ui) -> impl IntoElement {
     .flex_row()
     .items_center()
     .gap_3()
+    .child(when(
+      move || !pins().is_empty(),
+      move || {
+        text(move || {
+          let pins = pins();
+          let count = match pins.len() {
+            0 | 1 => String::new(),
+            n => format!(" ({n})"),
+          };
+          format!("Pinned{count}: {}", pins.last().cloned().unwrap_or_default())
+        })
+        .number_of_lines(1)
+        .text_size(px(12.5))
+        .text_color(mid())
+        .tooltip(hint(move || {
+          format!(
+            "{}\nRead whole by the assistant on every call. Say so to unpin one.",
+            pins().join("\n")
+          )
+        }))
+      },
+    ))
     .child(view().flex_1())
     .child(when(
       move || today().is_some(),

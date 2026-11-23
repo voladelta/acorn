@@ -52,6 +52,7 @@ export interface State {
   busy: boolean;
   wait: Wait;
   agents: string[];
+  pins: string[];
   importing: Progress | null;
   today: Spend | null;
 }

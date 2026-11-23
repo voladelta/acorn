@@ -24,7 +24,7 @@
 //!
 //! Files: chat.db (SQLite, WAL) holds the messages (`msgs`, log ''), each
 //! agent's log (`msgs`, log its name) and effort (`agents`), the nodes by
-//! slot (`nodes`), the views and what ran (`state`,
+//! slot (`nodes`), the views, the pins and what ran (`state`,
 //! written over), a full-text index of the messages' texts (`search`,
 //! FTS5), kept by triggers on `msgs`, so no write can leave it behind, and
 //! what each zoom and search found (`looks`: how many hits, when).
@@ -45,10 +45,12 @@
 
 mod images;
 mod import;
+mod pins;
 mod purge;
 mod view;
 
 pub use images::{IMAGES_ARE, image_add, image_for_model, image_kind, is_image, media_add, media_kind};
+pub use pins::{PINS, head};
 pub use purge::{GRACE, erase, wipe};
 
 use crate::clip;
@@ -341,19 +343,22 @@ impl From<WorkAs> for Work {
   }
 }
 
-/// The state row: the chat's view, the compactions', and work.
+/// The state row: the chat's view, the compactions', the pins and work.
 #[derive(Serialize, Deserialize, Default)]
 struct Saved {
   view: Kept,
   seen: Kept,
   #[serde(default)]
+  pins: Vec<u64>,
+  #[serde(default)]
   work: Work,
 }
 
 /// The chat's memory. db: chat.db, shared with `chat::usage`; count: the
-/// pages logged whole; open: those after, not whole yet; work: what ran,
-/// as last saved; nodes: the
-/// texts of the views' nodes built and of those above them, by slot;
+/// pages logged whole; open: those after, not whole yet; pins: the
+/// messages pinned (`pins`), in order; work: what ran, as last saved;
+/// nodes: the texts of the views' nodes built and of those above them, by
+/// slot;
 /// agents: their logs' lengths; ready: the nodes not built whose halves
 /// are, by side and level, in order; busy: nodes building, by slot, with
 /// their side; sides: the side by the last message of nodes not built;
@@ -367,6 +372,7 @@ pub struct Memory {
   pub db: Connection,
   pub count: u64,
   pub open: u64,
+  pub(crate) pins: Vec<u64>,
   pub work: Work,
   nodes: HashMap<u64, String>,
   agents: HashMap<String, u64>,
@@ -423,6 +429,7 @@ impl Memory {
       db,
       count: 0,
       open: 0,
+      pins: Vec::new(),
       work: Work::default(),
       nodes: HashMap::new(),
       agents: HashMap::new(),
@@ -447,6 +454,7 @@ impl Memory {
       wipe: Wipe::Idle,
     };
     if let Some(s) = &saved {
+      mem.pins.clone_from(&s.pins);
       mem.work.clone_from(&s.work);
     }
     mem.count = mem
@@ -503,6 +511,7 @@ impl Memory {
     let saved = Saved {
       view: kept(&self.view),
       seen: kept(&self.seen),
+      pins: self.pins.clone(),
       work: self.work.clone(),
     };
     self.db.execute(

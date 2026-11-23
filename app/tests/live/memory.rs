@@ -138,6 +138,55 @@ pub fn deep_memory() {
   assert!(t.reply.contains("CONDOR"), "the skill as it is now: {}", t.reply);
 }
 
+/// A finish line named for the work ahead is pinned unasked (the word
+/// "pin" never said), and unpinned when told the work is done. Sent
+/// with another message right after, it is the one pinned, not the last.
+pub fn pin() {
+  let mut l = Live::start("pin", &[], |_| {});
+  let chat = l.chat("default");
+  let pins = |chat: &std::path::Path| one(chat, "select json_extract(json, '$.pins') from state");
+  let t = l.say(
+    "Acorn",
+    "default",
+    "For the release work we start now, keep to this until I say it's out: CHANGELOG updated, version bumped to 2.4.0, tag v2.4.0 pushed, nothing else touched. Just say noted.",
+  );
+  assert!(
+    t.calls.iter().any(|c| c.starts_with("pin {")),
+    "pinned unasked: {:?}",
+    t.calls
+  );
+  let kept = |chat: &std::path::Path| {
+    rows(
+      chat,
+      "select text from msgs where log = '' and i in (select value from state, json_each(state.json, '$.pins'))",
+    )
+    .join("\n")
+  };
+  assert!(
+    kept(&chat).contains("2.4.0"),
+    "the pin is the checklist: {}",
+    kept(&chat)
+  );
+  let t = l.say(
+    "Acorn",
+    "default",
+    "The release is out, that work is over. Unpin its checklist.",
+  );
+  assert_eq!(pins(&chat), "[]", "unpinned: {}", t.reply);
+  l.send(
+    "Acorn",
+    "default",
+    "Next the docs work, and keep to this until I say the docs are done: every page under docs/ gets a one-line summary at its top, no other edit.",
+  );
+  let t = l.say("Acorn", "default", "Just say noted.");
+  assert!(
+    kept(&chat).contains("one-line summary"),
+    "the pin is the docs rule, not the last message: {} / {:?}",
+    kept(&chat),
+    t.calls
+  );
+}
+
 /// A pasted key, erased when asked: no message or summary holds it, then
 /// no byte of the chat's files, and asked later it is not known.
 pub fn purge() {

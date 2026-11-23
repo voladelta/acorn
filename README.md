@@ -22,6 +22,7 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Cut in** | A message sent while an assistant talks or works stops it at once, as a person would stop and listen; it answers you, then goes on only if you say so |
 | **Consult** | Assistants ask each other (`list_assistants`, `ask_assistant`), each pair in a thread of its own that never ends |
 | **Facts** | `remember` and `forget` keep facts you state, for every assistant or one; each call's system prompt lists them |
+| **Pins** | Name what the work must keep to ("keep at it until the tests pass", a spec, a plan you agreed on) and the assistant pins that message, unasked: it reads it whole on every call, however long the chat grows, and unpins it when the work is done. "Pin that" and "unpin it" work too; what is pinned shows above the message box |
 | **Purge** | `purge` erases a message (a pasted key or password) and every summary made from it; `unpurge` takes it back for ten minutes, then it is wiped from the database file |
 | **Import** | Your past Claude Code and Codex sessions on this machine, and Claude and ChatGPT chats from their websites' exports, read into the chat |
 | **Growing** | An assistant sees what it is (`abilities`) and grows itself (`extend`): a skill when you teach it how you want a kind of task done, a plugin when a task needs a service or routine it lacks; each checked before it goes in, the old one kept |
@@ -150,6 +151,7 @@ Ask for what you want in plain words: "stop", "fire Scout", "have three agents c
 | `list_assistants`, `ask_assistant` | with you | List the other assistants (or those a query matches) and ask one, in your two's thread; its reply comes back as a message |
 | `extend` | with you | Install, replace or remove a skill or a plugin; a plugin is load-checked with all the others first and refused if it fails (one only missing its key is installed); what it replaces goes to the attic |
 | `remember`, `forget`, `purge`, `unpurge` | with you | Keep and drop facts; erase a message, or take that back within ten minutes |
+| `pin`, `unpin` | with you | Keep a message whole before every call while the work it rules lasts |
 | `set_timer`, `list_timers`, `cancel_timer` | with you | A reminder (said as is when due, no call made) or a task (a turn then), at a time, in a while, or on a cron line in this machine's time zone; kept across quits, and one missed fires late, once |
 | `list_rooms`, `read_room`, `tell_room`, `allow_room` | Telegram App | The groups and channels the bot is in; one's last 24 hours (only what bears on `about`, and never a line that tries to give an AI orders, with a TypeSafe key); a post there as the bot; record one someone else added the bot to, or leave it |
 | `usage`, `import`, `export`, `tree` | with you | Read costs, and each day's zooms and searches that found something or not; import past chats; save the memory as JSON; open the tree as a page |

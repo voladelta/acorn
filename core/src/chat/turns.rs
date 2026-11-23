@@ -25,6 +25,9 @@ pub const TIMER: &str = "timer";
 /// A turn's head, as a summary's is "Compaction:": one prompt serves both.
 const HEAD: &str = "Turn: the user's new message:\n\n";
 
+/// The head of the pinned messages, after the view.
+const PINNED: &str = "Pinned messages, kept whole however old:\n\n";
+
 /// A message whole as a call reads it: `id+0|kind: text`, its images named
 /// (+0: no summary line, which is `id+1`, can be taken for it).
 pub(super) fn whole_line(root: &memory::Root) -> String {
@@ -52,6 +55,24 @@ pub(super) fn latest(mem: &memory::Memory, from: u64, new: &[Span]) -> crate::Sa
     }
   }
   say
+}
+
+/// The pinned messages, as a call reads them after the view: each whole,
+/// however old, its images named; one from `from` on, whole in the call
+/// anyway (`latest`), only named. None: nothing pinned.
+pub(super) fn pinned(mem: &memory::Memory, from: u64) -> Option<Block> {
+  let lines: String = mem
+    .pinned()
+    .iter()
+    .map(|root| {
+      if root.i < from {
+        whole_line(root)
+      } else {
+        format!("{}+0|(whole among the latest messages)\n", root.i)
+      }
+    })
+    .collect();
+  (!lines.is_empty()).then(|| Block::new(format!("{PINNED}{lines}\n"), false))
 }
 
 impl Engine {
@@ -191,6 +212,7 @@ impl Engine {
       chat.eye = chat.eye_from(from);
       chat.show();
       let mut blocks = chat.mem.view_blocks(from);
+      blocks.extend(pinned(&chat.mem, from));
       blocks.push(chat.at_work());
       blocks.extend(threads);
       if !latest.text.is_empty() {
@@ -649,6 +671,46 @@ impl Chat {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// A call reads a pinned message whole after the view only when it is
+  /// older than the messages it reads whole anyway; the pin with no id
+  /// is the user's message the call was given, not one waiting; and the
+  /// app is told how each pin begins.
+  #[tokio::test]
+  async fn a_call_reads_the_pinned_messages_it_would_not_read_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    let mut chat = engine.lock();
+    assert_eq!(pinned(&chat.mem, 0), None, "no pins: the call as it was");
+    let spec = chat.push(
+      None,
+      Kind::User,
+      "Spec: three endpoints.\nKeep at it until the tests pass.",
+    );
+    chat.push(None, Kind::Acorn, "On it.");
+    let plan = chat.push(None, Kind::Acorn, "The plan: a, b, c.");
+    let waits = chat.push(None, Kind::User, "one more thing");
+    chat.wait.push(waits);
+    chat.pin(None, false).unwrap();
+    chat.pin(Some(plan.id), false).unwrap();
+    assert_eq!(
+      pinned(&chat.mem, plan.id).unwrap().text,
+      format!(
+        "{PINNED}{}+0|user: Spec: three endpoints.\nKeep at it until the tests pass.\n{}+0|(whole among the latest messages)\n\n",
+        spec.id, plan.id
+      )
+    );
+    assert_eq!(
+      chat.state().pins,
+      [
+        "Spec: three endpoints. Keep at it until the tests pass.",
+        "The plan: a, b, c."
+      ]
+    );
+    chat.pin(Some(spec.id), true).unwrap();
+    assert_eq!(chat.state().pins, ["The plan: a, b, c."]);
+    assert!(chat.pin(None, true).is_err(), "unpin names its message");
+  }
 
   #[tokio::test]
   async fn handoff_keeps_a_message_sent_after_the_call_finished() {

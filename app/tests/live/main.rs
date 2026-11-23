@@ -45,6 +45,7 @@ const SCENARIOS: &[Scenario] = &[
   scenario("assistant_lifecycle", people::assistant_lifecycle),
   scenario("vietnamese", people::vietnamese),
   scenario("purge", memory::purge),
+  scenario("pin", memory::pin),
   scenario("facts", memory::facts),
   scenario("deep_memory", memory::deep_memory),
   scenario("tools", work::tools),
