@@ -3,8 +3,8 @@
 //! A pin is a message's id, kept beside the chat (`state`). A call reads
 //! the pinned messages whole, however old (`chat::turns::pinned`); the
 //! tree summarizes them like any other, so a pin changes no node and no
-//! view. One purged shows nowhere while it is, pinned or not; its purge
-//! taken back, it is pinned as before.
+//! view. A purge unpins its message (`Memory::purge`), for good: taken
+//! back, the message is no longer pinned.
 
 use super::purge::{no_message, pages};
 use super::{Memory, PURGED, Root, flat};
@@ -125,26 +125,31 @@ mod tests {
     mem.pinned().iter().map(|r| r.i).collect()
   }
 
-  /// A pin outlives a restart. Its message purged, no call reads it;
-  /// the purge taken back, it is pinned as it was.
+  /// A pin outlives a restart, and goes with its message purged: the
+  /// purge taken back, the message is not pinned, so what was pinned in
+  /// its place still fits.
   #[test]
-  fn a_pin_is_kept_and_shows_nothing_purged() {
+  fn a_pin_is_kept_till_its_message_is_purged() {
     let dir = tempfile::tempdir().unwrap();
     let mut mem = Memory::load(dir.path()).unwrap();
     said(&mut mem, Kind::User, "hello");
-    let spec = said(&mut mem, Kind::User, "the spec: three endpoints");
+    let spec = said(&mut mem, Kind::User, &"s".repeat(PINS - 10));
+    let other = said(&mut mem, Kind::User, &"o".repeat(PINS - 10));
     mem.pin(Some(spec), u64::MAX).unwrap();
     mem.save().unwrap();
     drop(mem);
     let mut mem = Memory::load(dir.path()).unwrap();
     assert_eq!(ids(&mem), [spec], "kept across a restart");
     mem.purge(None, spec).unwrap();
-    assert_eq!(ids(&mem), [0; 0], "purged: read by no call");
+    assert_eq!(ids(&mem), [0; 0], "purged: unpinned");
+    mem.pin(Some(other), u64::MAX).unwrap();
     mem.unpurge(None, spec).unwrap();
-    assert_eq!(mem.pinned()[0].text, "the spec: three endpoints", "back, pinned");
-    mem.unpin(spec).unwrap();
+    drop(mem);
+    let mut mem = Memory::load(dir.path()).unwrap();
+    assert_eq!(ids(&mem), [other], "taken back, not pinned again: the pins fit");
+    mem.unpin(other).unwrap();
     assert_eq!(ids(&mem), [0; 0]);
-    assert!(mem.unpin(spec).is_err(), "nothing to unpin");
+    assert!(mem.unpin(other).is_err(), "nothing to unpin");
   }
 
   /// Without an id, the pin is the user's latest message before the one

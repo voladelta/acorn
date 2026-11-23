@@ -204,7 +204,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Create assistant | row appears in the sidebar with its about | – |
 | Delegate | a tab while it works; its report framed under its name | "fire it" |
 | `@Name` alone | that assistant's chat shown | Esc, or the sidebar |
-| Pin | "Pinned: …" above the box; the others in its tooltip | "unpin it" |
+| Pin | "Pinned: …" above the box; the others in its tooltip | "unpin it"; a purge unpins its message for good |
 | Purge | the message vanishes | no confirmation; "unpurge it" brings it back within ten minutes, after which it is wiped for good |
 | Import | sessions and price stated, then asked | your yes; "pause the import" |
 

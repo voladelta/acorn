@@ -26,7 +26,7 @@ impl Memory {
   /// Purges a message: the chat's message id (each of its pages), or
   /// message id of an agent's log (`agent`). Its text becomes PURGED, its
   /// line and images go (held GRACE in `held`, for `unpurge`), and, in
-  /// the chat, every node built from it: those in a view open into their
+  /// the chat, its pin and every node built from it: those in a view open into their
   /// halves, and it and those above build anew (a call building any node
   /// now is not stored: the caller stops them). A wipe of chat.db is then
   /// owed. Answers what it erased.
@@ -77,6 +77,12 @@ impl Memory {
       Some(name) => format!("Purged message {id} of {name}'s chat."),
       None => {
         self.unbuild((a..=b).map(Part::leaf), &gone);
+        // unpinned for good: taken back, it would not count in what the
+        // pins since were let hold (`pins::PINS`)
+        if let Ok(at) = self.pins.binary_search(&a) {
+          self.pins.remove(at);
+          self.save()?;
+        }
         format!(
           "Purged message {id}{} and the {} summaries made from it; they are being written anew without it.",
           pages(a, b),

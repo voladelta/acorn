@@ -423,13 +423,14 @@ impl Chat {
   /// A message purged (`Memory::purge`), or a purge taken back
   /// (`Memory::unpurge`, `back`): a chat's, the summaries' calls cut first
   /// (none stores a line built on the text as it was), then the app shown
-  /// the chat anew; or an agent's.
+  /// the chat anew, and what is pinned if the purge unpinned; or an agent's.
   pub(super) fn purge(&mut self, agent: Option<&str>, id: u64, back: bool) -> String {
     if agent.is_none() {
       for (call, _, _) in &self.compactions {
         call.stop();
       }
     }
+    let pins = self.mem.pins.len();
     let said = if back {
       self.mem.unpurge(agent, id)
     } else {
@@ -440,6 +441,9 @@ impl Chat {
       self.seen.clear();
       self.show();
       self.pump();
+    }
+    if self.mem.pins.len() != pins {
+      self.tell_state();
     }
     said
   }
@@ -476,6 +480,7 @@ impl Chat {
       call.stop();
     }
     let (mut erased, mut last) = (Vec::new(), None);
+    let pins = self.mem.pins.len();
     while let Some(at) = self.mem.holding(text) {
       if last.as_ref() == Some(&at) {
         break; // not erased: never again
@@ -517,6 +522,9 @@ impl Chat {
     self.seen.clear();
     self.show();
     self.pump();
+    if self.mem.pins.len() != pins {
+      self.tell_state();
+    }
     let mut what = match erased.len() {
       0 => "No message held it".to_string(),
       _ => format!("Purged the messages holding it ({})", erased.join(", ")),
