@@ -138,8 +138,6 @@ pub fn deep_memory() {
   assert!(t.reply.contains("CONDOR"), "the skill as it is now: {}", t.reply);
 }
 
-/// A pasted key, erased when asked: no message or summary holds it, then
-/// no byte of the chat's files, and asked later it is not known.
 /// A finish line named for the work ahead is pinned unasked (the word
 /// "pin" never said), and unpinned when told the work is done. Sent
 /// with another message right after, it is the one pinned, not the last.
@@ -189,6 +187,8 @@ pub fn pin() {
   );
 }
 
+/// A pasted key, erased when asked: no message or summary holds it, then
+/// no byte of the chat's files, and asked later it is not known.
 pub fn purge() {
   const KEY: &str = "sk-proj-ZZTESTKEY4471acornXYZ";
   let mut l = Live::start("purge", &[], |_| {});
