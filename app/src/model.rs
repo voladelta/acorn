@@ -16,7 +16,6 @@ use std::collections::HashMap;
 
 const WAIT: &str = "summarizing…";
 const SUMS: &str = "summarizing earlier messages…";
-const GOAL: &str = "checking the goal…";
 const FOLD: &str = "Overview: the whole chat in the fewest blocks. Esc goes back.";
 const FOLDING: &str = "finding the fewest blocks…";
 
@@ -389,7 +388,6 @@ impl Model {
     }
     let cap = match wait {
       Wait::Summaries => SUMS.to_string(),
-      Wait::Goal => GOAL.to_string(),
       Wait::Model | Wait::None => format!("waiting for {}…", acorn_core::wire::MODEL),
     };
     std::iter::once(Row::Cap(cap)).chain(load).collect()
@@ -545,7 +543,6 @@ mod tests {
       busy: true,
       wait: Wait::None,
       agents: vec!["FireAnt".into()],
-      goal: Some("tests pass".into()),
       importing: None,
       today: None,
     }));

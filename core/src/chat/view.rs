@@ -21,7 +21,6 @@ impl Chat {
   pub(super) fn state(&mut self) -> State {
     let wait = match &self.phase {
       Phase::Calling { asked: true, .. } => Wait::Model,
-      Phase::Checking(_) => Wait::Goal,
       Phase::Settling if !self.wait.is_empty() && self.mem.first(0, 0) < self.from() => Wait::Summaries,
       Phase::Idle | Phase::Settling | Phase::Calling { .. } => Wait::None,
     };
@@ -29,7 +28,6 @@ impl Chat {
       busy: self.busy(),
       wait,
       agents: self.working(),
-      goal: self.mem.goal.clone(),
       importing: self.importing(),
       today: self.today(),
     }

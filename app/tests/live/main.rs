@@ -48,7 +48,6 @@ const SCENARIOS: &[Scenario] = &[
   scenario("facts", memory::facts),
   scenario("deep_memory", memory::deep_memory),
   scenario("tools", work::tools),
-  scenario("goal", work::goal),
   scenario("delegate", work::delegate),
   scenario("web", work::web),
   scenario("luau_jobs", luau::jobs),

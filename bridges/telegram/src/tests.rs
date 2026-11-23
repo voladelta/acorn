@@ -346,7 +346,7 @@ fn the_dm_gets_what_the_assistant_says_and_buzzes_only_for_telegram() {
     dm("You, in Acorn:\n> plan the trip\n> by Friday", true)
   );
   assert_eq!(see(entry(Kind::Acorn, "On it.", None)), dm("On it.", true));
-  assert_eq!(see(entry(Kind::User, "The goal isn't satisfied yet", None)), None);
+  assert_eq!(see(entry(Kind::User, "said by no one", None)), None);
   // a reminder always buzzes; a timer's task makes its turn loud
   assert_eq!(
     see(entry(Kind::Acorn, "⏰ call mom", Some(TIMER))),

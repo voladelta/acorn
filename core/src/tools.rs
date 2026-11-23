@@ -5,7 +5,7 @@
 //! search (OWN); an assistant delegates to, tells and fires agents (BOSS);
 //! in its chat with the user it also creates assistants and consults them
 //! (PEERS), keeps facts and purges messages or takes a purge back (KEEP),
-//! and sets goals, reads usage, imports, exports and draws its memory
+//! and sets timers, reads usage, imports, exports and draws its memory
 //! (HOME); in a thread, where another assistant asks it something, it gets
 //! none of those. Its hands on this machine and the web are luau alone
 //! (`luau`): code that reads, writes, edits and runs commands (`machine`),
@@ -21,7 +21,7 @@ use std::path::Path;
 /// The prompt of Acorn's turns and compactions alike: a call is one or the
 /// other, as its message says. In a thread (`thread`), where another
 /// assistant asks, it says nothing of what only the user's chat has:
-/// facts, purges, goals and asking.
+/// facts, purges and asking.
 pub fn master(work: &Path, thread: bool) -> String {
   format!(
     "You are Acorn, an AI agent that works for one user in a single chat that never
@@ -156,9 +156,7 @@ something to keep for good (who they are, a preference, a decision, a rule for
 your work), remember it as a fact; forget one they say is wrong. When they ask
 you to erase something from the chat, such as a password or key they pasted,
 purge it by its text at once (every message holding it goes, for good, and it
-is never logged again), no confirmation needed. When they name a
-finish line (\"keep at it until the tests pass\"), set it as your goal first,
-before any other work, even if you expect to be done this turn.
+is never logged again), no confirmation needed.
 
 You are one of the user's assistants, each a person with a name and a part to
 play, who stays. When you need someone, ask: when another's part fits what is
@@ -353,12 +351,6 @@ fn peers() -> Vec<Spec> {
 fn home() -> Vec<Spec> {
   vec![
     spec(
-      "goal",
-      "Set the goal you work to, when the user names a finish line (\"keep going until the tests pass\"), first, before any other work: as each turn would end, a check reads the chat, and if the goal isn't met you go on. With no goal, drop the one set, when the user says to stop or it no longer holds. The user sees the goal while it is set.",
-      json!({"goal": {"type": "string"}}),
-      &[],
-    ),
-    spec(
       "set_timer",
       "Remind the user, or do a task, later, when they ask (\"remind me at 9 to call mom\", \"check the build in an hour\", \"every evening, sum up the dev group\"): when: at a moment, in a while, or repeat on a cron line (its first time then, unless at or in says). A reminder is your message, said as it is when due; a task (task true) comes back as a message \"[Timer #id] what\" that starts your turn, and you do it then. It fires in this chat, and on the user's phone if this chat reaches it. Answers when it fires: tell the user.",
       json!({"what": {"type": "string", "description": "A reminder's words to the user, or the task, said whole: it is all you will have then."}, "at": {"type": "string", "description": "RFC 3339 with the user's offset (2026-11-07T09:00:00+07:00), or a time on this machine (2026-11-07 09:00)."}, "in": {"type": "string", "description": "A while from now: 90s, 20m, 2h, 1h30m, 3d, 1w."}, "repeat": {"type": "string", "description": "A cron line, minute hour day month weekday, on this machine's time: 0 9 * * 1-5 is weekdays at 9."}, "task": {"type": "boolean"}}),
@@ -474,7 +466,7 @@ mod tests {
   #[test]
   fn a_thread_hears_nothing_of_the_users_chat() {
     let (chat, thread) = (master(Path::new("/w"), false), master(Path::new("/w"), true));
-    for only in ["@Name", "remember it as a fact", "set it as your goal"] {
+    for only in ["@Name", "remember it as a fact"] {
       assert!(
         chat.contains(only) && !thread.contains(only),
         "{only}: the user's chat alone"

@@ -237,7 +237,6 @@ impl Engine {
       "delegate" => self.delegate_tool(&input, &halt).await,
       "tell" => Out::ok(self.tell_agent(&str("name"), &str("message")).await),
       "fire" => self.fire(Some(str("name")).filter(|n| !n.is_empty())),
-      "goal" => self.goal_tool(Some(str("goal")).filter(|g| !g.is_empty())),
       "send_file" => self.send_file(cwd.join(str("path")), str("caption")).await,
       "usage" => {
         let days = num(&input, "days", 7).clamp(1, 366) as i64;
@@ -347,18 +346,6 @@ impl Engine {
       (true, None) => Out::ok("No agent was at work."),
       _ => Out::ok(format!("Fired {}.", at.join(", "))),
     }
-  }
-
-  /// The chat's goal set, or dropped (None).
-  fn goal_tool(&self, goal: Option<String>) -> Out {
-    let said = match &goal {
-      Some(goal) => {
-        format!("Goal set: {goal}. A check reads the chat as each turn would end, and you go on till it's met.")
-      }
-      None => "Goal dropped.".into(),
-    };
-    self.lock().set_goal(goal);
-    Out::ok(said)
   }
 
   /// A file shown to the user: kept with the chat's media, in a message

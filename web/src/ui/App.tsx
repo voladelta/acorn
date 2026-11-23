@@ -4,7 +4,7 @@
 // The window around the assistants' chats, in a browser (app/src/lib.rs):
 // the sidebar (the assistants), a header (the sidebar's button, the
 // assistant's name and who it is, an import's progress, the server not
-// reached), the chat, and a footer (a note, the goal, today's cost, the
+// reached), the chat, and a footer (a note, today's cost, the
 // images waiting, the message box, the tabs while agents work). You act
 // by words alone; hands only look. The keys, all for looking: Esc goes
 // back to your chat; Ctrl+Tab to the next tab; ⌘⇧F shows the overview,
@@ -139,7 +139,7 @@ function Header() {
   );
 }
 
-/** Flat bottom writing sheet: toast note, goal, composer, and live tabs. */
+/** Flat bottom writing sheet: toast note, composer, and live tabs. */
 function Footer() {
   const ui = store.useUi();
   const s = ui.model.state;
@@ -156,11 +156,6 @@ function Footer() {
           >
             {ui.toast}
           </button>
-        ) : null}
-        {s?.goal ? (
-          <Tip tip={`${s.goal}\nIt keeps working till a check finds this met. Say so to drop it.`}>
-            <div class="truncate font-serif text-[12.5px] italic text-muted-foreground">{`Goal: ${s.goal}`}</div>
-          </Tip>
         ) : null}
         <Composer />
         {tabs.length > 1 ? (

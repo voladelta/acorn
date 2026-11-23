@@ -1,15 +1,16 @@
 # Interface model: Acorn (the app)
 
-Status: built · Last updated: 2026-11-02
+Status: built · Last updated: 2026-11-23
 
 **As built, where it differs from the text below:**
-- Consult goes one level deep: an assistant answering in a thread has its work tools only (no `ask_assistant`, facts, goal, import or delegating), so asks can't loop.
+- Consult goes one level deep: an assistant answering in a thread has its work tools only (no `ask_assistant`, facts, import or delegating), so asks can't loop.
 - `usage` sums every chat and thread; the footer's cost is the shown chat's today.
-- No `/goal` alias: slash words are gone. Dropping files on the window adds their paths to the message being written ("import this").
+- Goals are gone: no `goal` tool, no check as a turn ends, no line above the box (issues 6 and 7 below read as found then).
+- Slash words are gone. Dropping files on the window adds their paths to the message being written ("import this").
 - Esc goes back to your chat from an agent's page, a thread or the overview.
 - An assistant made before abouts shows its name alone.
 - `@Name` is the one word the box reads itself: alone, it opens your chat with that assistant (no call); in a message, the words go to the one you talk to, whose prompt reads `@Name` as "ask them". The box suggests names as you type `@`: ↑ and ↓ pick one, Return or Tab takes it (Return sends a word already a name), a click takes the one clicked, Esc closes the names for that word.
-- An assistant answering in a thread hears nothing of what only your chat has: no facts, purges, goals, asking or `@Name`.
+- An assistant answering in a thread hears nothing of what only your chat has: no facts, purges, asking or `@Name`.
 - An assistant remembers its threads in its chat with you: each turn sees each thread's latest 8 lines ("Your threads", after the agents at work), and `zoom("Acorn")` gives one whole. Talk to Max the day after he warned Acorn, and he knows.
 - "Hire" a named person who should stay ("hire a stylist called Marrie") makes an assistant; agents get tasks by `delegate`, so the user's word and the tool never collide.
 - One `import` tool finds, starts, pauses and resumes an import (its `do`).
@@ -25,7 +26,7 @@ You and each assistant share one conversation that never ends, as you would with
 
 - **Every act is said.** Typing now, voice later. Whatever the app can do, you can ask for in plain words, and the assistant does it through a tool. No act needs a button, a menu, a slash command or a message number.
 - **Hands only look.** Clicks and keys move your eyes: switch assistant, open a block, look at an agent's work or at two assistants' talk, open an image, hide the sidebar. Looking never changes anything.
-- **The screen shows state, not controls.** Who someone is, what is going on (talking, agents at work, a goal, an import), today's cost: always visible, as facts.
+- **The screen shows state, not controls.** Who someone is, what is going on (talking, agents at work, an import), today's cost: always visible, as facts.
 - **Cutting in is a message.** A message sent while the assistant talks or works stops it at once; it reads you and answers. "Stop" and it stays stopped; "also check the tests" and it goes on with that.
 - **People, not settings.** An assistant is introduced by who it is ("Personal stylist"), never by how it is tuned ("high effort"). How hard it thinks is part of its character, set when it is created, and not shown.
 
@@ -99,13 +100,12 @@ Most structural first. Symptom → cause → fix → on screen.
 | Object | Key attributes | Relationships | Home |
 |---|---|---|---|
 | Assistant | name, about, at work? (effort, instructions: hidden) | has a Chat with you; a Thread with each assistant it consults; own Facts | sidebar row (name, about in tooltip) |
-| Chat | you ↔ one assistant; goal; today's cost | Messages, Blocks, Agents; one Import | main page |
+| Chat | you ↔ one assistant; today's cost | Messages, Blocks, Agents; one Import | main page |
 | Thread | assistant ↔ assistant, lasting | Messages and Blocks, like a Chat | its own page, reached from the consult in either chat |
 | Message | who, date, text, images | in a Chat or Thread | in it |
 | Block | n messages, summary | two halves, down to Messages | in the Chat or Thread |
 | Agent | name, task, at work / done, log | delegated one task by one Chat's assistant | its page (tab) |
 | Fact | text, scope (everyone / one) | held by all assistants or one | said back on request |
-| Goal | text | one per Chat | line above the box |
 | Import | sessions, price, progress | into one Chat | progress in the header |
 
 ## Concepts
@@ -117,7 +117,6 @@ Most structural first. Symptom → cause → fix → on screen.
 | Consult | assistants ask each other | Acorn asks Max; Max answers in their own lasting thread; Acorn tells you what Max said. |
 | Memory tree | remember everything | Old messages merge into Blocks; open one to see what it was made of. |
 | Agent | hands for one task | The assistant delegates one task to a freelancer; it works in the background, reports once and is gone. "Fire Scout" ends it early. |
-| Goal | persistence | Name the finish line; it keeps taking turns until a check says it's met or you call it off. |
 | Fact | knowledge across chats | "Remember X" and every assistant (or one) knows X until you say forget it. |
 | Search | find what no summary mentions | The assistant searches the messages for a word or name, then opens the hits. |
 | Purge | erase a secret | "Purge the message with my token": it and its summaries vanish; "unpurge it" brings it back within ten minutes, then it is wiped from disk. |
@@ -159,7 +158,6 @@ Most structural first. Symptom → cause → fix → on screen.
 | Delegate to / message / fire an agent | `delegate`, `tell`, `fire` | – |
 | Ask another assistant | `list_assistants`, `ask_assistant`; `@Name` in a message | – |
 | Create / archive / restore an assistant | `create_assistant` (name, about, effort, instructions, welcome), `archive_assistant`, `restore_assistant` | – |
-| Set / drop goal | `goal` | – |
 | Remember / forget / purge / unpurge | `remember`, `forget`, `purge`, `unpurge` | – |
 | Usage, import, export, tree | `usage`, `import` (find, start, pause, resume), `export`, `tree` | – |
 | Switch assistant | `@Name` alone (voice later: "let me talk to Max") | sidebar, Cmd+B |
@@ -197,7 +195,7 @@ Most structural first. Symptom → cause → fix → on screen.
 | Act | Feedback | Undo / confirm |
 |---|---|---|
 | Any message | appears at once; a reply in progress ends "— cut off" | – |
-| A tool act | the assistant says what it did | reversible ones by asking ("undo that": remember↔forget, goal↔drop, purge↔unpurge for ten minutes) |
+| A tool act | the assistant says what it did | reversible ones by asking ("undo that": remember↔forget, purge↔unpurge for ten minutes) |
 | Ask | call row linking the thread; reply framed under the asker's name | "never mind" cuts it |
 | Create assistant | row appears in the sidebar with its about | – |
 | Delegate | a tab while it works; its report framed under its name | "fire it" |
@@ -205,12 +203,12 @@ Most structural first. Symptom → cause → fix → on screen.
 | Purge | the message vanishes | no confirmation; "unpurge it" brings it back within ten minutes, after which it is wiped for good |
 | Import | sessions and price stated, then asked | your yes; "pause the import" |
 
-**Surviving modes:** Overview (caption; a key, because it's looking). Goal (visible line).
+**Surviving modes:** Overview (caption; a key, because it's looking).
 
 ## Placement
 
 - **Content layer:** the chat; an agent's page; a thread's page.
-- **Functional layer, report-only:** sidebar (name, mark, a dot while at work, about on hover); header (name · about, import progress); footer (goal line, today's cost, the box, tabs for agents and open threads).
+- **Functional layer, report-only:** sidebar (name, mark, a dot while at work, about on hover); header (name · about, import progress); footer (today's cost, the box, tabs for agents and open threads).
 - **No menus, no modals.** Purge needs no confirmation: it is undone by asking, for ten minutes.
 
 ## Open questions

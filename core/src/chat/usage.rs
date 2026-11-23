@@ -1,8 +1,8 @@
 //! Usage
 //! =====
 //! Each request a call of the chat makes is counted as it ends (`ai::Meter`):
-//! kept in chat.db, summed into the running turn's if it serves the turn
-//! (its call, its goal check), and today's total told. A turn ending puts
+//! kept in chat.db, summed into the running turn's if it serves the turn,
+//! and today's total told. A turn ending puts
 //! its sum on its last message. What zooms and searches found (`looks`,
 //! the memory's) is told beside, a day a line. Past the config's `budget`, today's spend
 //! of every chat together, archived ones too, no request goes (`ai::agent`).

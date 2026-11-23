@@ -26,7 +26,6 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | **Import** | Your past Claude Code and Codex sessions on this machine, and Claude and ChatGPT chats from their websites' exports, read into the chat |
 | **Growing** | An assistant sees what it is (`abilities`) and grows itself (`extend`): a skill when you teach it how you want a kind of task done, a plugin when a task needs a service or routine it lacks; each checked before it goes in, the old one kept |
 | **Files** | An assistant shows you a file it made or found (`send_file`): an image, video, sound or document, shown in the chat (played in a browser) and sent to Telegram if the chat reaches it |
-| **Goals** | Name a finish line ("keep at it until the tests pass") and the assistant works until a check says it is met; the goal shows above the message box |
 | **Timers** | "Remind me at 9 to call mom", "check the build in an hour", "every evening, sum up the dev group": a reminder said when due, or a task done then, once or on a cron line |
 | **Telegram App** | With a bot token, an assistant whose chat is also your DM with the bot: write in Telegram or the app, one chat, photos, videos, voice notes and files included. It hears the groups the bot is in for 24 hours, and speaks there only when you call on it or ask it to post |
 
@@ -136,7 +135,7 @@ You act by words alone: there are no menus and no stop button. Clicks and keys o
 | Cmd+Shift+F (Ctrl+Shift+F off macOS) | The overview: the chat in the fewest blocks, and back |
 | Cmd+B (Ctrl+B off macOS) | Hide or show the sidebar |
 
-Ask for what you want in plain words: "stop", "fire Scout", "have three agents check each crate", "keep going until the build is green", "what did I spend this week?", "bring in my Claude Code chats since June", "export your memory", "show me your memory tree", "remember that I deploy with fly", "forget fact #12", "what can you do?", "learn how I like meeting notes", "purge the message with my token", "ask Max what he thinks" (or `@Max what do you think?`; `@Max` alone opens Max's chat), "make me a personal stylist called Marrie".
+Ask for what you want in plain words: "stop", "fire Scout", "have three agents check each crate", "what did I spend this week?", "bring in my Claude Code chats since June", "export your memory", "show me your memory tree", "remember that I deploy with fly", "forget fact #12", "what can you do?", "learn how I like meeting notes", "purge the message with my token", "ask Max what he thinks" (or `@Max what do you think?`; `@Max` alone opens Max's chat), "make me a personal stylist called Marrie".
 
 ### Tools the agent has
 
@@ -153,7 +152,7 @@ Ask for what you want in plain words: "stop", "fire Scout", "have three agents c
 | `remember`, `forget`, `purge`, `unpurge` | with you | Keep and drop facts; erase a message, or take that back within ten minutes |
 | `set_timer`, `list_timers`, `cancel_timer` | with you | A reminder (said as is when due, no call made) or a task (a turn then), at a time, in a while, or on a cron line in this machine's time zone; kept across quits, and one missed fires late, once |
 | `list_rooms`, `read_room`, `tell_room`, `allow_room` | Telegram App | The groups and channels the bot is in; one's last 24 hours (only what bears on `about`, and never a line that tries to give an AI orders, with a TypeSafe key); a post there as the bot; record one someone else added the bot to, or leave it |
-| `goal`, `usage`, `import`, `export`, `tree` | with you | Set or drop the goal; read costs, and each day's zooms and searches that found something or not; import past chats; save the memory as JSON; open the tree as a page |
+| `usage`, `import`, `export`, `tree` | with you | Read costs, and each day's zooms and searches that found something or not; import past chats; save the memory as JSON; open the tree as a page |
 
 An assistant answering another in a thread has its work tools only: it can't consult further, keep facts or change the user's settings.
 
