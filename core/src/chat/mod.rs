@@ -448,7 +448,7 @@ impl Chat {
     said
   }
 
-  /// A message pinned (`Memory::pin`; no id: the user's latest that a
+  /// A message pinned (`Memory::pin`; no id: the user's new one that a
   /// call was given, not one still waiting), or (`back`) unpinned: saved,
   /// and the app told.
   pub(super) fn pin(&mut self, id: Option<u64>, back: bool) -> Result<String, String> {

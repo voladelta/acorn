@@ -445,7 +445,7 @@ fn keep() -> Vec<Spec> {
     spec(
       "pin",
       format!(
-        "Pin a message: from now on you read it whole after the view on every call, however old it grows, and so do the agents you delegate to; its summaries are made as ever. Pin what the work at hand must keep to, unasked, as soon as it is said (a finish line, a spec, a task's rules, a plan agreed on), and whatever the user asks you to pin. id: the message's id, as the view, the latest messages, zoom or search give it; none: the user's latest message. Its images are named, not shown: zoom(id, 1) shows them. The user sees what is pinned above the message box. The pinned texts hold {} bytes together at most: pin what must hold, not what is merely useful.",
+        "Pin a message: from now on you read it whole after the view on every call, however old it grows, and so do the agents you delegate to; its summaries are made as ever. Pin what the work at hand must keep to, unasked, as soon as it is said (a finish line, a spec, a task's rules, a plan agreed on), and whatever the user asks you to pin. id: the message's id, as the view, the latest messages, zoom or search give it; none: the user's new message, if it is the only one. Its images are named, not shown: zoom(id, 1) shows them. The user sees what is pinned above the message box. The pinned texts hold {} bytes together at most: pin what must hold, not what is merely useful.",
         memory::PINS
       ),
       json!({"id": {"type": "integer"}}),
