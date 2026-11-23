@@ -160,7 +160,7 @@ function Footer() {
         {pins.length ? (
           <Tip tip={`${pins.join('\n')}\nRead whole by the assistant on every call. Say so to unpin one.`}>
             <div class="truncate font-serif text-[12.5px] italic text-muted-foreground">
-              {`Pinned: ${pins[pins.length - 1]}${pins.length > 1 ? ` (+${pins.length - 1})` : ''}`}
+              {`Pinned${pins.length > 1 ? ` (${pins.length})` : ''}: ${pins[pins.length - 1]}`}
             </div>
           </Tip>
         ) : null}

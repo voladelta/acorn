@@ -537,7 +537,8 @@ fn footer(ui: Ui) -> impl IntoElement {
   )
 }
 
-/// What is pinned (the latest, and how many more), at the left; today's
+/// What is pinned (how many if several, then the latest: a long one is
+/// cut, the count never), at the left; today's
 /// cost, at the right.
 fn status_row(ui: Ui) -> impl IntoElement {
   let pins = move || {
@@ -562,11 +563,11 @@ fn status_row(ui: Ui) -> impl IntoElement {
       move || {
         text(move || {
           let pins = pins();
-          let more = match pins.len() {
+          let count = match pins.len() {
             0 | 1 => String::new(),
-            n => format!(" (+{})", n - 1),
+            n => format!(" ({n})"),
           };
-          format!("Pinned: {}{more}", pins.last().cloned().unwrap_or_default())
+          format!("Pinned{count}: {}", pins.last().cloned().unwrap_or_default())
         })
         .number_of_lines(1)
         .text_size(px(12.5))
