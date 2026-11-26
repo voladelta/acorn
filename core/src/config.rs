@@ -31,6 +31,7 @@ fn view(set: &str) -> usize {
 /// The variable the API key is read from, kept out of every job's
 /// environment.
 pub const KEY_VAR: &str = "GEMINI_API_KEY";
+const EXA_KEY_ALIAS: &str = "ACORN_EXA_API_KEY";
 /// The web server's token, when its host hands one in (`acorn-host`).
 pub const TOKEN_VAR: &str = "ACORN_TOKEN";
 
@@ -51,7 +52,7 @@ pub struct Config {
   pub pick: Effort,
   /// What every compaction runs on, a chat's and an import's alike.
   pub compactor: Effort,
-  /// What agents run on (none: their assistant's effort).
+  /// What agents run on when they have no explicit effort (none: high).
   pub agents: Option<Effort>,
   pub view: usize,
   /// USD every chat's calls may spend together a day, here (none: no cap).
@@ -131,21 +132,25 @@ pub fn hidden() -> Vec<&'static str> {
     "ACORN_DEEPSEEK_API_KEY",
     crate::decide::KEY_VAR,
     crate::web::KEY_VAR,
+    EXA_KEY_ALIAS,
     TOKEN_VAR,
   ];
   all.extend(crate::bridge::all().iter().flat_map(|b| b.secrets()));
   all
 }
 
-/// A key by its variable's name (EXA_API_KEY): the variable, else
-/// config.json's lowercase key (exa_api_key), read now, so a key added counts
-/// at once.
+/// A key by its variable's name: the environment, else config.json's
+/// lowercase key, read now. Exa also accepts ACORN_EXA_API_KEY.
 pub fn secret(name: &str) -> Result<String, String> {
   secret_in(&get().dir, name)
 }
 
 fn secret_in(dir: &std::path::Path, name: &str) -> Result<String, String> {
-  if let Some(key) = std::env::var(name).ok().filter(|k| !k.trim().is_empty()) {
+  let alias = (name == crate::web::KEY_VAR).then_some(EXA_KEY_ALIAS);
+  if let Some(key) = std::iter::once(name)
+    .chain(alias)
+    .find_map(|var| std::env::var(var).ok().filter(|k| !k.trim().is_empty()))
+  {
     return Ok(key.trim().to_string());
   }
   let file = dir.join("config.json");
@@ -210,14 +215,16 @@ mod tests {
   }
 
   #[tokio::test(flavor = "multi_thread")]
-  async fn no_program_the_agent_runs_sees_the_server_token() {
-    let test = "config::tests::no_program_the_agent_runs_sees_the_server_token";
+  async fn no_program_the_agent_runs_sees_acorn_secrets() {
+    let test = "config::tests::no_program_the_agent_runs_sees_acorn_secrets";
     if std::env::var_os("ACORN_TEST_TOKEN_CHILD").is_none() {
       let dir = tempfile::tempdir().unwrap();
       let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test, "--nocapture"])
         .env("ACORN_TEST_TOKEN_CHILD", "1")
         .env(TOKEN_VAR, "test-server-token")
+        .env_remove(crate::web::KEY_VAR)
+        .env(EXA_KEY_ALIAS, "test-exa-key")
         .env("ACORN_DIR", dir.path())
         .output()
         .unwrap();
@@ -230,9 +237,10 @@ mod tests {
       return;
     }
     assert_eq!(std::env::var(TOKEN_VAR).unwrap(), "test-server-token");
+    assert_eq!(secret(crate::web::KEY_VAR).unwrap(), "test-exa-key");
     let dir = tempfile::tempdir().unwrap();
     let ran = crate::machine::shell(
-      "if [ \"${ACORN_TOKEN+x}\" = x ]; then echo inherited; else echo absent; fi",
+      "if [ -n \"${ACORN_TOKEN+x}${ACORN_EXA_API_KEY+x}\" ]; then echo inherited; else echo absent; fi",
       dir.path(),
       10_000.0,
       tokio_util::sync::CancellationToken::new(),

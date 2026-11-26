@@ -214,7 +214,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | Key | Default | Meaning |
 |---|---|---|
 | `gemini_api_key` | none | Gemini API key for chat and document reading. `GEMINI_API_KEY` wins. |
-| `exa_api_key` | none | Exa API key for web search and page reads. `EXA_API_KEY` wins. |
+| `exa_api_key` | none | Exa API key for web search and page reads. `EXA_API_KEY` takes precedence over `ACORN_EXA_API_KEY` and the file. |
 | `typesafe_api_key` | none | TypeSafe's key, for `decide`, `relevant` and sorting skills by task; the `TYPESAFE_API_KEY` variable wins |
 | `telegram_bot_token` | none | A Telegram bot's token: Telegram App runs with it; the `TELEGRAM_BOT_TOKEN` variable wins |
 | `chat` | `default` | Acorn's own chat id (letters, digits, `_`, `-`) |

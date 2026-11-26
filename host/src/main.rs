@@ -128,10 +128,10 @@ fn config(data: &Path) -> (String, String, f64) {
     Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("{}: {e}", file.display()))),
     Err(_) => HashMap::new(),
   };
+  let env = |name: &str| std::env::var(name).ok().filter(|k| !k.trim().is_empty());
   let key = |name: &str| {
-    std::env::var(name)
-      .ok()
-      .filter(|k| !k.trim().is_empty())
+    env(name)
+      .or_else(|| env(&format!("ACORN_{name}")))
       .unwrap_or_else(|| {
         conf
           .get(&name.to_ascii_lowercase())
