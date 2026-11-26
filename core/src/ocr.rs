@@ -23,6 +23,16 @@ fn media(path: &Path, bytes: &[u8]) -> Option<(&'static str, &'static str)> {
   if bytes.starts_with(b"%PDF-") {
     return Some(("document", "application/pdf"));
   }
+  if bytes.starts_with(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") {
+    let office = cfb::CompoundFile::open(std::io::Cursor::new(bytes)).ok()?;
+    if office.is_stream("/WordDocument") {
+      return Some(("document", "application/msword"));
+    }
+    if office.is_stream("/PowerPoint Document") {
+      return Some(("document", "application/vnd.ms-powerpoint"));
+    }
+    return None;
+  }
   let extension = path.extension()?.to_str()?.to_ascii_lowercase();
   let mime = match extension.as_str() {
     "pdf" => "application/pdf",
@@ -149,6 +159,26 @@ mod tests {
       ))
     );
     assert_eq!(media(Path::new("pic"), b"\x89PNG"), Some(("image", "image/png")));
+  }
+
+  #[test]
+  fn legacy_office_attachments_are_read_from_their_stored_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    for (stream, mime) in [
+      ("WordDocument", "application/msword"),
+      ("PowerPoint Document", "application/vnd.ms-powerpoint"),
+    ] {
+      let mut office = cfb::CompoundFile::create(std::io::Cursor::new(Vec::new())).unwrap();
+      office.create_stream(stream).unwrap();
+      let bytes = office.into_inner().into_inner();
+      let name = memory::media_add(dir.path(), &bytes).unwrap();
+      assert!(name.ends_with(".bin"));
+      let mem = memory::Memory::load(dir.path()).unwrap();
+      let file = mem.image_file(&name).unwrap();
+      let input = load(&file).unwrap();
+      assert_eq!(input["type"], "document");
+      assert_eq!(input["mime_type"], mime);
+    }
   }
 
   #[test]

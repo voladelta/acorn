@@ -13,11 +13,12 @@ workspace = true
 # Without it, only what the app and the engine say to each other
 # (`wire` and its types), which builds for the web.
 default = ["engine"]
-engine = ["dep:anyhow", "dep:futures-util", "dep:image", "dep:libc", "dep:mlua", "dep:parking_lot", "dep:rand", "dep:reqwest", "dep:rusqlite", "dep:sha2", "dep:tokio", "dep:tokio-util", "dep:zip", "chrono/clock"]
+engine = ["dep:anyhow", "dep:cfb", "dep:futures-util", "dep:image", "dep:libc", "dep:mlua", "dep:parking_lot", "dep:rand", "dep:reqwest", "dep:rusqlite", "dep:sha2", "dep:tokio", "dep:tokio-util", "dep:zip", "chrono/clock"]
 
 [dependencies]
 anyhow = { version = "1", optional = true }
 base64 = "0.23"
+cfb = { version = "0.16", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", optional = true }
 image = { optional = true, version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
