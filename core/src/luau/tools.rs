@@ -291,6 +291,9 @@ async fn web_fetch(lua: Lua, who: Caller, (url, opts): (String, Option<Table>)) 
   if let Some(fresh) = opt::<bool>(opts.as_ref(), "fresh")? {
     input["fresh"] = fresh.into();
   }
+  if let Some(version) = opt::<String>(opts.as_ref(), "version")? {
+    input["version"] = version.into();
+  }
   let call = Call::start(&who.run, "web_fetch", &url);
   let cancel = call.cancel.clone();
   let out = web::run("web_fetch", &input, cancel).await;

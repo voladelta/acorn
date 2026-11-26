@@ -11,6 +11,7 @@ use crate::clip;
 use crate::config;
 use reqwest::{Response, StatusCode, Url};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -71,9 +72,15 @@ pub async fn run(name: &str, input: &Value, cancel: CancellationToken) -> Out {
       if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Out::fail("Give an http or https url.");
       }
-      let body = contents_body(&url, input["fresh"] == true);
+      let at = input["at"].as_u64().unwrap_or(0) as usize;
+      let version = input["version"].as_str();
+      let fresh = input["fresh"] == true || version.is_some();
+      if fresh && at > 0 && version.is_none() {
+        return Out::fail("Continue a fresh read with the version from its previous page.");
+      }
+      let body = contents_body(&url, fresh);
       match post(FETCH, &body, &cancel).await {
-        Ok(got) => page(&got, &url, input["at"].as_u64().unwrap_or(0) as usize),
+        Ok(got) => page(&got, &url, at, fresh, version),
         Err(why) => Out::fail(why),
       }
     }
@@ -89,13 +96,22 @@ fn contents_body(url: &str, fresh: bool) -> Value {
   body
 }
 
-fn page(got: &Value, url: &str, at: usize) -> Out {
+fn page(got: &Value, url: &str, at: usize, fresh: bool, expected: Option<&str>) -> Out {
   let Some(text) = got["results"][0]["text"].as_str() else {
     let why = got["statuses"][0]["error"]["tag"].as_str().unwrap_or("no content");
     return Out::fail(format!("fetch {url}: {why}"));
   };
   let title = got["results"][0]["title"].as_str().unwrap_or("(no title)");
-  Out::ok(clip::page(&format!("# {title}\n{url}\n\n{text}"), at))
+  let text = format!("# {title}\n{url}\n\n{text}");
+  if !fresh {
+    return Out::ok(clip::page(&text, at));
+  }
+  let hash = Sha256::digest(text.as_bytes());
+  let version: String = hash[..16].iter().map(|b| format!("{b:02x}")).collect();
+  if expected.is_some_and(|expected| expected != version) {
+    return Out::fail("The page changed during this fresh read. Start again at the beginning.");
+  }
+  Out::ok(clip::page_with(&text, at, &format!(" and version \"{version}\"")))
 }
 
 /// A search's results as text, one block each.
@@ -363,11 +379,30 @@ mod tests {
     assert!(contents_body(url, false).get("maxAgeHours").is_none());
     assert_eq!(contents_body(url, true)["maxAgeHours"], 0);
     let got = json!({"results": [{"title": "Example", "text": "A **page**"}]});
-    assert_eq!(page(&got, url, 0).text, "# Example\nhttps://example.com\n\nA **page**");
+    assert_eq!(
+      page(&got, url, 0, false, None).text,
+      "# Example\nhttps://example.com\n\nA **page**"
+    );
     let got = json!({"results": [], "statuses": [{"status": "error", "error": {"tag": "CRAWL_NOT_FOUND"}}]});
-    let out = page(&got, url, 0);
+    let out = page(&got, url, 0, false, None);
     assert!(out.fail);
     assert_eq!(out.text, "fetch https://example.com: CRAWL_NOT_FOUND");
+  }
+
+  #[test]
+  fn a_fresh_continuation_refuses_an_offset_into_changed_content() {
+    let url = "https://example.com";
+    let page_of = |prefix: &str| json!({"results": [{"text": format!("{prefix}\n{}\n{}", "a".repeat(clip::CAP - 100), "b".repeat(200))}]});
+    let original = page_of("old");
+    let first = page(&original, url, 0, true, None);
+    let (advance, version) = first.text.rsplit_once(" and version \"").unwrap();
+    let at = advance.rsplit_once(" with at ").unwrap().1.parse().unwrap();
+    let version = version.strip_suffix("\"]").unwrap();
+    let next = page(&original, url, at, true, Some(version));
+    assert!(!next.fail);
+    assert_eq!(next.text, "b".repeat(200));
+    let changed = page(&page_of("new and longer"), url, at, true, Some(version));
+    assert!(changed.fail && changed.text.contains("changed"));
   }
 
   /// A server answering each connection with the next of `replies`, whole;
