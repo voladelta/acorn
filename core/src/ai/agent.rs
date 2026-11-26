@@ -428,6 +428,7 @@ async fn send(
   cancel: &CancellationToken,
 ) -> (u16, Sent) {
   let json = body.to_string();
+  let bytes = json.len();
   let seen = Mutex::new(Vec::new());
   let mut got = Got::default();
   let mut read = Read::default();
@@ -436,7 +437,7 @@ async fn send(
     .post(url())
     .header("x-goog-api-key", key)
     .header("content-type", "application/json")
-    .body(json.clone())
+    .body(json)
     .send();
   let res = tokio::select! {
       res = tokio::time::timeout(IDLE, post) => Some(res),
@@ -459,7 +460,7 @@ async fn send(
   };
   flight.end();
   if ok && let Some(meter) = &ask.meter {
-    let usage = used(read.usage, read.bytes, json.len(), flight.cached);
+    let usage = used(read.usage, read.bytes, body, bytes, flight.cached);
     let now = chrono::Utc::now();
     meter(Used {
       effort: ask.effort,
@@ -608,17 +609,37 @@ async fn stream(
 }
 
 /// A request's usage: the API's, told as its stream ends; else (cut
-/// short, none told) an estimate, a token each BYTES of what it sent (the
-/// `cached` first of them read from the cache, the rest written) and of
-/// the output it read.
-fn used(usage: Option<price::Usage>, read: u64, sent: usize, cached: usize) -> price::Usage {
-  let tokens = |bytes: usize| (bytes as u64).div_ceil(BYTES);
-  let cached = cached.min(sent);
-  usage.unwrap_or_else(|| price::Usage {
-    input: tokens(sent - cached),
-    write: 0,
-    read: tokens(cached),
-    output: read.div_ceil(BYTES),
+/// short, none told) estimate text and image tokens separately.
+fn used(usage: Option<price::Usage>, read: u64, body: &Value, sent: usize, cached: usize) -> price::Usage {
+  usage.unwrap_or_else(|| {
+    // Gemini 4 default image resolution allocates up to 1,120 tokens per image.
+    const IMAGE_TOKENS: u64 = 1120;
+    let mut image_bytes = 0;
+    let mut images = 0;
+    for step in body["input"].as_array().into_iter().flatten() {
+      let parts = match step["type"].as_str() {
+        Some("user_input") => &step["content"],
+        Some("function_result") => &step["result"],
+        _ => continue,
+      };
+      for part in parts.as_array().into_iter().flatten() {
+        if part["type"] == "image"
+          && let Some(data) = part["data"].as_str()
+        {
+          image_bytes += data.len();
+          images += 1;
+        }
+      }
+    }
+    let tokens = |bytes: usize| (bytes as u64).div_ceil(BYTES);
+    let sent = sent.saturating_sub(image_bytes);
+    let cached = cached.min(sent);
+    price::Usage {
+      input: tokens(sent - cached) + images * IMAGE_TOKENS,
+      write: 0,
+      read: tokens(cached),
+      output: read.div_ceil(BYTES),
+    }
   })
 }
 
@@ -861,7 +882,7 @@ mod tests {
   /// Cut short, a request's prompt counts as read where a call cached it.
   #[test]
   fn a_cut_request_reads_what_was_cached() {
-    let usage = used(None, 300, 9000, 6000);
+    let usage = used(None, 300, &Value::Null, 9000, 6000);
     let told = price::Usage {
       input: 1000,
       write: 0,
@@ -869,7 +890,30 @@ mod tests {
       output: 100,
     };
     assert_eq!(usage, told);
-    assert_eq!(used(Some(told), 300, 9, 6), told, "the API's own usage wins");
+    assert_eq!(
+      used(Some(told), 300, &Value::Null, 9, 6),
+      told,
+      "the API's own usage wins"
+    );
+  }
+
+  #[test]
+  fn a_cut_request_meters_images_by_resolution() {
+    let body = |bytes| {
+      serde_json::json!({
+        "input": [
+          {"type": "user_input", "content": [{"type": "image", "data": "A".repeat(bytes)}]},
+          {"type": "function_result", "result": [{"type": "image", "data": "B".repeat(bytes)}]},
+        ]
+      })
+    };
+    let estimate = |bytes| {
+      let body = body(bytes);
+      used(None, 0, &body, body.to_string().len(), 0)
+    };
+    let small = estimate(4);
+    assert!((2240..2300).contains(&small.input));
+    assert_eq!(estimate(500_000), small);
   }
 
   /// A refusal tells its why, and whose doing it is: the account's
