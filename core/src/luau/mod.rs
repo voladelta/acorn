@@ -141,8 +141,7 @@ pub(crate) fn layer_of(dir: &Path) -> Result<Loaded, String> {
   Ok((vm.docs, vm.provided, vm.warns))
 }
 
-/// What the system prompt says of luau, as hx's prompt does, and as
-/// deepseek-harness's says of the tools luau calls.
+/// What the system prompt says of luau and the tools it calls.
 pub const GUIDE: &str = "Do real work in each luau call: search, read the hits, edit and check in one call; load a big file once into a global (rows = rows or parse(read(\"data.csv\"))) and query it in later calls. A single look is one line: print(read(\"notes.md\")). Only what the code prints, and its last expression, comes back to you: print just what the next step needs, sliced or filtered, never a big file whole. When what you need is picked out by meaning, not by a word or pattern (lines that say a thing in their own words, hits of a word used in other senses, search results that answer the question, the parts of a long page or log about something), put the lines or results through relevant and print what it keeps, rather than guessing keyword lists or reading them all.
 
 Look at files with read, not sh(\"cat ...\"): only read counts as reading a file, and you must read one before you write over it or edit it (so does writing or editing it yourself). Prefer edit for targeted changes. Check sh's code on every run and look into a failure before moving on. Before any delete or move, check that the path is the one you mean; never run one on a computed path you have not checked.

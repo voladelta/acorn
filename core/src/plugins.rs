@@ -3,7 +3,7 @@
 //! What the user adds to luau without a new Acorn: <dir>/plugins/<name>.luau,
 //! each returning the globals it provides, a `doc` line and a `value` each:
 //!
-//!   return { web_search = { doc = "web_search(query): string", value = search } }
+//!   return { linear = { doc = "linear(query: string): table", value = linear } }
 //!
 //! A global of a name already there replaces it, doc and all; of two plugins,
 //! the last by name wins, and it is said. A plugin that fails to load is left
@@ -43,15 +43,15 @@ pub fn note() -> String {
     "# Plugins
 
 luau's globals can be added to or replaced without restarting Acorn: when the
-user wants another search or fetch provider or a service's API, write
+user wants a service's API or a routine luau lacks, write
 {dir}/<name>.luau, and it counts from your next luau call, which says if it
 failed to load. The file returns its globals, each a doc line and a value:
 
-  local key = secret(\"EXA_API_KEY\")
-  local function search(query)
-    return http{{ method = \"POST\", url = \"https://api.exa.ai/search\", headers = {{ [\"x-api-key\"] = key }}, json = {{ query = query }} }}.json
+  local key = secret(\"LINEAR_API_KEY\")
+  local function linear(query)
+    return http{{ method = \"POST\", url = \"https://api.linear.app/graphql\", headers = {{ Authorization = key }}, json = {{ query = query }} }}.json
   end
-  return {{ web_search = {{ doc = \"web_search(query: string): table -- via Exa\", value = search }} }}
+  return {{ linear = {{ doc = \"linear(query: string): table -- Linear GraphQL\", value = linear }} }}
 
 A plugin has everything luau's code has, and these two, which your own code
 does not:

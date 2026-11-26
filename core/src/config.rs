@@ -9,6 +9,7 @@
 //! `budget` caps what every chat's calls spend a day (`chat::usage`).
 
 use crate::effort::Effort;
+use crate::model::Model;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -105,7 +106,7 @@ impl Config {
       work: expand(&get("work", &format!("{}/work", dir.display()))),
       rules: (!rules.is_empty()).then(|| expand(&rules)),
       after: get("after", ""),
-      pick: run("pick", &get("pick", "high"))?,
+      pick: run("pick", &get("pick", Model::default().default_effort().as_str()))?,
       compactor: run("compactor", &get("compactor", "low"))?,
       agents: if agents.is_empty() {
         None
@@ -128,8 +129,6 @@ pub fn hidden() -> Vec<&'static str> {
   let mut all = vec![
     KEY_VAR,
     "ACORN_GEMINI_API_KEY",
-    "DEEPSEEK_API_KEY",
-    "ACORN_DEEPSEEK_API_KEY",
     crate::decide::KEY_VAR,
     crate::web::KEY_VAR,
     EXA_KEY_ALIAS,
@@ -189,10 +188,8 @@ fn budget(text: &str) -> Result<Option<f64>, String> {
   }
 }
 
-/// Old configs could prefix an effort with the previous provider's model.
 fn run(key: &str, text: &str) -> Result<Effort, String> {
-  let effort = text.strip_prefix("deepseek-flash:").unwrap_or(text);
-  Effort::parse(effort).ok_or_else(|| format!("{key} is no effort offered here: {text}"))
+  Effort::parse(text.trim()).ok_or_else(|| format!("{key} is no effort offered here: {text}"))
 }
 
 #[cfg(test)]

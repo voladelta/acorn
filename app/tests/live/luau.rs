@@ -348,57 +348,46 @@ pub fn image() {
   );
 }
 
-/// Plugins changed on a chat that goes on, Acorn never restarted: search
-/// as shipped, then Exa's plugin dropped in, then TinyFish's for it, then
-/// Acorn installing Exa's itself when asked.
+/// Plugins changed on a chat that goes on, Acorn never restarted: a plugin
+/// dropped into `plugins`, edited on disk, and removed by Acorn via `extend`.
 pub fn plugins() {
-  let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins");
   let mut l = Live::start("luau_plugins", &[], |d| {
     std::fs::create_dir_all(d.home().join("plugins")).unwrap();
   });
   let plugins = l.dirs().home().join("plugins");
-  let ask = |l: &mut Live, tag: &str, what: &str| -> String {
-    let t = l.say(
-      "Acorn",
-      "default",
-      &format!("{what} Search with web_search in luau, once, and answer as {tag}=<the url you found>."),
-    );
-    assert!(t.replies.contains(&format!("{tag}=")), "{}", t.replies);
-    t.echoes.join("\n")
-  };
 
-  let first = ask(&mut l, "FIRST", "Find the Rust language's home page.");
-  assert!(
-    !first.contains("http \""),
-    "shipped search goes through no plugin: {first}"
+  std::fs::write(
+    plugins.join("stamp.luau"),
+    "return { stamp = { doc = 'stamp(): string -- v1', value = function() return 'STAMP-V1' end } }",
+  )
+  .unwrap();
+  let first = l.say(
+    "Acorn",
+    "default",
+    "Call stamp() in luau once and answer with FIRST=<what it returned>.",
   );
-
-  std::fs::copy(shipped.join("exa.luau"), plugins.join("exa.luau")).unwrap();
-  let exa = ask(&mut l, "SECOND", "Find the Python language's home page.");
-  assert!(exa.contains("http \"https://api.exa.ai/search\""), "{exa}");
+  assert!(first.replies.contains("FIRST=STAMP-V1"), "{}", first.replies);
+  let echoes = first.echoes.join("\n");
   assert!(
-    exa.contains("plugins changed") && !exa.contains("did not load"),
-    "{exa}"
+    echoes.contains("plugins changed") && !echoes.contains("did not load"),
+    "{echoes}"
   );
 
-  std::fs::remove_file(plugins.join("exa.luau")).unwrap();
-  std::fs::copy(shipped.join("tinyfish.luau"), plugins.join("tinyfish.luau")).unwrap();
-  let fish = ask(&mut l, "THIRD", "Find the Go language's home page.");
-  assert!(
-    fish.contains("http \"https://api.search.tinyfish.ai\"") && !fish.contains("did not load"),
-    "{fish}"
+  std::fs::write(
+    plugins.join("stamp.luau"),
+    "return { stamp = { doc = 'stamp(): string -- v2', value = function() return 'STAMP-V2' end } }",
+  )
+  .unwrap();
+  let second = l.say(
+    "Acorn",
+    "default",
+    "Call stamp() in luau again and answer with SECOND=<what it returned>.",
   );
+  assert!(second.replies.contains("STAMP-V2"), "{}", second.replies);
 
-  let asked = format!(
-    "Use Exa instead of TinyFish for search from now on: the plugin is at {}, so remove TinyFish's and install that one. Then find the Zig language's home page.",
-    shipped.join("exa.luau").display()
-  );
-  let done = ask(&mut l, "FOURTH", &asked);
-  assert!(plugins.join("exa.luau").exists() && !plugins.join("tinyfish.luau").exists());
-  assert!(
-    done.contains("http \"https://api.exa.ai/search\"") && !done.contains("did not load"),
-    "{done}"
-  );
+  let third = l.say("Acorn", "default", "Remove the stamp plugin and reply REMOVED-STAMP.");
+  assert!(third.replies.contains("REMOVED-STAMP"), "{}", third.replies);
+  assert!(!plugins.join("stamp.luau").exists());
 }
 
 /// A question no word finds: which of 2,000 support tickets refuse a

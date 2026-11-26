@@ -32,7 +32,7 @@ const FACTS: [(&str, &str); 16] = [
     "v2026.11.02b",
   ),
   (
-    "Our Exa search key lives in ~/.acorn/config.json under exa_api_key; never paste it into chat, never log it. The TinyFish one is there too but we only use Exa unless Exa is down. The monthly Exa budget is 40 dollars and we're at about 12 so far this month, so don't go wild with searches when a single fetch would do.",
+    "Our Exa search key lives in ~/.acorn/config.json under exa_api_key; never paste it into chat, never log it. We use Exa for all web search and page fetches across our agents. The monthly Exa budget is 40 dollars and we're at about 12 so far this month, so don't go wild with searches when a single fetch would do.",
     "40 dollars",
   ),
   (

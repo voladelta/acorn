@@ -57,11 +57,7 @@ const SCENARIOS: &[Scenario] = &[
   },
   scenario("luau_jobs", luau::jobs),
   scenario("luau_image", luau::image),
-  Scenario {
-    name: "luau_plugins",
-    run: luau::plugins,
-    needs: &["EXA_API_KEY", "TINYFISH_API_KEY"],
-  },
+  scenario("luau_plugins", luau::plugins),
   Scenario {
     name: "relevant",
     run: luau::relevant,

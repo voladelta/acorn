@@ -8,6 +8,9 @@ use std::{io::Read as _, path::Path, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 pub const MOST_BYTES: u64 = 50_000_000;
+/// Raw image bytes past which base64 JSON risks Gemini's 20 MB inline image limit.
+const MOST_IMAGE_BYTES: usize = 14_500_000;
+const MOST_IMAGE_DATA: usize = MOST_IMAGE_BYTES * 4 / 3;
 const TIMEOUT: Duration = Duration::from_mins(15);
 const MODEL: Model = Model::Hydrogen;
 const EFFORT: Effort = Effort::Low;
@@ -32,6 +35,24 @@ fn media(path: &Path, bytes: &[u8]) -> Option<(&'static str, &'static str)> {
       return Some(("document", "application/vnd.ms-powerpoint"));
     }
     return None;
+  }
+  if bytes.starts_with(b"PK\x03\x04") {
+    match memory::media_kind(bytes) {
+      "docx" => {
+        return Some((
+          "document",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ));
+      }
+      "pptx" => {
+        return Some((
+          "document",
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ));
+      }
+      "xlsx" => return None,
+      _ => {}
+    }
   }
   let extension = path.extension()?.to_str()?.to_ascii_lowercase();
   let mime = match extension.as_str() {
@@ -62,8 +83,11 @@ fn load(path: &Path) -> Result<Value, String> {
     return Err(too_large());
   }
   let (kind, mime) = media(path, &bytes).ok_or("give a PDF, Word or PowerPoint document, or an image")?;
-  let (mime, data) = if mime == "image/gif" {
+  let (mime, data) = if kind == "image" && (mime == "image/gif" || bytes.len() > MOST_IMAGE_BYTES) {
     let img = memory::image_for_model(&bytes).map_err(|e| e.to_string())?.0;
+    if img.data.len() > MOST_IMAGE_DATA {
+      return Err("over the Gemini 20 MB inline image limit".into());
+    }
     (img.mime, img.data)
   } else {
     (
@@ -112,7 +136,7 @@ async fn transcribe(path: &Path, meter: Option<&Meter>, cancel: &CancellationTok
       at: now.timestamp_millis(),
     });
   }
-  transcription(&reply)
+  transcription(&reply).map_err(|why| why.replace(key, crate::ai::PURGED))
 }
 
 fn transcription(reply: &Value) -> Result<String, String> {
@@ -182,11 +206,74 @@ mod tests {
   }
 
   #[test]
+  fn modern_office_archives_with_large_leading_entries_read_from_stored_or_zip_paths() {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().unwrap();
+    for (entry, ext, mime) in [
+      (
+        "word/document.xml",
+        ".docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ),
+      (
+        "ppt/presentation.xml",
+        ".pptx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      ),
+    ] {
+      let mut out = std::io::Cursor::new(Vec::new());
+      {
+        let mut zip = zip::ZipWriter::new(&mut out);
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("docProps/thumbnail.bin", stored).unwrap();
+        zip.write_all(&vec![b'x'; 8192]).unwrap();
+        zip.start_file(entry, stored).unwrap();
+        zip.write_all(b"<xml/>").unwrap();
+        zip.finish().unwrap();
+      }
+      let bytes = out.into_inner();
+      let name = memory::media_add(dir.path(), &bytes).unwrap();
+      assert!(name.ends_with(ext), "{name}");
+      let mem = memory::Memory::load(dir.path()).unwrap();
+      let stored_file = mem.image_file(&name).unwrap();
+      assert_eq!(load(&stored_file).unwrap()["mime_type"], mime);
+
+      let as_zip = dir.path().join("legacy-attachment.zip");
+      std::fs::write(&as_zip, &bytes).unwrap();
+      let input = load(&as_zip).unwrap();
+      assert_eq!(input["type"], "document");
+      assert_eq!(input["mime_type"], mime);
+    }
+  }
+
+  #[test]
   fn an_oversized_document_is_rejected_before_loading_it() {
     let dir = tempfile::tempdir().unwrap();
     let big = dir.path().join("big.pdf");
     std::fs::File::create(&big).unwrap().set_len(MOST_BYTES + 1).unwrap();
     assert!(load(&big).unwrap_err().contains("over the Gemini 50 MB file limit"));
+
+    // A PNG header with dimensions over PIXELS and >14.5 MB raw cannot fit under 20 MB inline.
+    let huge_img = dir.path().join("huge.png");
+    let mut png = Vec::new();
+    image::RgbImage::new(2, 2)
+      .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+      .unwrap();
+    png[16..20].copy_from_slice(&40000u32.to_be_bytes());
+    png[20..24].copy_from_slice(&40000u32.to_be_bytes());
+    let crc = png[12..29].iter().fold(!0u32, |crc, &b| {
+      (0..8).fold(crc ^ u32::from(b), |c, _| {
+        (c >> 1) ^ (0xEDB8_8320 & (c & 1).wrapping_neg())
+      })
+    });
+    png[29..33].copy_from_slice(&(!crc).to_be_bytes());
+    png.resize(MOST_IMAGE_BYTES + 1024, 0);
+    std::fs::write(&huge_img, png).unwrap();
+    assert!(
+      load(&huge_img)
+        .unwrap_err()
+        .contains("over the Gemini 20 MB inline image limit")
+    );
   }
 
   #[tokio::test]

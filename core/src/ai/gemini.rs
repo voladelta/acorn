@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, time::Duration};
 
 pub const URL: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
+pub const CONTEXT_TOKENS: u64 = 1_048_576;
 pub const MAX_OUTPUT_TOKENS: u64 = 65_536;
+pub const LEAST_OUTPUT_TOKENS: u64 = 32_768;
 pub const IDLE: Duration = Duration::from_mins(20);
 
 pub enum Item {
@@ -162,6 +164,15 @@ pub fn output_text(step: &Value) -> impl Iterator<Item = &str> {
     .filter_map(|part| part["text"].as_str())
 }
 
+fn thought_text(step: &Value) -> impl Iterator<Item = &str> {
+  step["summary"]
+    .as_array()
+    .into_iter()
+    .flatten()
+    .filter(|part| part["type"].is_null() || part["type"] == "text")
+    .filter_map(|part| part["text"].as_str())
+}
+
 #[derive(Default)]
 struct Building {
   step: Value,
@@ -172,25 +183,73 @@ struct Building {
 }
 
 impl Building {
+  fn start(&mut self, on: &mut impl FnMut(Kind, &str, bool)) {
+    let step = &self.step;
+    match step["type"].as_str() {
+      Some("model_output") => {
+        for part in output_text(step) {
+          if !part.is_empty() {
+            on(Kind::Acorn, part, self.text.is_empty());
+            self.text.push_str(part);
+          }
+        }
+      }
+      Some("thought") => {
+        for part in thought_text(step) {
+          if !part.is_empty() {
+            on(Kind::Mind, part, self.summary.is_empty());
+            self.summary.push_str(part);
+          }
+        }
+      }
+      Some("function_call") => {
+        if let Some(name) = step["name"].as_str() {
+          on(Kind::Tool, &format!("{name} "), true);
+        }
+        match &step["arguments"] {
+          Value::String(args) if !args.is_empty() => {
+            self.args.push_str(args);
+            on(Kind::Tool, args, false);
+          }
+          Value::Object(args) if !args.is_empty() => {
+            on(Kind::Tool, &step["arguments"].to_string(), false);
+          }
+          _ => {}
+        }
+      }
+      _ => {}
+    }
+  }
+
   fn delta(&mut self, delta: &Value, on: &mut impl FnMut(Kind, &str, bool)) {
     let value = |key| delta[key].as_str().unwrap_or_default();
     match value("type") {
       "text" => {
         let text = value("text");
-        on(Kind::Acorn, text, self.text.is_empty());
-        self.text.push_str(text);
+        if !text.is_empty() {
+          on(Kind::Acorn, text, self.text.is_empty());
+          self.text.push_str(text);
+        }
       }
       "thought_summary" => {
-        if let Some(text) = delta["content"]["text"].as_str() {
+        if let Some(text) = delta["content"]["text"].as_str()
+          && !text.is_empty()
+        {
           on(Kind::Mind, text, self.summary.is_empty());
           self.summary.push_str(text);
         }
       }
-      "thought_signature" => self.step["signature"].clone_from(&delta["signature"]),
+      "thought_signature" => {
+        if delta["signature"].is_string() {
+          self.step["signature"].clone_from(&delta["signature"]);
+        }
+      }
       "arguments_delta" => {
         let args = value("arguments");
-        self.args.push_str(args);
-        on(Kind::Tool, args, false);
+        if !args.is_empty() {
+          self.args.push_str(args);
+          on(Kind::Tool, args, false);
+        }
       }
       _ => {}
     }
@@ -244,19 +303,12 @@ impl Got {
   fn read_step(&mut self, index: u64, kind: &str, ev: &Value, on: &mut impl FnMut(Kind, &str, bool)) {
     match kind {
       "step.start" => {
-        let step = ev["step"].clone();
-        if step["type"] == "function_call"
-          && let Some(name) = step["name"].as_str()
-        {
-          on(Kind::Tool, &format!("{name} "), true);
-        }
-        self.steps.insert(
-          index,
-          Building {
-            step,
-            ..Building::default()
-          },
-        );
+        let mut building = Building {
+          step: ev["step"].clone(),
+          ..Building::default()
+        };
+        building.start(on);
+        self.steps.insert(index, building);
       }
       "step.delta" => {
         if let Some(step) = self.steps.get_mut(&index) {
@@ -294,14 +346,7 @@ impl Got {
     for item in &out {
       match item["type"].as_str() {
         Some("model_output") => entries.extend(output_text(item).map(|s| entry(Kind::Acorn, s))),
-        Some("thought") => entries.extend(
-          item["summary"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|v| v["text"].as_str())
-            .map(|s| entry(Kind::Mind, s)),
-        ),
+        Some("thought") => entries.extend(thought_text(item).map(|s| entry(Kind::Mind, s))),
         Some("function_call") => {
           let Some(call) = function(item) else {
             return stopped(Halt::Fail, "Gemini sent an invalid function call".into());
@@ -340,28 +385,63 @@ impl Got {
     let error = self.terminal.get("error").unwrap_or(&interaction["errors"][0]);
     let code = error["code"].as_str().unwrap_or_default();
     let status = interaction["status"].as_str().unwrap_or("failed");
+    if status == "incomplete" {
+      let usage = &interaction["usage"];
+      let used_input = usage["total_input_tokens"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_add(usage["total_tool_use_tokens"].as_u64().unwrap_or(0));
+      if used_input > 0 && CONTEXT_TOKENS.saturating_sub(used_input) < LEAST_OUTPUT_TOKENS {
+        return (
+          Halt::Fail,
+          "Gemini context window left too little room for output".into(),
+        );
+      }
+    }
     let halt = match status {
       "completed" => Halt::Done,
       "requires_action" => Halt::Tools,
       _ if matches!(
         code,
-        "internal"
+        "api_error"
+          | "internal"
           | "internal_server_error"
           | "service_unavailable"
           | "unavailable"
+          | "overloaded"
           | "resource_exhausted"
           | "rate_limit_exceeded"
+          | "too_many_requests"
           | "gateway_timeout"
           | "deadline_exceeded"
+          | "aborted"
       ) =>
       {
         Halt::Busy
       }
+      _ if matches!(
+        code,
+        "unauthenticated"
+          | "authentication"
+          | "invalid_api_key"
+          | "permission_denied"
+          | "forbidden"
+          | "payment_required"
+          | "quota_exceeded"
+          | "billing_not_active"
+      ) =>
+      {
+        Halt::Down
+      }
       _ => Halt::Fail,
     };
-    let why = error["message"]
-      .as_str()
-      .map_or_else(|| format!("Gemini interaction {status}"), str::to_string);
+    let why = if let Some(msg) = error["message"].as_str().filter(|s| !s.is_empty()) {
+      msg.to_string()
+    } else if !code.is_empty() {
+      format!("Gemini interaction {status} ({code})")
+    } else {
+      format!("Gemini interaction {status}")
+    };
     (halt, why)
   }
 }
@@ -389,5 +469,122 @@ fn stopped(halt: Halt, why: String) -> Step {
     entries: vec![],
     halt,
     why,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn step_start_payloads_stream_and_survive_follow_up_deltas() {
+    let mut got = Got::default();
+    let mut deltas = Vec::new();
+    let mut record = |kind: Kind, text: &str, fresh: bool| {
+      deltas.push((kind, text.to_string(), fresh));
+    };
+    for ev in [
+      json!({"event_type": "step.start", "index": 0, "step": {
+        "type": "thought",
+        "summary": [{"type": "text", "text": "Plan: "}],
+      }}),
+      json!({"event_type": "step.delta", "index": 0, "delta": {
+        "type": "thought_summary",
+        "content": {"type": "text", "text": "check files."},
+      }}),
+      json!({"event_type": "step.delta", "index": 0, "delta": {
+        "type": "thought_signature",
+        "signature": "sig-1",
+      }}),
+      json!({"event_type": "step.stop", "index": 0}),
+      json!({"event_type": "step.start", "index": 1, "step": {
+        "type": "model_output",
+        "content": [{"type": "text", "text": "Hello "}],
+      }}),
+      json!({"event_type": "step.delta", "index": 1, "delta": {
+        "type": "text",
+        "text": "world!",
+      }}),
+      json!({"event_type": "step.stop", "index": 1}),
+      json!({"event_type": "interaction.completed", "interaction": {"status": "completed"}}),
+    ] {
+      got.read(&ev, &mut record);
+    }
+    assert_eq!(
+      deltas,
+      vec![
+        (Kind::Mind, "Plan: ".into(), true),
+        (Kind::Mind, "check files.".into(), false),
+        (Kind::Acorn, "Hello ".into(), true),
+        (Kind::Acorn, "world!".into(), false),
+      ]
+    );
+    let step = got.step();
+    assert_eq!(step.halt, Halt::Done);
+    assert_eq!(step.entries.len(), 2);
+    assert_eq!(step.entries[0].text, "Plan: check files.");
+    assert_eq!(step.entries[1].text, "Hello world!");
+    assert_eq!(step.out[0]["summary"][0]["text"], "Plan: check files.");
+    assert_eq!(step.out[0]["signature"], "sig-1");
+    assert_eq!(step.out[1]["content"][0]["text"], "Hello world!");
+  }
+
+  #[test]
+  fn step_start_complete_function_call_streams_arguments() {
+    let mut got = Got::default();
+    let mut deltas = Vec::new();
+    let mut record = |kind: Kind, text: &str, fresh: bool| {
+      deltas.push((kind, text.to_string(), fresh));
+    };
+    for ev in [
+      json!({"event_type": "step.start", "index": 0, "step": {
+        "type": "function_call",
+        "id": "c1",
+        "name": "search",
+        "arguments": {"query": "acorn"},
+      }}),
+      json!({"event_type": "step.stop", "index": 0}),
+      json!({"event_type": "interaction.completed", "interaction": {"status": "requires_action"}}),
+    ] {
+      got.read(&ev, &mut record);
+    }
+    assert_eq!(
+      deltas,
+      vec![
+        (Kind::Tool, "search ".into(), true),
+        (Kind::Tool, "{\"query\":\"acorn\"}".into(), false),
+      ]
+    );
+    let step = got.step();
+    assert_eq!(step.halt, Halt::Tools);
+    assert_eq!(step.uses.len(), 1);
+    assert_eq!(step.uses[0].input, json!({"query": "acorn"}));
+  }
+
+  #[test]
+  fn sse_errors_and_clamped_incomplete_windows_classify_accurately() {
+    let classify = |ev: Value| {
+      let mut got = Got::default();
+      got.read(&ev, &mut |_, _, _| {});
+      got.step()
+    };
+    for code in ["api_error", "too_many_requests", "aborted"] {
+      let step = classify(json!({"event_type": "error", "error": {"code": code, "message": ""}}));
+      assert_eq!(step.halt, Halt::Busy, "{code}");
+      assert!(step.why.contains(code), "{}", step.why);
+    }
+    for code in ["unauthenticated", "permission_denied", "quota_exceeded"] {
+      let step = classify(json!({"event_type": "error", "error": {"code": code, "message": "denied"}}));
+      assert_eq!(step.halt, Halt::Down, "{code}");
+    }
+    let clamped = classify(json!({
+      "event_type": "interaction.completed",
+      "interaction": {
+        "status": "incomplete",
+        "usage": {"total_input_tokens": 1_030_000, "total_output_tokens": 18_576},
+      }
+    }));
+    assert_eq!(clamped.halt, Halt::Fail);
+    assert!(clamped.why.contains("context window"), "{}", clamped.why);
   }
 }

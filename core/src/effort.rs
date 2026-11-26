@@ -5,22 +5,23 @@
 use serde::{Deserialize, Serialize};
 
 /// The stored thinking preferences, mapped to the selected model.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Effort {
-  None,
   Low,
+  Medium,
+  #[default]
   High,
   Max,
 }
 
-pub const EFFORTS: [Effort; 4] = [Effort::None, Effort::Low, Effort::High, Effort::Max];
+pub const EFFORTS: [Effort; 4] = [Effort::Low, Effort::Medium, Effort::High, Effort::Max];
 
 impl Effort {
-  pub fn as_str(self) -> &'static str {
+  pub const fn as_str(self) -> &'static str {
     match self {
-      Effort::None => "none",
       Effort::Low => "low",
+      Effort::Medium => "medium",
       Effort::High => "high",
       Effort::Max => "max",
     }

@@ -49,7 +49,7 @@ const BUSY: &str = "the AI service is busy or unavailable right now";
 
 /// The least room for its output a request is sent with: with less left
 /// of the model's context, the call sheds.
-const LEAST: u64 = 32_768;
+const LEAST: u64 = gemini::LEAST_OUTPUT_TOKENS;
 
 /// What a tool result dropped to fit the model's context reads.
 const SHED: &str = "[dropped: this call outgrew the model's context; run it again if still needed]";
@@ -100,7 +100,7 @@ async fn turns(
   if key.is_empty() {
     return Err(format!("no API key: set {}", config::KEY_VAR));
   }
-  let tools: Vec<Spec> = ask.tools.as_ref().map(|t| t.specs()).unwrap_or_default();
+  let tools: Vec<Spec> = ask.tools.as_ref().map_or_default(|t| t.specs());
   let mut items = vec![Item::User {
     parts: parts(ask.blocks.iter().map(|b| &b.text)),
     imgs: ask.imgs.clone(),
@@ -110,7 +110,7 @@ async fn turns(
     let cut = cancel.child_token();
     let mut body = gemini::body(ask, &items, &tools, room);
     // one purged as the call ran: its prompt, built before, holds it
-    let secrets = ask.tools.as_ref().map(|t| t.purged()).unwrap_or_default();
+    let secrets = ask.tools.as_ref().map_or_default(|t| t.purged());
     gemini::veil(&mut body, &secrets);
     let step = heard.till_cut(step(ask, on, key, body, &cut), &cut).await;
     if step.halt == Halt::Fail && context_limit(&step.why) && fit(&mut room, &mut items, on) {
@@ -203,18 +203,17 @@ fn context_limit(why: &str) -> bool {
     "context length",
     "context window",
     "input context",
+    "maximum number of tokens",
+    "too many tokens",
     "http 413",
   ]
   .iter()
   .any(|part| why.contains(part))
 }
 
-/// Each retry leaves less room for output or drops older tool results.
+/// Each retry drops older tool results first, or leaves less room for output
+/// when no tool results remain to shed.
 fn fit(room: &mut u64, items: &mut [Item], on: &On) -> bool {
-  if *room > LEAST {
-    *room = (*room / 2).max(LEAST);
-    return true;
-  }
   if shed(items) {
     *room = MAX_OUTPUT_TOKENS;
     tell(
@@ -223,6 +222,10 @@ fn fit(room: &mut u64, items: &mut [Item], on: &On) -> bool {
       "This call outgrew the model's context: its older tool results were dropped.",
       None,
     );
+    return true;
+  }
+  if *room > LEAST {
+    *room = (*room / 2).max(LEAST);
     return true;
   }
   false
@@ -429,8 +432,6 @@ async fn send(
 ) -> (u16, Sent) {
   let json = body.to_string();
   let bytes = json.len();
-  let seen = Mutex::new(Vec::new());
-  let mut got = Got::default();
   let mut read = Read::default();
   let mut status = 0;
   let post = HTTP
@@ -451,7 +452,7 @@ async fn send(
       status = res.status().as_u16();
       let after = header(&res, "retry-after").and_then(|v| retry_after(&v));
       if res.status().is_success() {
-        let step = stream(res, on, flight, &seen, cancel, &mut got, &mut read).await;
+        let step = stream(res, key, on, flight, cancel, &mut read).await;
         (after, step, true)
       } else {
         (after, refused(res, ask.model.name(), key, cancel).await, false)
@@ -549,13 +550,14 @@ fn url() -> String {
 /// The stream's events, each told as it comes, as the step it gives.
 async fn stream(
   res: reqwest::Response,
+  key: &str,
   on: &On,
   flight: &mut cache::Flight,
-  seen: &Mutex<Vec<Live>>,
   cancel: &CancellationToken,
-  got: &mut Got,
   read: &mut Read,
 ) -> Step {
+  let seen = Mutex::new(Vec::new());
+  let mut got = Got::default();
   let mut bytes = res.bytes_stream();
   let mut rest: Vec<u8> = Vec::new();
   loop {
@@ -598,9 +600,12 @@ async fn stream(
       };
       if got.read(&ev, &mut tell) {
         read.usage = got.usage;
-        let step = std::mem::take(got).step();
+        let mut step = got.step();
+        if !key.is_empty() {
+          step.why = step.why.replace(key, super::PURGED);
+        }
         return match step.halt {
-          Halt::Fail | Halt::Busy => fail(&step.why, &seen.lock(), step.halt),
+          Halt::Fail | Halt::Busy | Halt::Down => fail(&step.why, &seen.lock(), step.halt),
           _ => step,
         };
       }
@@ -785,7 +790,7 @@ mod tests {
   fn ask(meter: Option<crate::ai::Meter>) -> Ask {
     Ask {
       model: crate::model::Model::Neon,
-      effort: crate::effort::Effort::None,
+      effort: crate::effort::Effort::Low,
       system: "test".into(),
       blocks: vec![crate::Block::new("hello", false)],
       imgs: vec![],
@@ -1209,6 +1214,31 @@ mod tests {
     assert!(shed(&mut items));
     assert_eq!(texts(&items), [true, true, true], "b, then c: over half of the rest");
     assert!(!shed(&mut items));
+
+    let mut room = MAX_OUTPUT_TOKENS;
+    let mut with_tools = vec![Item::Back(vec![back("a", 4000)])];
+    let on: On = std::sync::Arc::new(|_| {});
+    assert!(fit(&mut room, &mut with_tools, &on));
+    assert_eq!(room, MAX_OUTPUT_TOKENS, "shedding keeps full output room");
+    assert_eq!(texts(&with_tools), [true]);
+  }
+
+  #[tokio::test]
+  async fn sse_auth_errors_redact_keys_and_mark_service_down() {
+    let url = api(|_| {
+      let stream = events(&[serde_json::json!({
+        "event_type": "error",
+        "error": {"code": "unauthenticated", "message": "Invalid key acorn-test-key"},
+      })]);
+      (200, stream)
+    })
+    .await;
+    let ask = ask(None);
+    let on: On = std::sync::Arc::new(|_| {});
+    let cancel = CancellationToken::new();
+    let (status, step) = sent(&ask, &on, url, &cancel).await;
+    assert_eq!((status, step.halt), (200, Halt::Down));
+    assert_eq!(step.why, "Invalid key [purged]");
   }
 
   #[tokio::test]
@@ -1248,7 +1278,7 @@ mod tests {
     let why = crate::chat::over_budget().expect("the fixture spent more than its daily cap");
     let ask = Ask {
       model: crate::model::Model::Neon,
-      effort: crate::effort::Effort::None,
+      effort: crate::effort::Effort::Low,
       system: "test".into(),
       blocks: vec![],
       imgs: vec![],

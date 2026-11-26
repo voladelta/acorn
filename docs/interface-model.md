@@ -43,9 +43,9 @@ Voice comes for free: if everything is sayable and nothing needs pointing, a mic
   - **Created**, by asking any assistant: **Marrie** · Personal stylist. **Doug** · Friendly neighbour who loves cracking jokes.
 - **Assumptions:** single user, native app; voice later must need no new verbs.
 
-## How deepseek-harness does turns, and what Acorn takes from it
+## How agent turns handle inbox messages and barge-in
 
-`~/Codehub/deepseek-harness/packages/core/agent-loop` gives every agent an inbox with two slots and three ways in (`agent.ts`, `inbox.ts`):
+A typical two-slot agent inbox offers three ways in (`followup`, `steer`, `cancel`):
 
 | Harness verb | Lands in | Effect |
 |---|---|---|

@@ -184,23 +184,21 @@ Messages of groups are kept in `telegram/rooms/` for 24 hours, erased each day a
 
 ### Plugins
 
-A plugin adds a global to `luau`, or replaces one, without restarting Acorn. Each is a Luau file in `~/.acorn/plugins`, and it counts from the caller's next `luau` call: edit or remove it and that counts too, and the agent's own globals stay. Ask Acorn for one in plain words ("use Exa for search", "learn to roll dice"): it writes the plugin and installs it with `extend`, which loads it beside the others first and refuses one that fails, so a broken plugin never replaces a working one. Or copy one from [plugins](plugins):
+A plugin adds a global to `luau`, or replaces one, without restarting Acorn. Each is a Luau file in `~/.acorn/plugins`, and it counts from the caller's next `luau` call: edit or remove it and that counts too, and the agent's own globals stay. Ask Acorn for one in plain words ("add Linear's API", "learn to roll dice"): it writes the plugin and installs it with `extend`, which loads it beside the others first and refuses one that fails, so a broken plugin never replaces a working one. Or copy one from [plugins](plugins):
 
-| Plugin | Replaces | Key |
+| Plugin | Adds | Key |
 |---|---|---|
-| [exa.luau](plugins/exa.luau) | `web_search`, `web_fetch` | `exa_api_key` in `config.json`, or `EXA_API_KEY` |
-| [tinyfish.luau](plugins/tinyfish.luau) | `web_search`, `web_fetch` | `tinyfish_api_key` in `config.json`, or `TINYFISH_API_KEY` |
-| [github.luau](plugins/github.luau) | adds `github`, GitHub's REST API | none with [`gh`](https://cli.github.com) signed in; else `github_token` in `config.json`, or `GITHUB_TOKEN` (public reads need none) |
-| [lightpanda.luau](plugins/lightpanda.luau) | adds `browser`, a headless browser of the caller's own ([Lightpanda](https://lightpanda.io)): pages built by JavaScript, clicks, forms, sign-ins, `extract` by selector, screenshots. With a TypeSafe key it is ultrafast: give it a goal in words and Jev picks each action (after [jev-ultrafast](https://github.com/browser-use/jev-ultrafast)); without one, one tool a call | none; [`lightpanda`](https://lightpanda.io/docs/run-locally/installation/one-liner) on the `PATH` (or in `~/.local/bin`) of the user Acorn runs as |
+| [github.luau](plugins/github.luau) | `github`, GitHub's REST API | none with [`gh`](https://cli.github.com) signed in; else `github_token` in `config.json`, or `GITHUB_TOKEN` (public reads need none) |
+| [lightpanda.luau](plugins/lightpanda.luau) | `browser`, a headless browser of the caller's own ([Lightpanda](https://lightpanda.io)): pages built by JavaScript, clicks, forms, sign-ins, `extract` by selector, screenshots. With a TypeSafe key it is ultrafast: give it a goal in words and Jev picks each action (after [jev-ultrafast](https://github.com/browser-use/jev-ultrafast)); without one, one tool a call | none; [`lightpanda`](https://lightpanda.io/docs/run-locally/installation/one-liner) on the `PATH` (or in `~/.local/bin`) of the user Acorn runs as |
 
-Install one search provider at a time: with both, the last by name wins, and each call says so. A file returns its globals, each with a one-line doc that goes in the tool's description:
+A file returns its globals, each with a one-line doc that goes in the tool's description:
 
 ```lua
-local key = secret("EXA_API_KEY")
-local function search(query)
-  return http{ url = "https://api.exa.ai/search", headers = { ["x-api-key"] = key }, json = { query = query } }.json
+local key = secret("LINEAR_API_KEY")
+local function linear(query)
+  return http{ url = "https://api.linear.app/graphql", headers = { Authorization = key }, json = { query = query } }.json
 end
-return { web_search = { doc = "web_search(query: string): table -- via Exa", value = search } }
+return { linear = { doc = "linear(query: string): table -- Linear GraphQL", value = linear } }
 ```
 
 The browser runs `lightpanda mcp` for each agent that uses it, over a fifo in `.lightpanda/` of that agent's work dir (no port), and keeps its page and cookies between calls; it stops after 30 minutes unused or when Acorn quits. `lightpanda_mode: "normal"` in `config.json` keeps it tool by tool even with a key; `lightpanda_flags` adds flags to it (`--obey-robots`, `--http-cache-dir DIR`, a proxy). With a TypeSafe key, the browser alone gets it, for its tools `classify`, `acceptCookies` and `login`: the plugin writes it into the browser's own dir (mode 700), the browser's environment takes it and the file goes, so it is on no command line and in no program the agent runs; the agent could still read it from that browser's environment, as it could from `config.json`. Copy [skills/lightpanda](skills/lightpanda) to `~/.acorn/skills/` too, for how to drive it well.
@@ -220,9 +218,9 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 | `chat` | `default` | Acorn's own chat id (letters, digits, `_`, `-`) |
 | `chats` | `$ACORN_DIR/chats` | Where the chats live, a dir each by id |
 | `work` | `$ACORN_DIR/work` | Where the agents' tools work |
-| `pick` | `high` | Acorn's effort. `none` and `low` select Gemini's lowest thinking level, `high` selects high, and `max` selects extra-high on Neon and Hydrogen. Max uses Carbon with high thinking. |
+| `pick` | `high` | Acorn's effort (`low`, `medium`, `high`, `max`). Defaults to Neon's recommended `high` thinking level; `max` selects `xhigh` on Neon and Hydrogen and `high` on Carbon. |
 | `compactor` | `low` | The effort of every summary call |
-| `agents` | `high` | Default reasoning effort of delegated agents |
+| `agents` | model default | Default reasoning effort of delegated agents (`high` on Neon and Hydrogen, `medium` on Carbon) unless overridden |
 | `view` | `2000000` | Bytes past which a view merges to half; from 32 KB to 2 MB |
 | `budget` | none | USD a day (here) that every chat's calls may spend together; once reached, no request goes till midnight: a turn says why, summaries wait. `0`: none |
 | `rules` | none | A file appended to every system prompt: who you are, how you want work done |

@@ -455,7 +455,7 @@ impl Engine {
       Err(why) => return why,
     };
     let effort = match &input["effort"] {
-      Value::Null => Effort::High,
+      Value::Null => model.default_effort(),
       val => match val.as_str().and_then(Effort::parse) {
         Some(effort) => effort,
         None => return no_effort(val),
@@ -760,12 +760,16 @@ impl Chat {
     self.agents.get_mut(name)
   }
 
-  /// An agent call uses its own effort, then the configured default, then high.
+  /// An agent call uses its own effort, then the configured default, then
+  /// its model's recommended default.
   fn agent_ask(&self, name: &str) -> Option<ai::Ask> {
     let agent = self.agents.get(name)?;
     let log = Block::new(self.mem.agent_reads(name), true);
     let system = tools::system(&(tools::sub(&self.me.work()) + &crate::facts::prompt(&self.me.id)));
-    let effort = agent.effort.or(config::get().agents).unwrap_or(Effort::High);
+    let effort = agent
+      .effort
+      .or(config::get().agents)
+      .unwrap_or_else(|| agent.model.default_effort());
     let mut blocks = agent.view.blocks.clone();
     blocks.push(log);
     Some(ai::Ask {
@@ -868,7 +872,7 @@ impl Chat {
         .collect()
     });
     self.all(Event::Agent { name: name.into(), log });
-    let live = self.agents.get(name).map(|a| a.live.clone()).unwrap_or_default();
+    let live = self.agents.get(name).map_or_default(|a| a.live.clone());
     self.all(Event::Live {
       agent: Some(name.into()),
       live,
@@ -887,6 +891,25 @@ mod tests {
     assert_eq!(requested_model(&json!("hydrogen")).ok(), Some(Model::Hydrogen));
     assert_eq!(requested_model(&json!("gemini-4-hydrogen")).ok(), Some(Model::Hydrogen));
     assert!(requested_model(&json!("other")).is_err());
+  }
+
+  #[tokio::test]
+  async fn subagents_default_to_the_models_recommended_effort_unless_specified() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = crate::chat::tests::open(dir.path());
+    let mut chat = engine.lock();
+    for (model, explicit, expected) in [
+      (Model::Neon, None, Model::Neon.default_effort()),
+      (Model::Hydrogen, None, Model::Hydrogen.default_effort()),
+      (Model::Carbon, None, Model::Carbon.default_effort()),
+      (Model::Neon, Some(Effort::Medium), Effort::Medium),
+    ] {
+      let name = chat.mem.agent_new(explicit, model).unwrap();
+      chat
+        .agents
+        .insert(name.clone(), Agent::new(&name, explicit, model, View::default()));
+      assert_eq!(chat.agent_ask(&name).unwrap().effort, expected);
+    }
   }
 
   #[tokio::test]

@@ -181,7 +181,8 @@ and \"Your threads\" shows each one's latest before the user's message.
 
 A person the user wants to keep (\"hire a stylist called Marrie\") is a new
 assistant: create them. Use delegate for a subagent working on a task in the
-background. For either, select Hydrogen only if the user requests it.
+background. For either, select Hydrogen or set effort only if the user specifies
+it; otherwise omit them so the recommended defaults apply.
 ";
 
 /// Where the tools run: this machine, the work dir.
@@ -311,7 +312,7 @@ fn boss() -> Vec<Spec> {
       json!({
         "tasks": {"type": "array", "items": {"type": "string"}},
         "model": {"type": "string", "enum": ["neon", "hydrogen"], "description": "Omit for Neon. Choose hydrogen only when the user requests it."},
-        "effort": {"type": "string", "enum": efforts, "description": "Set when the task needs a different reasoning effort. Omit to use the configured default (high unless configured)."}
+        "effort": {"type": "string", "enum": efforts, "description": "Omit to use the recommended default reasoning effort. Set only when the user specifies an effort."}
       }),
       &["tasks"],
     ),
@@ -340,7 +341,7 @@ fn peers() -> Vec<Spec> {
         "name": {"type": "string"},
         "about": {"type": "string", "description": "A short description to show beside its name, for example \"Personal stylist\"."},
         "model": {"type": "string", "enum": ["neon", "hydrogen"], "description": "Omit for Neon. Choose hydrogen only when the user requests it."},
-        "effort": {"type": "string", "enum": efforts, "description": "Reasoning effort. Omit for high."},
+        "effort": {"type": "string", "enum": efforts, "description": "Omit to use the recommended default reasoning effort. Set only when the user specifies an effort."},
         "instructions": {"type": "string", "description": "Its system prompt specifying what it helps with and how it works and talks. Copy any instructions the user supplied verbatim."},
         "welcome": {"type": "string", "description": "The first message in its chat, in its own voice, introducing itself and what it helps with. Copy a user-supplied welcome verbatim."}
       }),

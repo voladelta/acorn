@@ -21,10 +21,18 @@ impl Model {
     }
   }
 
-  /// Older effort settings remain readable. Gemini 4's minimum is low.
+  /// The model's recommended default reasoning effort in Gemini 4.
+  pub const fn default_effort(self) -> Effort {
+    match self {
+      Self::Neon | Self::Hydrogen => Effort::High,
+      Self::Carbon => Effort::Medium,
+    }
+  }
+
   pub const fn thinking(self, effort: Effort) -> &'static str {
     match (self, effort) {
-      (_, Effort::None | Effort::Low) => "low",
+      (_, Effort::Low) => "low",
+      (_, Effort::Medium) => "medium",
       (_, Effort::High) | (Self::Carbon, Effort::Max) => "high",
       (_, Effort::Max) => "xhigh",
     }
@@ -37,5 +45,25 @@ impl Model {
       "hydrogen" | "gemini-4-hydrogen" => Some(Self::Hydrogen),
       _ => None,
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn models_map_efforts_and_recommended_defaults() {
+    assert_eq!(Model::Neon.default_effort(), Effort::High);
+    assert_eq!(Model::Hydrogen.default_effort(), Effort::High);
+    assert_eq!(Model::Carbon.default_effort(), Effort::Medium);
+
+    assert_eq!(Model::Neon.thinking(Effort::Low), "low");
+    assert_eq!(Model::Neon.thinking(Effort::Medium), "medium");
+    assert_eq!(Model::Neon.thinking(Effort::High), "high");
+    assert_eq!(Model::Neon.thinking(Effort::Max), "xhigh");
+
+    assert_eq!(Model::Carbon.thinking(Effort::Medium), "medium");
+    assert_eq!(Model::Carbon.thinking(Effort::Max), "high");
   }
 }

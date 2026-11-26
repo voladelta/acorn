@@ -27,7 +27,7 @@ impl Memory {
   /// What models get of message id's images: their copies, if any (its
   /// other media, none).
   pub fn images(&self, id: u64) -> Vec<Img> {
-    let names = self.message(id).map(|m| m.images).unwrap_or_default();
+    let names = self.message(id).map_or_default(|m| m.images);
     let dir = self.images_dir();
     names
       .iter()
@@ -108,20 +108,42 @@ pub fn media_kind(bytes: &[u8]) -> &'static str {
   } else if bytes.len() > 1 && bytes[0] == 0xFF && bytes[1] & 0xF6 == 0xF0 {
     "aac"
   } else if at(0, b"PK\x03\x04") {
-    // an Office file is a zip whose first entries name its kind
-    if has(b"word/", 4096) {
-      "docx"
-    } else if has(b"ppt/", 4096) {
-      "pptx"
-    } else if has(b"xl/", 4096) {
-      "xlsx"
-    } else {
-      "zip"
-    }
+    zip_office_kind(bytes).unwrap_or("zip")
   } else if std::str::from_utf8(bytes).is_ok() {
     "txt"
   } else {
     "bin"
+  }
+}
+
+fn zip_office_kind(bytes: &[u8]) -> Option<&'static str> {
+  if bytes.get(..4) != Some(b"PK\x03\x04") {
+    return None;
+  }
+  if let Ok(archive) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) {
+    let mut kind = None;
+    for name in archive.file_names().flatten() {
+      if name.starts_with("word/") {
+        return Some("docx");
+      }
+      if name.starts_with("ppt/") {
+        kind = Some("pptx");
+      } else if name.starts_with("xl/") && kind.is_none() {
+        kind = Some("xlsx");
+      }
+    }
+    return kind;
+  }
+  let head = &bytes[..bytes.len().min(4096)];
+  let has = |mark: &[u8]| head.windows(mark.len()).any(|w| w == mark);
+  if has(b"word/") {
+    Some("docx")
+  } else if has(b"ppt/") {
+    Some("pptx")
+  } else if has(b"xl/") {
+    Some("xlsx")
+  } else {
+    None
   }
 }
 
