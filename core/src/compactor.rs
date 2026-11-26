@@ -82,6 +82,7 @@ async fn build(this: &std::sync::Weak<crate::chat::Engine>, part: Part, text: St
     let served = chat.mem.served(part);
     let yields = (served == Served::Import).then(|| chat.mem.dir.display().to_string());
     let ask = ai::Ask {
+      model: crate::model::Model::Hydrogen,
       effort: config::get().compactor,
       blocks,
       meter: Some(chat.meter_at(served, Some(part))),

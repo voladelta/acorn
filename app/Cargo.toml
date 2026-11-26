@@ -43,7 +43,7 @@ tempfile = "3"
 
 # The scenarios on the real model: each in a process of its own (the
 # engines are one a process), several at once. `cargo test -p acorn --test
-# live -- --ignored` with DEEPSEEK_API_KEY; see tests/live/main.rs.
+# live -- --ignored` with GEMINI_API_KEY; see tests/live/main.rs.
 [[test]]
 name = "live"
 path = "tests/live/main.rs"

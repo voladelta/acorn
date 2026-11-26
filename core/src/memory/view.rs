@@ -142,8 +142,8 @@ impl Memory {
 
   /// The views' lines built before message `end`, in blocks (the last cut
   /// short), one marked: the last whole one, else the opening one. The
-  /// mark ends the prefix single flight keys (`ai::cache`); DeepSeek
-  /// caches prefixes itself.
+  /// mark ends the prefix single flight keys (`ai::cache`); Gemini
+  /// implicitly caches eligible prefixes.
   pub fn blocks(&self, end: u64, parts: &[Part]) -> Vec<crate::Block> {
     let (whole_parts, boundary) = prefix(parts, end);
     let lines: Vec<String> = whole_parts

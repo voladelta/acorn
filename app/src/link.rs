@@ -55,6 +55,7 @@ pub fn nobody(id: &str) -> Assistant {
     instructions: String::new(),
     welcome: String::new(),
     effort: acorn_core::effort::Effort::Low,
+    model: Default::default(),
     archived: false,
   }
 }

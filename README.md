@@ -3,7 +3,7 @@
 One chat with an AI agent that never ends, as a desktop app on macOS and Linux or a page in your browser: every message is kept and summarized into a memory tree the agent can zoom back into, so the chat outgrows the model's context window without losing anything.
 
 ```bash
-DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
+GEMINI_API_KEY=... cargo run --release -p acorn
 ```
 
 ## TL;DR
@@ -15,9 +15,9 @@ DEEPSEEK_API_KEY=sk-... cargo run --release -p acorn
 | Feature | What it does |
 |---|---|
 | **Memory tree** | Every message kept in `chat.db`; a binary tree of summaries, at most 512 bytes each, built in the background by the compactor |
-| **Bounded view** | The view the model reads stays under 2 MB (about 500k tokens, within DeepSeek's 1M context); past that, the oldest lines merge first |
+| **Bounded view** | The view the model reads stays under 2 MB (about 500k tokens, within Gemini 4's 1M unified context); past that, the oldest lines merge first |
 | **Zoom** | `zoom(id, n)` opens a line into the two it was made from; `zoom(id, 1)` gives a message whole, with its images |
-| **Agent tools** | One `luau` tool for hands: Luau code, in a VM of the agent's own that keeps its globals between calls, that reads, writes and edits files and runs commands on your machine, in a work dir of the agent's own, and searches and fetches the web through DeepSeek's Search and Fetch APIs; agents delegated one task each, in parallel |
+| **Agent tools** | One `luau` tool for hands: Luau code, in a VM of the agent's own that keeps its globals between calls, that reads, writes and edits files and runs commands on your machine, in a work dir of the agent's own, and searches and fetches the web through Exa Search and Contents; agents delegated one task each, in parallel |
 | **Assistants** | Acorn (general assistant), Max (thoughtful expert) and those they create on request, each a person with a name and an about, its own chat, memory and work dir, in a sidebar |
 | **Cut in** | A message sent while an assistant talks or works stops it at once, as a person would stop and listen; it answers you, then goes on only if you say so |
 | **Consult** | Assistants ask each other (`list_assistants`, `ask_assistant`), each pair in a thread of its own that never ends |
@@ -42,13 +42,13 @@ merges     0+2     2+2     4+2     6+2            two lines into one
 a view:    0+4 | 4+2 | 6+1 | 7+1 | 8+1 ...        old: merged; recent: one each
 ```
 
-Each line is named `id+n`: the `n` messages from `id` on. A message short enough is its own line; a longer one, and every merge, is written by a compaction call on the configured `compactor` effort. When the view passes its byte limit, a batch merges the most due pairs (the oldest since their last message) down to half, so between batches the view changes only at its end and DeepSeek's prefix cache keeps hitting.
+Each line is named `id+n`: the `n` messages from `id` on. A message short enough is its own line; a longer one, and every merge, is written by a compaction call on the configured `compactor` effort. When the view passes its byte limit, a batch merges the most due pairs (the oldest since their last message) down to half, so between batches the view changes only at its end and eligible Gemini prefixes can be cached implicitly.
 
 The model is told to find the latest mention of anything it needs in the view and zoom until it has it whole, before it acts, guesses or asks. When no line mentions it, `search` finds the messages holding a word or name (a full-text index of `chat.db`), and it zooms the ids found.
 
 ## Platforms
 
-On the desktop, Acorn's window is an [nsh](https://nsh.dev) app; in a browser, it is an [Octane](https://octanejs.dev) page built with Base UI and shadcn. The engines (memory, DeepSeek loop, the agent's tools) are Unix-only, so they run natively on macOS or Linux; in a browser they run in `acorn-server` on such a machine.
+On the desktop, Acorn's window is an [nsh](https://nsh.dev) app; in a browser, it is an [Octane](https://octanejs.dev) page built with Base UI and shadcn. The engines (memory, Gemini Interactions loop, the agent's tools) are Unix-only, so they run natively on macOS or Linux; in a browser they run in `acorn-server` on such a machine.
 
 | Target | Build | Window | Engines |
 |---|---|---|---|
@@ -60,7 +60,7 @@ Windows is not a target: `main.rs` stops with a compile error there.
 
 ## Install
 
-Acorn builds from source. Every target needs a Rust toolchain with the 2024 edition and a DeepSeek API key.
+Acorn builds from source. Every target needs a Rust toolchain with the 2024 edition and a Gemini API key for model calls.
 
 - **macOS:** nothing more.
 - **Linux:** GTK 4.14 or later and clang to build (`libgtk-4-dev clang` on Debian and Ubuntu 24.04+, `gtk4 clang` on Arch, `gtk4-devel clang` on Fedora); `xdg-open` for `tree`.
@@ -76,11 +76,13 @@ cargo build --release -p acorn
 
 ## Quick start
 
-1. Give Acorn your DeepSeek key, either in the environment or in `~/.acorn/config.json` (an app opened from the Finder or a desktop launcher has no shell variables):
+1. Give Acorn your Gemini key, either in the environment or in `~/.acorn/config.json` (an app opened from the Finder or a desktop launcher has no shell variables):
 
    ```json
-   { "deepseek_api_key": "sk-..." }
+   { "gemini_api_key": "..." }
    ```
+
+   For web search and page reads, also set `EXA_API_KEY` or add `exa_api_key` to the same file.
 
 2. Run it:
 
@@ -118,9 +120,9 @@ acorn-host signout u1a2b3c4d5 # sign them out of every device (a lost one); a ne
 acorn-host users           # id, name, created, up or down
 ```
 
-A link shows a sign-in button (so a chat app's link preview doesn't use it up), signs in once when pressed, and is good for 7 days; another site can't press it for you. A device stays signed in for a year, or till `signout`. The data dir is `$ACORN_HOST_DIR`, else `~/.acorn-host`; its `config.json` holds `deepseek_api_key` (or set `DEEPSEEK_API_KEY`) and `budget`, USD a day per person (1 by default). Put it behind HTTPS (Caddy, or a Cloudflare Tunnel).
+A link shows a sign-in button (so a chat app's link preview doesn't use it up), signs in once when pressed, and is good for 7 days; another site can't press it for you. A device stays signed in for a year, or till `signout`. The data dir is `$ACORN_HOST_DIR`, else `~/.acorn-host`; Its `config.json` holds `gemini_api_key`, optional `exa_api_key` for web tools, and `budget`, USD a day per person (1 by default). `GEMINI_API_KEY` and `EXA_API_KEY` override the corresponding config entries. Put it behind HTTPS (Caddy, or a Cloudflare Tunnel).
 
-Each person's agent can read the DeepSeek key (it is in their server's environment), so for now invite only people you would hand it to, and use a key with little credit. The network is shared, so a service on the machine's localhost with no password of its own is open to every person's agent. The shared network namespace also exposes abstract Unix sockets, including ones used by some X11 and D-Bus setups.
+Each person's agent can read the provider keys in their server's environment. Invite only people you would share those keys with. The network is shared, so a service on the machine's localhost with no password of its own is open to every person's agent. The shared network namespace also exposes abstract Unix sockets, including ones used by some X11 and D-Bus setups.
 
 ## Using it
 
@@ -145,9 +147,9 @@ Ask for what you want in plain words: "stop", "fire Scout", "have three agents c
 | `zoom`, `date`, `search` | everyone | Open a line of the view; a message's date; find the messages whose words match (full text, newest first) |
 | `list_skills`, `load_skill` | everyone | The user's skills (how-tos for kinds of task), those that fit the task first (with a TypeSafe key), and one's steps |
 | `abilities` | everyone | What the caller is and has: who it is, its tools, luau's globals and the plugin giving each, broken plugins, skills, and where Acorn's dir and source are |
-| `luau` | everyone | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch`, `view`, `ocr`, `decide`, `relevant` and `json`, on the engines' machine in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s). `view` shows the model an image; `ocr` reads a PDF, Word or PowerPoint document or an image through DeepSeek's OCR API (a PDF for its layout, the rest for text) |
+| `luau` | everyone | Runs Luau code in the caller's own VM (globals kept between calls), with `read`, `write`, `edit`, `sh`, `web_search`, `web_fetch`, `view`, `ocr`, `decide`, `relevant` and `json`, on the engines' machine in the caller's own dir under the work dir (write and edit need a read first; 120 s of Luau time a call, sh up to 600 s). `view` shows the model an image; `ocr` reads a PDF, Word or PowerPoint document or an image through Gemini document and image input |
 | `delegate`, `tell`, `fire` | assistants | Give agents one task each, in parallel, in the background; message one at work (it cuts in); fire one or all |
-| `create_assistant`, `archive_assistant`, `restore_assistant` | with you | Make an assistant (name, about, effort, instructions, welcome); take one off the sidebar, its files kept; bring it back |
+| `create_assistant`, `archive_assistant`, `restore_assistant` | with you | Make an assistant (name, about, instructions, welcome, optional model and effort); take one off the sidebar, its files kept; bring it back |
 | `list_assistants`, `ask_assistant` | with you | List the other assistants (or those a query matches) and ask one, in your two's thread; its reply comes back as a message |
 | `extend` | with you | Install, replace or remove a skill or a plugin; a plugin is load-checked with all the others first and refused if it fails (one only missing its key is installed); what it replaces goes to the attic |
 | `remember`, `forget`, `purge`, `unpurge` | with you | Keep and drop facts; erase a message, or take that back within ten minutes |
@@ -211,15 +213,16 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 
 | Key | Default | Meaning |
 |---|---|---|
-| `deepseek_api_key` | none | The API key; the `DEEPSEEK_API_KEY` variable wins. No program the agent runs inherits it, nor the TypeSafe or Telegram variables |
+| `gemini_api_key` | none | Gemini API key for chat and document reading. `GEMINI_API_KEY` wins. |
+| `exa_api_key` | none | Exa API key for web search and page reads. `EXA_API_KEY` takes precedence over `ACORN_EXA_API_KEY` and the file. |
 | `typesafe_api_key` | none | TypeSafe's key, for `decide`, `relevant` and sorting skills by task; the `TYPESAFE_API_KEY` variable wins |
 | `telegram_bot_token` | none | A Telegram bot's token: Telegram App runs with it; the `TELEGRAM_BOT_TOKEN` variable wins |
 | `chat` | `default` | Acorn's own chat id (letters, digits, `_`, `-`) |
 | `chats` | `$ACORN_DIR/chats` | Where the chats live, a dir each by id |
 | `work` | `$ACORN_DIR/work` | Where the agents' tools work |
-| `pick` | `high` | Acorn's effort: `none`, `low`, `high`, `max`, or `deepseek-flash:<effort>` (Max's is max; a created one's is set when created) |
+| `pick` | `high` | Acorn's effort. `none` and `low` select Gemini's lowest thinking level, `high` selects high, and `max` selects extra-high on Neon and Hydrogen. Max uses Carbon with high thinking. |
 | `compactor` | `low` | The effort of every summary call |
-| `agents` | their assistant's | The effort of agents |
+| `agents` | `high` | Default reasoning effort of delegated agents |
 | `view` | `2000000` | Bytes past which a view merges to half; from 32 KB to 2 MB |
 | `budget` | none | USD a day (here) that every chat's calls may spend together; once reached, no request goes till midnight: a turn says why, summaries wait. `0`: none |
 | `rules` | none | A file appended to every system prompt: who you are, how you want work done |
@@ -248,9 +251,9 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 
 ## Privacy
 
-- The chat and its summaries are sent to DeepSeek on every call, as is any fact an assistant sees.
+- The chat and its summaries are sent to Gemini on every call, as is any fact an assistant sees.
 - With Telegram, all Telegram App says, and what you write to it, goes through Telegram; and the groups the bot is in are kept here for 24 hours, readable by Telegram App.
-- A search or fetch goes to DeepSeek, or to the service of a plugin that replaces it, as does whatever else a plugin sends.
+- Web search and page reads go to Exa. Files passed to `ocr` go to Gemini. Plugins can send data to their own providers.
 - `purge` erases a message at once from everything a call or the app can see. It is held in `chat.db` for ten minutes, so `unpurge` can take it back; its text and old bytes stay in the file until a wipe deletes it and rewrites the file, which runs once the chat is idle (no turn, agent or summary at work) and no purge is still in its ten minutes, and is retried at the next launch if it fails or Acorn quits first. A purge by a secret's text can't be taken back: every message holding it, including one already purged by id, is let go of at once and erased by the next wipe.
 - A purge by text also lets go of every summary holding that text (one written with the message in its context may have copied it), forgets the facts holding it, and has the calls then running (the turn that purges, an agent's) send it as `[purged]` from their next request on: their prompts were built before the purge. A purge by id does none of these (a call then running keeps the message in its prompt until it ends), nor does either find a secret a summary reworded.
 - New imports preserve each message's page boundaries for purge and undo. Older imports recorded only the boundary of the entire batch. Each page of those imports can be purged and restored individually by its existing id.
@@ -259,7 +262,7 @@ Settings come from `$ACORN_DIR/config.json` (default `~/.acorn/config.json`). An
 ## Limitations
 
 - No Windows build and no CLI. The web window needs `acorn-server` on a macOS or Linux machine; it can't run the engines in the browser.
-- One model: DeepSeek Flash, at four efforts.
+- Acorn, custom assistants and delegated subagents use Gemini 4 Neon with high thinking by default. Ask for Hydrogen when creating a custom assistant or delegating a subagent to select it. Max uses Gemini 4 Carbon with high thinking. Compaction and document reading use Hydrogen.
 - Chats kept by UniiChat (JSONL day files) are not read; Acorn starts them anew.
 - The view loses detail with age by design: an old line covers many messages, and what its summary left out is found only by zooming.
 - Facts beyond 16 KB are left out of the system prompt, oldest first.
@@ -274,7 +277,7 @@ cargo test
 cargo clippy --all-targets
 ```
 
-The workspace has four crates: `core` (`acorn-core`: the memory tree, compactor, DeepSeek loop, tools, import, facts, timers, and the `bridge` a chat app plugs into), `app` (`acorn`: the window, on nsh, and the macOS and Linux binary), `server` (`acorn-server`: the engines and API for the web window), and `bridges/telegram` (`acorn-telegram`: Telegram App); the web window itself is the Bun package in `web/`. One test in `app/tests/live.rs` calls the real API and is ignored by default.
+The workspace has four crates: `core` (`acorn-core`: the memory tree, compactor, Gemini Interactions loop, tools, import, facts, timers, and the `bridge` a chat app plugs into), `app` (`acorn`: the window, on nsh, and the macOS and Linux binary), `server` (`acorn-server`: the engines and API for the web window), and `bridges/telegram` (`acorn-telegram`: Telegram App); the web window itself is the Bun package in `web/`. The scenarios under `app/tests/live/` use the real APIs and are skipped by default.
 
 ## License
 

@@ -1,6 +1,6 @@
 //! Agent
 //! =====
-//! DeepSeek in Acorn's own loop. Each step sends every item and streams
+//! Gemini in Acorn's own loop. Each step sends every item and streams
 //! one output; tool calls run in order, and the call ends at a step with
 //! no tools and nothing sent. A message that cuts in (`Say::cut`: the
 //! user's, or whoever the call works for) stops the step in flight, as a
@@ -30,7 +30,7 @@
 //! cut short (a stop's, a message's, a stream's end) tells no usage, so
 //! what it sent and read is counted (`used`).
 
-use super::deepseek::{Got, Halt, IDLE, Item, MAX_OUTPUT_TOKENS, MODEL, Step, URL};
+use super::gemini::{self, Got, Halt, IDLE, Item, MAX_OUTPUT_TOKENS, Step, URL};
 use super::{Ask, End, Event, On, Out, Spec, Stop, Used, cache, nap, pace};
 use crate::wire::{Live, live_push};
 use crate::{Kind, Say, clip, config, price};
@@ -49,7 +49,7 @@ const BUSY: &str = "the AI service is busy or unavailable right now";
 
 /// The least room for its output a request is sent with: with less left
 /// of the model's context, the call sheds.
-const LEAST: u64 = 32_000;
+const LEAST: u64 = 32_768;
 
 /// What a tool result dropped to fit the model's context reads.
 const SHED: &str = "[dropped: this call outgrew the model's context; run it again if still needed]";
@@ -62,6 +62,7 @@ const UNRUN: &str = "not run: a message came in first";
 pub static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
   reqwest::Client::builder()
     .user_agent("Acorn/0.1")
+    .redirect(reqwest::redirect::Policy::none())
     .build()
     .expect("an HTTP client")
 });
@@ -107,15 +108,12 @@ async fn turns(
   let mut room = MAX_OUTPUT_TOKENS;
   while !cancel.is_cancelled() {
     let cut = cancel.child_token();
-    let mut body = super::deepseek::body(ask, &items, &tools, room);
+    let mut body = gemini::body(ask, &items, &tools, room);
     // one purged as the call ran: its prompt, built before, holds it
     let secrets = ask.tools.as_ref().map(|t| t.purged()).unwrap_or_default();
-    super::deepseek::veil(&mut body, &secrets);
+    gemini::veil(&mut body, &secrets);
     let step = heard.till_cut(step(ask, on, key, body, &cut), &cut).await;
-    if step.halt == Halt::Fail
-      && let Some(left) = super::deepseek::left(&step.why)
-      && fit(left, &mut room, &mut items, on)
-    {
+    if step.halt == Halt::Fail && context_limit(&step.why) && fit(&mut room, &mut items, on) {
       continue;
     }
     for e in &step.entries {
@@ -146,12 +144,12 @@ async fn turns(
     } else {
       items.push(Item::Turn(step.out));
       for u in step.uses {
-        let out = used_tool(ask, &tools, u.name, u.input, heard, &cut).await;
+        let out = used_tool(ask, &tools, u.name.clone(), u.input, heard, &cut).await;
         if cancel.is_cancelled() {
           return Ok(());
         }
         tell(on, Kind::Echo, &out.text, Some(u.id.clone()));
-        backs.push((u.id, out));
+        backs.push((u.id, u.name, out));
       }
     }
     let says = heard.all();
@@ -190,7 +188,7 @@ fn parts<'a>(texts: impl Iterator<Item = &'a String>) -> Vec<String> {
 }
 
 /// What a step's output said: its replies.
-fn said(entries: &[super::deepseek::Entry]) -> Vec<&str> {
+fn said(entries: &[gemini::Entry]) -> Vec<&str> {
   entries
     .iter()
     .filter(|e| e.kind == Kind::Acorn)
@@ -198,12 +196,23 @@ fn said(entries: &[super::deepseek::Entry]) -> Vec<&str> {
     .collect()
 }
 
-/// A request past the model's context, with `left` of it for its output,
-/// made to fit: each pass sends less, less room or fewer results. Whether
-/// it goes again.
-fn fit(left: u64, room: &mut u64, items: &mut [Item], on: &On) -> bool {
-  if left >= LEAST && left < *room {
-    *room = left;
+fn context_limit(why: &str) -> bool {
+  let why = why.to_ascii_lowercase();
+  [
+    "input token",
+    "context length",
+    "context window",
+    "input context",
+    "http 413",
+  ]
+  .iter()
+  .any(|part| why.contains(part))
+}
+
+/// Each retry leaves less room for output or drops older tool results.
+fn fit(room: &mut u64, items: &mut [Item], on: &On) -> bool {
+  if *room > LEAST {
+    *room = (*room / 2).max(LEAST);
     return true;
   }
   if shed(items) {
@@ -261,7 +270,7 @@ fn shed(items: &mut [Item]) -> bool {
   let mut outs: Vec<&mut Out> = items
     .iter_mut()
     .filter_map(|item| match item {
-      Item::Back(backs) => Some(backs.iter_mut().map(|(_, out)| out)),
+      Item::Back(backs) => Some(backs.iter_mut().map(|(_, _, out)| out)),
       _ => None,
     })
     .flatten()
@@ -323,10 +332,11 @@ impl Heard<'_> {
 /// holds its room (`pace`): its model's, or its import's, which one request
 /// holds at a time while the rest wait on it.
 async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationToken) -> Step {
+  let model = ask.model.name();
   let own = ask
     .yields
     .as_ref()
-    .map_or_else(|| MODEL.to_string(), |import| format!("{MODEL} {import}"));
+    .map_or_else(|| model.to_string(), |import| format!("{model} {import}"));
   let mut asking = None;
   let mut k = 1;
   loop {
@@ -338,8 +348,8 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
     }
     let waits: Vec<&str> = match (&ask.yields, asking.is_some()) {
       (None, _) => vec![],
-      (Some(_), true) => vec![MODEL],
-      (Some(_), false) => vec![MODEL, &own],
+      (Some(_), true) => vec![model],
+      (Some(_), false) => vec![model, &own],
     };
     pace::yielded(&waits, cancel).await;
     let Some(Sent { after, step }) = request(ask, on, key, &body, cancel).await else {
@@ -347,7 +357,7 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
     };
     if step.halt != Halt::Busy || k >= TRIES {
       break if step.halt == Halt::Busy {
-        eprintln!("{MODEL}: {}", clip::head(&step.why, 300));
+        eprintln!("{model}: {}", clip::head(&step.why, 300));
         Step {
           halt: Halt::Down,
           why: BUSY.into(),
@@ -358,11 +368,11 @@ async fn step(ask: &Ask, on: &On, key: &str, body: Value, cancel: &CancellationT
       };
     }
     k += 1;
-    if asking.is_none() && own != MODEL && pace::held(&own) {
+    if asking.is_none() && own != model && pace::held(&own) {
       continue;
     }
     if asking.is_none() {
-      asking = Some(pace::hold(MODEL, &own, &step.why));
+      asking = Some(pace::hold(model, &own, &step.why));
     }
     let wait = after
       .filter(|&s| s.is_finite() && s > 0.0)
@@ -401,7 +411,7 @@ async fn request(ask: &Ask, on: &On, key: &str, body: &Value, cancel: &Cancellat
       flight = cache::wait(ask) => flight,
       () = cancel.cancelled() => return None,
   };
-  let seat = pace::fly(MODEL, ask.yields.is_some(), cancel).await?;
+  let seat = pace::fly(ask.model.name(), ask.yields.is_some(), cancel).await?;
   let (status, sent) = send(ask, on, key, body, &mut flight, cancel).await;
   seat.land(status == 429 || status == 529);
   Some(sent)
@@ -418,15 +428,16 @@ async fn send(
   cancel: &CancellationToken,
 ) -> (u16, Sent) {
   let json = body.to_string();
+  let bytes = json.len();
   let seen = Mutex::new(Vec::new());
   let mut got = Got::default();
   let mut read = Read::default();
   let mut status = 0;
   let post = HTTP
     .post(url())
-    .bearer_auth(key)
+    .header("x-goog-api-key", key)
     .header("content-type", "application/json")
-    .body(json.clone())
+    .body(json)
     .send();
   let res = tokio::select! {
       res = tokio::time::timeout(IDLE, post) => Some(res),
@@ -443,18 +454,18 @@ async fn send(
         let step = stream(res, on, flight, &seen, cancel, &mut got, &mut read).await;
         (after, step, true)
       } else {
-        (after, refused(res, cancel).await, false)
+        (after, refused(res, ask.model.name(), key, cancel).await, false)
       }
     }
   };
   flight.end();
   if ok && let Some(meter) = &ask.meter {
-    let usage = used(got.usage, &read, json.len(), flight.cached);
+    let usage = used(read.usage, read.bytes, body, bytes, flight.cached);
     let now = chrono::Utc::now();
     meter(Used {
       effort: ask.effort,
       usage,
-      micros: price::cost(usage, now),
+      micros: price::cost(ask.model, usage, now),
       at: now.timestamp_millis(),
     });
   }
@@ -473,27 +484,34 @@ fn header(res: &reqwest::Response, name: &str) -> Option<String> {
 /// A response that refused the request, as the step it ends: busy where
 /// the service says to ask again (else by its status), failed where the
 /// request is at fault, else down.
-async fn refused(res: reqwest::Response, cancel: &CancellationToken) -> Step {
+async fn refused(res: reqwest::Response, model: &str, key: &str, cancel: &CancellationToken) -> Step {
   let status = res.status().as_u16();
   let id = header(&res, "x-request-id")
-    .or_else(|| header(&res, "x-deepseek-request-id"))
+    .or_else(|| header(&res, "x-goog-request-id"))
     .map_or(String::new(), |id| format!(" [{id}]"));
-  let should = header(&res, "x-should-retry");
-  let busy = [408, 409, 429].contains(&status) || status >= 500;
-  let passing = should.as_deref() == Some("true") || (should.as_deref() != Some("false") && busy);
-  let halt = match status {
-    _ if passing => Halt::Busy,
-    400 | 413 | 422 => Halt::Fail,
-    _ => Halt::Down,
-  };
   // its why may stall as a stream does: a stop cuts it too
   let told = tokio::select! {
       told = tokio::time::timeout(IDLE, res.text()) => told,
       () = cancel.cancelled() => return fail("stopped", &[], Halt::Lost),
   };
-  let why = reason(&told.ok().and_then(Result::ok).unwrap_or_default());
+  let body = told.ok().and_then(Result::ok).unwrap_or_default();
+  let error = serde_json::from_str::<Value>(&body).unwrap_or_default();
+  let key_error = error["error"]["details"]
+    .as_array()
+    .into_iter()
+    .flatten()
+    .any(|d| d["reason"].as_str().is_some_and(|r| r.starts_with("API_KEY_")));
+  let halt = match status {
+    408 | 409 | 429 | 500..=599 => Halt::Busy,
+    400 | 413 | 422 if !key_error => Halt::Fail,
+    _ => Halt::Down,
+  };
+  let why = error["error"]["message"]
+    .as_str()
+    .unwrap_or_else(|| clip::head(&body, 2000))
+    .replace(key, super::PURGED);
   if halt != Halt::Busy {
-    eprintln!("{MODEL}: HTTP {status}{id}: {}", clip::head(&why, 300));
+    eprintln!("{model}: HTTP {status}{id}: {}", clip::head(&why, 300));
   }
   let why = match halt {
     Halt::Busy => format!("HTTP {status}{id}: {why}"),
@@ -516,10 +534,10 @@ fn silent(seen: &[Live]) -> Step {
 #[derive(Default)]
 struct Read {
   bytes: u64,
-  done: bool,
+  usage: Option<price::Usage>,
 }
 
-/// Where requests go: DeepSeek's API (a test's: its own).
+/// Where requests go: Gemini's API (a test's: its own).
 fn url() -> String {
   #[cfg(test)]
   if let Ok(api) = tests::API.try_with(String::clone) {
@@ -579,8 +597,8 @@ async fn stream(
         });
       };
       if got.read(&ev, &mut tell) {
-        read.done = true;
-        let step = got.step();
+        read.usage = got.usage;
+        let step = std::mem::take(got).step();
         return match step.halt {
           Halt::Fail | Halt::Busy => fail(&step.why, &seen.lock(), step.halt),
           _ => step,
@@ -591,35 +609,42 @@ async fn stream(
 }
 
 /// A request's usage: the API's, told as its stream ends; else (cut
-/// short, none told) an estimate, a token each BYTES of what it sent (the
-/// `cached` first of them read from the cache, the rest written) and of
-/// the output it read.
-fn used(usage: price::Usage, read: &Read, sent: usize, cached: usize) -> price::Usage {
-  if read.done {
-    return usage;
-  }
-  let tokens = |bytes: usize| (bytes as u64).div_ceil(BYTES);
-  let cached = cached.min(sent);
-  price::Usage {
-    input: 0,
-    write: tokens(sent - cached),
-    read: tokens(cached),
-    output: tokens(read.bytes as usize),
-  }
+/// short, none told) estimate text and image tokens separately.
+fn used(usage: Option<price::Usage>, read: u64, body: &Value, sent: usize, cached: usize) -> price::Usage {
+  usage.unwrap_or_else(|| {
+    // Gemini 4 default image resolution allocates up to 1,120 tokens per image.
+    const IMAGE_TOKENS: u64 = 1120;
+    let mut image_bytes = 0;
+    let mut images = 0;
+    for step in body["input"].as_array().into_iter().flatten() {
+      let parts = match step["type"].as_str() {
+        Some("user_input") => &step["content"],
+        Some("function_result") => &step["result"],
+        _ => continue,
+      };
+      for part in parts.as_array().into_iter().flatten() {
+        if part["type"] == "image"
+          && let Some(data) = part["data"].as_str()
+        {
+          image_bytes += data.len();
+          images += 1;
+        }
+      }
+    }
+    let tokens = |bytes: usize| (bytes as u64).div_ceil(BYTES);
+    let sent = sent.saturating_sub(image_bytes);
+    let cached = cached.min(sent);
+    price::Usage {
+      input: tokens(sent - cached) + images * IMAGE_TOKENS,
+      write: 0,
+      read: tokens(cached),
+      output: read.div_ceil(BYTES),
+    }
+  })
 }
 
-/// The bytes of text a token is counted for where the API tells no usage:
-/// by DeepSeek's own rule of thumb, a token is three English characters or
-/// more (other scripts take more bytes a token).
+/// The approximate bytes per token when a stopped stream reports no usage.
 const BYTES: u64 = 3;
-
-/// A failed request's why: the API's message, else the start of its body.
-fn reason(body: &str) -> String {
-  serde_json::from_str::<Value>(body)
-    .ok()
-    .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
-    .unwrap_or_else(|| clip::head(body, 2000).to_string())
-}
 
 /// A retry-after: seconds, or an HTTP date.
 fn retry_after(v: &str) -> Option<f64> {
@@ -641,7 +666,7 @@ fn fail(why: &str, seen: &[Live], halt: Halt) -> Step {
   let entries = seen
     .iter()
     .filter(|l| !l.text.trim().is_empty() && !(halt == Halt::Lost && l.kind == Kind::Tool))
-    .map(|l| super::deepseek::Entry {
+    .map(|l| gemini::Entry {
       kind: l.kind,
       text: format!("{}{mark}", l.text.trim()),
       of: None,
@@ -687,7 +712,7 @@ mod tests {
     pub(super) static API: String;
   }
 
-  const OVER: &str = "This model's maximum context length is 1048576 tokens. However, you requested 1100000 tokens (716000 in the messages, 384000 in the completion). Please reduce the length of the messages or completion.";
+  const OVER: &str = "The input context exceeds the model's context window.";
 
   /// A local API, by its URL: each request's JSON goes to `answer`, whose
   /// status and body it answers with, a 200's as an event stream left
@@ -745,8 +770,21 @@ mod tests {
     events.iter().map(|ev| format!("data: {ev}\n\n")).collect()
   }
 
+  fn answer(text: &str) -> String {
+    use serde_json::json;
+    events(&[
+      json!({"event_type": "step.start", "index": 0, "step": {"type": "model_output"}}),
+      json!({"event_type": "step.delta", "index": 0, "delta": {"type": "text", "text": text}}),
+      json!({"event_type": "step.stop", "index": 0}),
+      json!({"event_type": "interaction.completed", "interaction": {"status": "completed",
+        "usage": {"total_input_tokens": 9, "total_cached_tokens": 5, "total_tool_use_tokens": 2,
+          "total_output_tokens": 2, "total_thought_tokens": 7}}}),
+    ])
+  }
+
   fn ask(meter: Option<crate::ai::Meter>) -> Ask {
     Ask {
+      model: crate::model::Model::Neon,
       effort: crate::effort::Effort::None,
       system: "test".into(),
       blocks: vec![crate::Block::new("hello", false)],
@@ -761,9 +799,11 @@ mod tests {
 
   /// One request of `ask` sent to the API at `url`.
   async fn sent(ask: &Ask, on: &On, url: String, cancel: &CancellationToken) -> (u16, Step) {
-    let body = super::super::deepseek::body(ask, &[], &[], MAX_OUTPUT_TOKENS);
+    let body = gemini::body(ask, &[], &[], MAX_OUTPUT_TOKENS);
     let mut flight = cache::wait(ask).await;
-    let (status, sent) = API.scope(url, send(ask, on, "key", &body, &mut flight, cancel)).await;
+    let (status, sent) = API
+      .scope(url, send(ask, on, "acorn-test-key", &body, &mut flight, cancel))
+      .await;
     (status, sent.step)
   }
 
@@ -773,8 +813,8 @@ mod tests {
   async fn a_request_cut_is_metered() {
     let url = api(|_| {
       let stream = events(&[
-        serde_json::json!({"type": "response.output_item.added", "item": {"type": "message"}}),
-        serde_json::json!({"type": "response.output_text.delta", "delta": "Moving the files"}),
+        serde_json::json!({"event_type": "step.start", "index": 0, "step": {"type": "model_output"}}),
+        serde_json::json!({"event_type": "step.delta", "index": 0, "delta": {"type": "text", "text": "Moving the files"}}),
       ]);
       (200, stream)
     })
@@ -800,10 +840,10 @@ mod tests {
     assert_eq!(step.entries[0].text, "Moving the files\n[cut off]");
     let uses = uses.lock();
     assert_eq!(uses.len(), 1, "a request cut short is metered once");
-    let json = super::super::deepseek::body(&ask, &[], &[], MAX_OUTPUT_TOKENS).to_string();
+    let json = gemini::body(&ask, &[], &[], MAX_OUTPUT_TOKENS).to_string();
     let usage = price::Usage {
-      input: 0,
-      write: (json.len() as u64).div_ceil(BYTES),
+      input: (json.len() as u64).div_ceil(BYTES),
+      write: 0,
       read: 0,
       output: 6, // "Moving the files": 16 bytes
     };
@@ -842,20 +882,38 @@ mod tests {
   /// Cut short, a request's prompt counts as read where a call cached it.
   #[test]
   fn a_cut_request_reads_what_was_cached() {
-    let read = Read {
-      bytes: 300,
-      done: false,
-    };
-    let usage = used(price::Usage::default(), &read, 9000, 6000);
+    let usage = used(None, 300, &Value::Null, 9000, 6000);
     let told = price::Usage {
-      input: 0,
-      write: 1000,
+      input: 1000,
+      write: 0,
       read: 2000,
       output: 100,
     };
     assert_eq!(usage, told);
-    let done = Read { bytes: 300, done: true };
-    assert_eq!(used(told, &done, 9, 6), told, "the API's own usage wins");
+    assert_eq!(
+      used(Some(told), 300, &Value::Null, 9, 6),
+      told,
+      "the API's own usage wins"
+    );
+  }
+
+  #[test]
+  fn a_cut_request_meters_images_by_resolution() {
+    let body = |bytes| {
+      serde_json::json!({
+        "input": [
+          {"type": "user_input", "content": [{"type": "image", "data": "A".repeat(bytes)}]},
+          {"type": "function_result", "result": [{"type": "image", "data": "B".repeat(bytes)}]},
+        ]
+      })
+    };
+    let estimate = |bytes| {
+      let body = body(bytes);
+      used(None, 0, &body, body.to_string().len(), 0)
+    };
+    let small = estimate(4);
+    assert!((2240..2300).contains(&small.input));
+    assert_eq!(estimate(500_000), small);
   }
 
   /// A refusal tells its why, and whose doing it is: the account's
@@ -871,9 +929,9 @@ mod tests {
     for (status, why, halt, told) in [
       (
         401,
-        "Authentication Fails, Your api key is invalid",
+        "The API key acorn-test-key is invalid",
         Halt::Down,
-        "the AI service refused the request (HTTP 401): Authentication Fails, Your api key is invalid",
+        "the AI service refused the request (HTTP 401): The API key [purged] is invalid",
       ),
       (
         402,
@@ -896,8 +954,8 @@ mod tests {
     let url = api(|_| (400, refusal(OVER))).await;
     let (_, step) = sent(&ask, &on, url, &cancel).await;
     assert_eq!(step.halt, Halt::Fail);
-    assert_eq!(super::super::deepseek::left(&step.why), Some(1_048_576 - 716_000));
-    assert_eq!(super::super::deepseek::left("Content Exists Risk"), None);
+    assert!(context_limit(&step.why));
+    assert!(!context_limit("Content Exists Risk"));
   }
 
   /// A call past the model's context is sent again with the room its
@@ -928,17 +986,12 @@ mod tests {
     let url = {
       let rooms = rooms.clone();
       api(move |req| {
-        let room = req["max_output_tokens"].as_u64().unwrap();
+        let room = req["generation_config"]["max_output_tokens"].as_u64().unwrap();
         rooms.lock().push(room);
         if room == MAX_OUTPUT_TOKENS {
           return (400, refusal(OVER));
         }
-        let done = serde_json::json!({"type": "response.completed", "response": {
-          "status": "completed",
-          "output": [{"type": "message", "content": [{"type": "output_text", "text": "made it"}]}],
-          "usage": {"input_tokens": 716_000, "output_tokens": 2},
-        }});
-        (200, events(&[done]))
+        (200, answer("made it"))
       })
       .await
     };
@@ -949,18 +1002,13 @@ mod tests {
     let end = API.scope(url, run(&ask, &on, &mut rx, &cancel)).await;
     assert!(end.ok, "{}", end.text);
     assert_eq!(end.text, "made it");
-    assert_eq!(*rooms.lock(), [MAX_OUTPUT_TOKENS, 1_048_576 - 716_000]);
+    assert_eq!(*rooms.lock(), [MAX_OUTPUT_TOKENS, LEAST]);
 
-    let tight = OVER.replace("716000 in the messages", "1040000 in the messages");
-    let url = api(move |_| (400, refusal(&tight))).await;
+    let url = api(move |_| (400, refusal(OVER))).await;
     let (_tx, mut rx) = mpsc::unbounded_channel();
     let end = API.scope(url, run(&ask, &on, &mut rx, &cancel)).await;
     assert_eq!((end.ok, end.stop), (false, Some(Stop::Fail)));
-    assert!(
-      end.text.contains("maximum context length is 1048576 tokens"),
-      "{}",
-      end.text
-    );
+    assert!(end.text.contains(OVER), "{}", end.text);
   }
 
   /// A tool that purges `SECRET` when called: from then on the call's
@@ -1023,17 +1071,24 @@ mod tests {
       api(move |req| {
         let mut reqs = reqs.lock();
         reqs.push(req);
-        let output = match reqs.len() {
-          1 => serde_json::json!([{
-            "type": "function_call", "call_id": "c1", "name": "purge",
-            "arguments": serde_json::json!({"text": SECRET}).to_string(),
-          }]),
-          _ => serde_json::json!([{"type": "message", "content": [{"type": "output_text", "text": "gone"}]}]),
-        };
-        let done = serde_json::json!({"type": "response.completed", "response": {
-          "status": "completed", "output": output, "usage": {"input_tokens": 9, "output_tokens": 2},
-        }});
-        (200, events(&[done]))
+        if reqs.len() != 1 {
+          return (200, answer("gone"));
+        }
+        use serde_json::json;
+        let args = json!({"text": SECRET}).to_string();
+        (200, events(&[
+          json!({"event_type": "step.start", "index": 0, "step": {"type": "thought"}}),
+          json!({"event_type": "step.delta", "index": 0, "delta": {"type": "thought_summary", "content": {
+            "type": "text", "text": "I should purge the named key."}}}),
+          json!({"event_type": "step.delta", "index": 0, "delta": {"type": "thought_signature", "signature": "opaque"}}),
+          json!({"event_type": "step.stop", "index": 0}),
+          json!({"event_type": "step.start", "index": 1, "step": {
+            "type": "function_call", "id": "c1", "name": "purge", "arguments": {}}}),
+          json!({"event_type": "step.delta", "index": 1, "delta": {"type": "arguments_delta", "arguments": &args[..8]}}),
+          json!({"event_type": "step.delta", "index": 1, "delta": {"type": "arguments_delta", "arguments": &args[8..]}}),
+          json!({"event_type": "step.stop", "index": 1}),
+          json!({"event_type": "interaction.completed", "interaction": {"status": "requires_action"}}),
+        ]))
       })
       .await
     };
@@ -1060,12 +1115,15 @@ mod tests {
       "it was in the prompt before the purge"
     );
     assert!(!reqs[1].to_string().contains(tail), "{}", reqs[1]);
-    assert_eq!(reqs[1]["instructions"], "Facts: the key is [purged]");
+    assert_eq!(reqs[1]["system_instruction"], "Facts: the key is [purged]");
     let input = reqs[1]["input"].as_array().unwrap();
     assert_eq!(input[0]["content"][0]["text"], "my key is [purged], keep it");
     assert_eq!(input[0]["content"][1]["text"], "no, purge it");
-    assert_eq!(input[1]["arguments"], r#"{"text":"[purged]"}"#);
-    assert_eq!(input[2]["output"][0]["text"], "Purged [purged]");
+    assert_eq!(input[1]["signature"], "opaque");
+    assert_eq!(input[2]["arguments"]["text"], "[purged]");
+    assert_eq!(input[3]["call_id"], "c1");
+    assert_eq!(input[3]["name"], "purge");
+    assert_eq!(input[3]["result"][0]["text"], "Purged [purged]");
   }
 
   /// Secrets that overlap are veiled as one: none of the longer shows
@@ -1094,48 +1152,33 @@ mod tests {
     assert_eq!(veiled("nothing held", &[short, long]), "nothing held");
   }
 
-  /// A request veiled keeps its shape, whatever was purged: only its
-  /// texts are rewritten, a tool call's arguments as the JSON they are.
   #[test]
   fn a_request_veiled_keeps_its_shape() {
-    let args = serde_json::json!({"text": "function_call", "name": "c1-input_text"}).to_string();
     let mut body = serde_json::json!({
-      "model": "function_call",
-      "instructions": "Facts: function_call",
-      "tools": [{"type": "function", "name": "purge", "description": "a function_call"}],
+      "system_instruction": "Facts: function_call",
       "input": [
-        {"role": "user", "content": [
-          {"type": "input_text", "text": "purge function_call and input_text"},
-          {"type": "input_image", "image_url": "data:image/png;base64,function_call"},
+        {"type": "user_input", "content": [
+          {"type": "text", "text": "purge function_call"},
+          {"type": "image", "mime_type": "image/png", "data": "function_call"},
         ]},
-        {"type": "reasoning", "id": "rs_function_call", "encrypted_content": "function_call",
-         "summary": [{"type": "summary_text", "text": "they said function_call"}]},
-        {"type": "function_call", "status": "completed", "call_id": "c1-input_text", "name": "purge", "arguments": args},
-        {"type": "function_call_output", "call_id": "c1-input_text",
-         "output": [{"type": "input_text", "text": "Purged function_call"}]},
-        {"role": "assistant", "content": "function_call is gone"},
+        {"type": "thought", "signature": "function_call"},
+        {"type": "function_call", "id": "c1-function_call", "name": "purge",
+         "arguments": {"name": "function_call", "data": "function_call"}},
       ],
     });
-    let secrets = ["function_call", "input_text", "function", "assistant"].map(String::from);
-    super::super::deepseek::veil(&mut body, &secrets);
+    gemini::veil(&mut body, &["function_call".into()]);
     assert_eq!(
       body,
       serde_json::json!({
-        "model": "function_call",
-        "instructions": "Facts: [purged]",
-        "tools": [{"type": "function", "name": "purge", "description": "a function_call"}],
+        "system_instruction": "Facts: [purged]",
         "input": [
-          {"role": "user", "content": [
-            {"type": "input_text", "text": "purge [purged] and [purged]"},
-            {"type": "input_image", "image_url": "data:image/png;base64,function_call"},
+          {"type": "user_input", "content": [
+            {"type": "text", "text": "purge [purged]"},
+            {"type": "image", "mime_type": "image/png", "data": "function_call"},
           ]},
-          {"type": "reasoning", "id": "rs_function_call", "encrypted_content": "function_call",
-           "summary": [{"type": "summary_text", "text": "they said [purged]"}]},
-          {"type": "function_call", "status": "completed", "call_id": "c1-input_text", "name": "purge",
-           "arguments": r#"{"text":"[purged]","name":"c1-[purged]"}"#},
-          {"type": "function_call_output", "call_id": "c1-input_text",
-           "output": [{"type": "input_text", "text": "Purged [purged]"}]},
-          {"role": "assistant", "content": "[purged] is gone"},
+          {"type": "thought", "signature": "function_call"},
+          {"type": "function_call", "id": "c1-function_call", "name": "purge",
+           "arguments": {"name": "[purged]", "data": "[purged]"}},
         ],
       })
     );
@@ -1145,7 +1188,7 @@ mod tests {
   /// then the rest; nothing left to drop, it tells so.
   #[test]
   fn a_call_sheds_its_older_results() {
-    let back = |id: &str, size: usize| (id.to_string(), Out::ok("x".repeat(size)));
+    let back = |id: &str, size: usize| (id.to_string(), "test".into(), Out::ok("x".repeat(size)));
     let mut items = vec![
       Item::User {
         parts: vec!["task".into()],
@@ -1156,7 +1199,7 @@ mod tests {
     ];
     let texts = |items: &[Item]| -> Vec<bool> {
       let outs = items.iter().filter_map(|item| match item {
-        Item::Back(backs) => Some(backs.iter().map(|(_, out)| out.text == SHED)),
+        Item::Back(backs) => Some(backs.iter().map(|(_, _, out)| out.text == SHED)),
         _ => None,
       });
       outs.flatten().collect()
@@ -1204,6 +1247,7 @@ mod tests {
       .unwrap();
     let why = crate::chat::over_budget().expect("the fixture spent more than its daily cap");
     let ask = Ask {
+      model: crate::model::Model::Neon,
       effort: crate::effort::Effort::None,
       system: "test".into(),
       blocks: vec![],

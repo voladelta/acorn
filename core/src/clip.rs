@@ -47,12 +47,19 @@ pub fn pages(s: &str) -> Vec<String> {
 
 /// A text's page from character `at`, and past it where to go on.
 pub fn page(s: &str, at: usize) -> String {
+  page_with(s, at, "")
+}
+
+pub(crate) fn page_with(s: &str, at: usize, continuation: &str) -> String {
   let n = s.chars().count();
   let at = at.min(n);
   let end = page_end(s, at);
   let text = &s[byte_at(s, at)..byte_at(s, end)];
   if end < n {
-    format!("{text}\n[characters {}-{end} of {n}; go on with at {end}]", at + 1)
+    format!(
+      "{text}\n[characters {}-{end} of {n}; go on with at {end}{continuation}]",
+      at + 1
+    )
   } else {
     text.to_string()
   }

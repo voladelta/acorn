@@ -388,7 +388,10 @@ impl Model {
     }
     let cap = match wait {
       Wait::Summaries => SUMS.to_string(),
-      Wait::Model | Wait::None => format!("waiting for {}…", acorn_core::wire::MODEL),
+      Wait::Model | Wait::None => {
+        let model = self.state.as_ref().map(|s| s.model).unwrap_or_default();
+        format!("waiting for {}…", model.name())
+      }
     };
     std::iter::once(Row::Cap(cap)).chain(load).collect()
   }
@@ -542,6 +545,7 @@ mod tests {
     m.hear(Event::State(State {
       busy: true,
       wait: Wait::None,
+      model: acorn_core::model::Model::Neon,
       agents: vec!["FireAnt".into()],
       pins: vec!["the spec".into()],
       importing: None,

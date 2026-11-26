@@ -2,7 +2,7 @@
 //! ==============
 //! One chat that never ends per assistant (`chat`, `assistant`), kept forever in a memory tree
 //! (`memory`, built in the background by `compactor`), answered by an
-//! agent on DeepSeek (`ai`) with tools on this machine (`tools`, `machine`). The app (the `acorn` crate) only shows it: it sends
+//! agent on Gemini (`ai`) with tools on this machine (`tools`, `machine`). The app (the `acorn` crate) only shows it: it sends
 //! `Command`s and hears `Event`s (`wire`).
 //!
 //! A chat is kept in its chat.db (`memory`); what the user asked to keep
@@ -40,6 +40,7 @@ pub mod luau;
 pub mod machine;
 #[cfg(feature = "engine")]
 pub mod memory;
+pub mod model;
 pub mod names;
 #[cfg(feature = "engine")]
 pub mod ocr;
@@ -145,7 +146,7 @@ impl Served {
 }
 
 /// What requests used, summed: how many, tokens in (new, and read from
-/// DeepSeek's cache) and out, USD, when the last ended (ms).
+/// the provider's cache) and out, USD, when the last ended (ms).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Spend {
   pub n: u64,

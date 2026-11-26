@@ -8,6 +8,7 @@
 use super::{Chat, Engine};
 use crate::ai::{self, Handle, Out, Spec, Toolbox};
 use crate::effort::Effort;
+use crate::model::Model;
 use crate::tools::{self, MAIN, SUB_NOTE};
 use crate::wire::{Event, Live};
 use crate::{Block, Kind, Served, clip, config, memory};
@@ -27,12 +28,13 @@ fn thread_head(asks: &str) -> String {
   format!("## With {asks} (there, user is {asks}, who asked, and unii is you)")
 }
 
-/// An agent: its effort (none: the run's), what it does, what streams
+/// An agent: its model and effort, what it does, what streams
 /// (and its end kept back, `Chat::tail`), its tool calls awaiting their
 /// results, the view its calls get, its replies so far.
 pub struct Agent {
   pub name: String,
   effort: Option<Effort>,
+  model: Model,
   doing: Doing,
   pub(super) live: Vec<Live>,
   pub(super) tail: String,
@@ -65,10 +67,11 @@ enum Doing {
 }
 
 impl Agent {
-  fn new(name: &str, effort: Option<Effort>, view: View) -> Agent {
+  fn new(name: &str, effort: Option<Effort>, model: Model, view: View) -> Agent {
     Agent {
       name: name.into(),
       effort,
+      model,
       doing: Doing::Idle,
       live: vec![],
       tail: String::new(),
@@ -91,6 +94,17 @@ fn no_effort(given: &Value) -> Out {
     "No effort {given}; one of {}.",
     crate::effort::names().join(", ")
   ))
+}
+
+fn requested_model(given: &Value) -> Result<Model, Out> {
+  if given.is_null() {
+    return Ok(Model::Neon);
+  }
+  given
+    .as_str()
+    .and_then(Model::parse)
+    .filter(|model| matches!(model, Model::Neon | Model::Hydrogen))
+    .ok_or_else(|| Out::fail("Choose neon or hydrogen."))
 }
 
 /// An agent's report as logged: `[Name]` on its own line, its replies,
@@ -171,6 +185,11 @@ impl Toolbox for Kit {
           &cwd,
           &project,
         ));
+      }
+      if name == "luau" {
+        let kind = if who == MAIN { Served::Chat } else { Served::Agent };
+        let meter = engine.lock().meter(kind);
+        return crate::luau::run(&input, cwd, cancel, meter).await;
       }
       engine.tool(cwd, &name, input, cancel, halt).await
     }
@@ -286,7 +305,6 @@ impl Engine {
         ),
         Err(why) => Out::fail(why),
       },
-      "luau" => crate::luau::run(&input, cwd, cancel).await,
       _ => Out::fail(format!("No tool {name}.")),
     }
   }
@@ -319,6 +337,10 @@ impl Engine {
   }
 
   async fn delegate_tool(self: &Arc<Self>, input: &Value, halt: &CancellationToken) -> Out {
+    let model = match requested_model(&input["model"]) {
+      Ok(model) => model,
+      Err(why) => return why,
+    };
     let effort = match &input["effort"] {
       Value::Null => None,
       e => match e.as_str().and_then(Effort::parse) {
@@ -332,7 +354,7 @@ impl Engine {
       .flatten()
       .map(|t| t.as_str().map_or_else(|| t.to_string(), str::to_string))
       .collect();
-    Out::ok(self.delegate(tasks, effort, halt).await)
+    Out::ok(self.delegate(tasks, effort, model, halt).await)
   }
 
   /// The agent named, or every one at work (None), fired.
@@ -428,8 +450,16 @@ impl Engine {
   }
 
   fn create_assistant(&self, input: &Value) -> Out {
-    let Some(effort) = Effort::parse(&text(input, "effort")) else {
-      return no_effort(&input["effort"]);
+    let model = match requested_model(&input["model"]) {
+      Ok(model) => model,
+      Err(why) => return why,
+    };
+    let effort = match &input["effort"] {
+      Value::Null => Effort::High,
+      val => match val.as_str().and_then(Effort::parse) {
+        Some(effort) => effort,
+        None => return no_effort(val),
+      },
     };
     match crate::assistant::add(
       &text(input, "name"),
@@ -437,6 +467,7 @@ impl Engine {
       &text(input, "instructions"),
       &text(input, "welcome"),
       effort,
+      model,
     ) {
       Ok(made) => self.listed(
         format!("Created {}, {}; they are in the sidebar.", made.name, made.about),
@@ -469,7 +500,13 @@ impl Engine {
     Out::ok(said)
   }
 
-  async fn delegate(self: &Arc<Self>, tasks: Vec<String>, effort: Option<Effort>, halt: &CancellationToken) -> String {
+  async fn delegate(
+    self: &Arc<Self>,
+    tasks: Vec<String>,
+    effort: Option<Effort>,
+    model: Model,
+    halt: &CancellationToken,
+  ) -> String {
     if tasks.is_empty() {
       return "No tasks.".into();
     }
@@ -479,7 +516,7 @@ impl Engine {
     };
     let names: Vec<String> = tasks
       .iter()
-      .map(|task| self.lock().start(effort, task, view.clone()))
+      .map(|task| self.lock().start(effort, model, task, view.clone()))
       .collect();
     format!(
       "Delegated to {}. Each one's report will reach you as a message when it finishes.",
@@ -684,13 +721,13 @@ impl Chat {
   }
 
   /// An agent started on its task, its log opened with what it is.
-  fn start(&mut self, effort: Option<Effort>, task: &str, view: View) -> String {
-    let name = match self.mem.agent_new(effort) {
+  fn start(&mut self, effort: Option<Effort>, model: Model, task: &str, view: View) -> String {
+    let name = match self.mem.agent_new(effort, model) {
       Ok(name) => name,
       Err(err) => return format!("(no agent: {err})"),
     };
     let _ = std::fs::create_dir_all(self.me.work().join(&name));
-    self.agents.insert(name.clone(), Agent::new(&name, effort, view));
+    self.agents.insert(name.clone(), Agent::new(&name, effort, model, view));
     self.push(Some(&name), Kind::Note, SUB_NOTE);
     self.push(Some(&name), Kind::User, task);
     if let Some(call) = self.call_agent(&name) {
@@ -711,30 +748,28 @@ impl Chat {
     Some(call)
   }
 
-  /// An agent; one not met since Acorn started is taken back from its
-  /// row, idle (one from before efforts were kept: at the run's).
+  /// An agent; one not met since Acorn started is taken back from its row, idle.
   fn agent(&mut self, name: &str) -> Option<&mut Agent> {
     if !self.agents.contains_key(name) {
       self.mem.agent(name)?;
-      let effort = self.mem.agent_effort(name);
+      let (effort, model) = self.mem.agent_settings(name);
       self
         .agents
-        .insert(name.into(), Agent::new(name, effort, View::default()));
+        .insert(name.into(), Agent::new(name, effort, model, View::default()));
     }
     self.agents.get_mut(name)
   }
 
-  /// A call of an agent, on the config's `agents` or else its assistant's,
-  /// at its effort if it has one.
+  /// An agent call uses its own effort, then the configured default, then high.
   fn agent_ask(&self, name: &str) -> Option<ai::Ask> {
     let agent = self.agents.get(name)?;
     let log = Block::new(self.mem.agent_reads(name), true);
-    let pick = config::get().agents.unwrap_or(self.me.effort);
     let system = tools::system(&(tools::sub(&self.me.work()) + &crate::facts::prompt(&self.me.id)));
-    let effort = agent.effort.unwrap_or(pick);
+    let effort = agent.effort.or(config::get().agents).unwrap_or(Effort::High);
     let mut blocks = agent.view.blocks.clone();
     blocks.push(log);
     Some(ai::Ask {
+      model: agent.model,
       effort,
       system,
       blocks,
@@ -845,6 +880,15 @@ impl Chat {
 mod tests {
   use super::*;
 
+  #[test]
+  fn hydrogen_requires_an_explicit_model_selection() {
+    use serde_json::json;
+    assert_eq!(requested_model(&Value::Null).ok(), Some(Model::Neon));
+    assert_eq!(requested_model(&json!("hydrogen")).ok(), Some(Model::Hydrogen));
+    assert_eq!(requested_model(&json!("gemini-4-hydrogen")).ok(), Some(Model::Hydrogen));
+    assert!(requested_model(&json!("other")).is_err());
+  }
+
   #[tokio::test]
   async fn handoff_restarts_an_agent_told_after_its_call_finished() {
     let dir = tempfile::tempdir().unwrap();
@@ -855,8 +899,8 @@ mod tests {
     }
     let name = {
       let mut chat = engine.lock();
-      let name = chat.mem.agent_new(None).unwrap();
-      let mut agent = Agent::new(&name, None, View::default());
+      let name = chat.mem.agent_new(None, Model::Neon).unwrap();
+      let mut agent = Agent::new(&name, None, Model::Neon, View::default());
       agent.doing = Doing::Calling {
         call: call.handle.clone(),
         again: false,
@@ -910,7 +954,9 @@ mod tests {
     );
     {
       let mut chat = engine.lock();
-      chat.agents.insert("Test".into(), Agent::new("Test", None, view));
+      chat
+        .agents
+        .insert("Test".into(), Agent::new("Test", None, Model::Neon, view));
       assert!(chat.agent_ask("Test").unwrap().imgs.is_empty());
     }
     halt.cancel();
@@ -960,8 +1006,10 @@ mod tests {
     assert_eq!(after.purged(), since);
     assert_eq!(before.purged().len(), 4);
     let mut chat = engine.lock();
-    let name = chat.mem.agent_new(None).unwrap();
-    chat.agents.insert(name.clone(), Agent::new(&name, None, view));
+    let name = chat.mem.agent_new(None, Model::Neon).unwrap();
+    chat
+      .agents
+      .insert(name.clone(), Agent::new(&name, None, Model::Neon, view));
     let kit = chat.kit(chat.agents.get(&name));
     drop(chat);
     assert_eq!(kit.purged(), since, "though its call is built after them");

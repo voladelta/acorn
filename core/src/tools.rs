@@ -25,12 +25,16 @@ use std::path::Path;
 /// facts, pins, purges and asking.
 pub fn master(work: &Path, thread: bool) -> String {
   format!(
-    "You are Acorn, an AI agent that works for one user in a single chat that never
-ends. Each call to you is a turn or a compaction: the view below, then any latest
-messages whole, not summarized yet, are followed by
-a task starting \"Turn:\" (the user's new message, which you answer and act on
-as yourself, never with a summary line) or one starting \"Compaction:\" (the
-only kind you answer with a summary line).
+    "# Role and task
+
+You are Acorn, a personal assistant with an ongoing chat and persistent memory.
+Read the chat view, pinned messages, and recent messages as context. Follow the
+task at the end of that context.
+
+- \"Turn:\" introduces the user's current request. Act on it with the available
+  tools and reply to the user as yourself.
+- \"Compaction:\" asks you to compress the supplied input. Return a single
+  summary line in the format below.
 
 # The view
 
@@ -176,7 +180,8 @@ asks you, you answer in your thread with them; what you said there is yours,
 and \"Your threads\" shows each one's latest before the user's message.
 
 A person the user wants to keep (\"hire a stylist called Marrie\") is a new
-assistant: create them.
+assistant: create them. Use delegate for a subagent working on a task in the
+background. For either, select Hydrogen only if the user requests it.
 ";
 
 /// Where the tools run: this machine, the work dir.
@@ -303,7 +308,11 @@ fn boss() -> Vec<Spec> {
     spec(
       "delegate",
       "Give each task to an agent of its own, a freelancer working in the background, all in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. An agent sees the view and the user's instructions, but knows what you want only from its task, so say all it needs. It works in a dir of its own, not yours: name each file by its absolute path. For tasks only; a person who stays is create_assistant.",
-      json!({"tasks": {"type": "array", "items": {"type": "string"}}, "effort": {"type": "string", "enum": efforts, "description": "How hard they think; by default, as hard as you."}}),
+      json!({
+        "tasks": {"type": "array", "items": {"type": "string"}},
+        "model": {"type": "string", "enum": ["neon", "hydrogen"], "description": "Omit for Neon. Choose hydrogen only when the user requests it."},
+        "effort": {"type": "string", "enum": efforts, "description": "Set when the task needs a different reasoning effort. Omit to use the configured default (high unless configured)."}
+      }),
       &["tasks"],
     ),
     spec(
@@ -327,8 +336,15 @@ fn peers() -> Vec<Spec> {
     spec(
       "create_assistant",
       "Create a new assistant, when the user asks for one in whatever words (\"hire a stylist called Marrie\"): a person of their own, beside you in Acorn's sidebar, with a chat of its own that never ends and its own memory. It is you, Acorn, with its own name, about, reasoning effort, instructions (its system prompt, after yours) and welcome message (its chat's first message). It does not start working; the user opens it from the sidebar.",
-      json!({"name": {"type": "string"}, "about": {"type": "string", "description": "Who it is, in a few words, as the app shows it beside its name: \"Personal stylist\", \"Friendly neighbour who loves cracking jokes\". Never its effort."}, "effort": {"type": "string", "enum": efforts, "description": "How hard it thinks, as fits its part: low is fast and cheap, max is smartest and slowest; high if the user didn't say."}, "instructions": {"type": "string", "description": "Its system prompt, from what the user said (what it helps with, how it works and talks), or the one they gave word for word."}, "welcome": {"type": "string", "description": "Its welcome message: the first message of its chat, in its own voice, as it greets the user: \"Hello! This is <name>.\", who it is and what to bring it, a few short lines of markdown; or the one the user gave word for word."}}),
-      &["name", "about", "effort", "instructions", "welcome"],
+      json!({
+        "name": {"type": "string"},
+        "about": {"type": "string", "description": "A short description to show beside its name, for example \"Personal stylist\"."},
+        "model": {"type": "string", "enum": ["neon", "hydrogen"], "description": "Omit for Neon. Choose hydrogen only when the user requests it."},
+        "effort": {"type": "string", "enum": efforts, "description": "Reasoning effort. Omit for high."},
+        "instructions": {"type": "string", "description": "Its system prompt specifying what it helps with and how it works and talks. Copy any instructions the user supplied verbatim."},
+        "welcome": {"type": "string", "description": "The first message in its chat, in its own voice, introducing itself and what it helps with. Copy a user-supplied welcome verbatim."}
+      }),
+      &["name", "about", "instructions", "welcome"],
     ),
     spec(
       "archive_assistant",

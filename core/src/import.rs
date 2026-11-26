@@ -10,8 +10,8 @@
 //! messages.
 //!
 //! The estimate is the run's plan (`guess`): each node whose source is
-//! over NODE takes a call, priced as measured on the compactor (PRICE). It
-//! is shown, never a cap.
+//! over NODE takes a call. The estimate reprices the historical
+//! compaction model for Gemini Hydrogen. It is shown, never a cap.
 
 use crate::Kind;
 use crate::clip;
@@ -25,10 +25,12 @@ use std::sync::Arc;
 /// A summary's bytes (the compactor writes 460-510).
 const LINE: usize = 480;
 
-/// What a compaction call costs on the compactor, in micro-USD: base,
+/// The historical compaction cost in micro-USD: base,
 /// `byte` a doubling of its source past NODE, `depth` a summary under it
 /// (its own too); fit on 5,617 compaction calls of real imports.
 const PRICE: (f64, f64, f64) = (187.0, 735.0, 628.0);
+/// Approximate repricing by the output rate ($7.50 vs $0.60 per million).
+const HYDROGEN_PRICE_FACTOR: f64 = 12.5;
 
 /// The apps a session is of: each its program on this machine and its website.
 pub const APPS: [&str; 2] = ["Claude", "ChatGPT"];
@@ -528,7 +530,8 @@ fn node_usd(node: Node) -> u64 {
     return 0;
   }
   let (base, byte, depth) = PRICE;
-  (base + byte * (node.bytes as f64 / NODE as f64).log2() + depth * (node.depth + 1) as f64).round() as u64
+  let historical = base + byte * (node.bytes as f64 / NODE as f64).log2() + depth * (node.depth + 1) as f64;
+  (historical * HYDROGEN_PRICE_FACTOR).round() as u64
 }
 
 /// A node's line: its source if it fits, else a summary one deeper.
@@ -889,9 +892,9 @@ mod tests {
   fn guesses_price_the_tree() {
     assert_eq!(
       guess(3, &[5000; 8]),
-      [vec![3231; 8], vec![2111; 4], vec![2739; 2], vec![3367]]
+      [vec![40393; 8], vec![26383; 4], vec![34233; 2], vec![42083]]
     );
-    assert_eq!(usd(3, &[5000; 8]), 0.043137);
+    assert_eq!(usd(3, &[5000; 8]), 0.539225);
     assert!(guess(0, &[]).is_empty());
     assert_eq!(usd(0, &[]), 0.0);
   }

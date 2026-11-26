@@ -3,8 +3,8 @@
 //! Acorn's settings. Its dir ($ACORN_DIR, default ~/.acorn) holds
 //! config.json; the chats are in `chats`/<id> (default <dir>/chats). Each
 //! key of config.json may be set as ACORN_<KEY> instead; a path may start
-//! with "~/". The API key is DEEPSEEK_API_KEY, else config.json's
-//! `deepseek_api_key` (an app opened from the Finder has no shell's
+//! with "~/". The API key is GEMINI_API_KEY, else config.json's
+//! `gemini_api_key` (an app opened from the Finder has no shell's
 //! variables); no program the agent runs inherits it (`machine`). The
 //! `budget` caps what every chat's calls spend a day (`chat::usage`).
 
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// The bytes past which a chat's view merges to half (`memory` HIGH): 2 MB
-/// at most, ~500k tokens, fits DeepSeek's 1M context (a recall eval: 83% at
+/// at most, ~500k tokens, fits Gemini 4's 1M context (a recall eval: 83% at
 /// 128 KB, 100% at 2 MB); less, if set, down to 32 KB: a line is up to
 /// `memory::NODE` bytes and a view merges whole lines only, so one set to
 /// a few lines' bytes would stay over them.
@@ -30,7 +30,8 @@ fn view(set: &str) -> usize {
 
 /// The variable the API key is read from, kept out of every job's
 /// environment.
-pub const KEY_VAR: &str = "DEEPSEEK_API_KEY";
+pub const KEY_VAR: &str = "GEMINI_API_KEY";
+const EXA_KEY_ALIAS: &str = "ACORN_EXA_API_KEY";
 /// The web server's token, when its host hands one in (`acorn-host`).
 pub const TOKEN_VAR: &str = "ACORN_TOKEN";
 
@@ -51,7 +52,7 @@ pub struct Config {
   pub pick: Effort,
   /// What every compaction runs on, a chat's and an import's alike.
   pub compactor: Effort,
-  /// What agents run on (none: their assistant's effort).
+  /// What agents run on when they have no explicit effort (none: high).
   pub agents: Option<Effort>,
   pub view: usize,
   /// USD every chat's calls may spend together a day, here (none: no cap).
@@ -98,7 +99,7 @@ impl Config {
     let key = std::env::var(KEY_VAR)
       .ok()
       .filter(|k| !k.trim().is_empty())
-      .unwrap_or_else(|| get("deepseek_api_key", ""));
+      .unwrap_or_else(|| get("gemini_api_key", ""));
     Ok(Config {
       chats: expand(&get("chats", &format!("{}/chats", dir.display()))),
       work: expand(&get("work", &format!("{}/work", dir.display()))),
@@ -121,23 +122,35 @@ impl Config {
 }
 
 /// The variables Acorn's own keys may be in, kept from every program the
-/// agent runs (`machine`): DeepSeek's, Jev's, the server's token, and each
+/// agent runs (`machine`): Gemini's, Jev's, the server's token, and each
 /// bridge's.
 pub fn hidden() -> Vec<&'static str> {
-  let mut all = vec![KEY_VAR, crate::decide::KEY_VAR, TOKEN_VAR];
+  let mut all = vec![
+    KEY_VAR,
+    "ACORN_GEMINI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "ACORN_DEEPSEEK_API_KEY",
+    crate::decide::KEY_VAR,
+    crate::web::KEY_VAR,
+    EXA_KEY_ALIAS,
+    TOKEN_VAR,
+  ];
   all.extend(crate::bridge::all().iter().flat_map(|b| b.secrets()));
   all
 }
 
-/// A key by its variable's name (EXA_API_KEY): the variable, else
-/// config.json's lowercase key (exa_api_key), read now, so a key added counts
-/// at once.
+/// A key by its variable's name: the environment, else config.json's
+/// lowercase key, read now. Exa also accepts ACORN_EXA_API_KEY.
 pub fn secret(name: &str) -> Result<String, String> {
   secret_in(&get().dir, name)
 }
 
 fn secret_in(dir: &std::path::Path, name: &str) -> Result<String, String> {
-  if let Some(key) = std::env::var(name).ok().filter(|k| !k.trim().is_empty()) {
+  let alias = (name == crate::web::KEY_VAR).then_some(EXA_KEY_ALIAS);
+  if let Some(key) = std::iter::once(name)
+    .chain(alias)
+    .find_map(|var| std::env::var(var).ok().filter(|k| !k.trim().is_empty()))
+  {
     return Ok(key.trim().to_string());
   }
   let file = dir.join("config.json");
@@ -176,12 +189,9 @@ fn budget(text: &str) -> Result<Option<f64>, String> {
   }
 }
 
-/// `model:effort` or `effort`, the only model being deepseek-flash.
+/// Old configs could prefix an effort with the previous provider's model.
 fn run(key: &str, text: &str) -> Result<Effort, String> {
-  let (model, effort) = text.split_once(':').map_or((None, text), |(m, e)| (Some(m), e));
-  if model.is_some_and(|m| m != crate::ai::deepseek::MODEL) {
-    return Err(format!("{key} is no model:effort offered here: {text}"));
-  }
+  let effort = text.strip_prefix("deepseek-flash:").unwrap_or(text);
   Effort::parse(effort).ok_or_else(|| format!("{key} is no effort offered here: {text}"))
 }
 
@@ -205,14 +215,16 @@ mod tests {
   }
 
   #[tokio::test(flavor = "multi_thread")]
-  async fn no_program_the_agent_runs_sees_the_server_token() {
-    let test = "config::tests::no_program_the_agent_runs_sees_the_server_token";
+  async fn no_program_the_agent_runs_sees_acorn_secrets() {
+    let test = "config::tests::no_program_the_agent_runs_sees_acorn_secrets";
     if std::env::var_os("ACORN_TEST_TOKEN_CHILD").is_none() {
       let dir = tempfile::tempdir().unwrap();
       let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test, "--nocapture"])
         .env("ACORN_TEST_TOKEN_CHILD", "1")
         .env(TOKEN_VAR, "test-server-token")
+        .env_remove(crate::web::KEY_VAR)
+        .env(EXA_KEY_ALIAS, "test-exa-key")
         .env("ACORN_DIR", dir.path())
         .output()
         .unwrap();
@@ -225,9 +237,10 @@ mod tests {
       return;
     }
     assert_eq!(std::env::var(TOKEN_VAR).unwrap(), "test-server-token");
+    assert_eq!(secret(crate::web::KEY_VAR).unwrap(), "test-exa-key");
     let dir = tempfile::tempdir().unwrap();
     let ran = crate::machine::shell(
-      "if [ \"${ACORN_TOKEN+x}\" = x ]; then echo inherited; else echo absent; fi",
+      "if [ -n \"${ACORN_TOKEN+x}${ACORN_EXA_API_KEY+x}\" ]; then echo inherited; else echo absent; fi",
       dir.path(),
       10_000.0,
       tokio_util::sync::CancellationToken::new(),

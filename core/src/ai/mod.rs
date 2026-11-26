@@ -3,7 +3,7 @@
 //! One way to call a model: a system prompt and a user message in; deltas
 //! (live pieces) and an entry per finished message out (`Event`). A call's
 //! `Handle` sends the agent a message at its next chance or stops it; its
-//! end holds those never taken (`End::left`). DeepSeek runs in our own
+//! end holds those never taken (`End::left`). Gemini runs in our own
 //! loop (`agent`). A patient call (a summary's) asks again, AGAIN after
 //! each try nothing answered (the service down or refusing it, as when the
 //! API key's credit is gone), till one is answered or we stop it: an outage
@@ -14,7 +14,7 @@
 
 pub mod agent;
 pub mod cache;
-pub mod deepseek;
+pub mod gemini;
 pub mod pace;
 
 use crate::effort::Effort;
@@ -140,6 +140,7 @@ pub fn veil(text: &mut String, secrets: &[String]) {
 
 #[derive(Clone)]
 pub struct Ask {
+  pub model: crate::model::Model,
   pub effort: Effort,
   pub system: String,
   pub blocks: Vec<Block>,

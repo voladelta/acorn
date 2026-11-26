@@ -25,6 +25,7 @@ pub struct Plan {
   pub web: PathBuf,
   pub sandbox: bool,
   pub key: String,
+  pub exa_key: String,
   pub budget: f64,
 }
 
@@ -136,7 +137,8 @@ impl Runner {
       .env("HOME", &self.home)
       .env("ACORN_DIR", &acorn)
       .env("ACORN_TOKEN", token)
-      .env("DEEPSEEK_API_KEY", &plan.key)
+      .env("GEMINI_API_KEY", &plan.key)
+      .env("EXA_API_KEY", &plan.exa_key)
       .env("ACORN_BUDGET", plan.budget.to_string())
       .current_dir(&self.home)
       .stdin(std::process::Stdio::null())

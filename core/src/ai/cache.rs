@@ -1,6 +1,6 @@
 //! Cache
 //! =====
-//! A marked block ends a prefix DeepSeek caches. Single flight, as a
+//! A marked block ends a prefix Gemini may cache. Single flight, as a
 //! request is sent: one whose prefix no call cached within TTL leads; one
 //! whose prefix a leader is writing waits until the leader's response
 //! begins (only then can it read the entry). So a leader is never a
@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
-/// How long we reuse a DeepSeek cache entry.
+/// How long we expect to reuse an implicitly cached prefix.
 const TTL: Duration = Duration::from_secs(300);
 
 /// A prefix cached: until when; while its leader's response has not begun,
@@ -71,7 +71,7 @@ fn keys(ask: &Ask) -> Vec<u64> {
     return Vec::new();
   };
   let mut h = DefaultHasher::new();
-  (super::deepseek::MODEL, ask.effort.as_str(), &ask.system, &ask.user).hash(&mut h);
+  (ask.model, ask.model.thinking(ask.effort), &ask.system, &ask.user).hash(&mut h);
   let mut key = h.finish();
   blocks[..=last]
     .iter()

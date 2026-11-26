@@ -4,6 +4,7 @@
 use super::{Assistant, MAX};
 use crate::config;
 use crate::effort::Effort;
+use crate::model::Model;
 use std::path::PathBuf;
 
 const FILE: &str = "assistants.json";
@@ -21,6 +22,7 @@ impl Assistant {
       instructions: String::new(),
       welcome: crate::chat::HELLO.into(),
       effort: config::get().pick,
+      model: Model::Neon,
       archived: false,
     }
   }
@@ -158,7 +160,14 @@ fn write(mine: &[Assistant]) -> Result<(), String> {
 /// A new assistant, saved: its id the name's letters and digits, made
 /// unique among the assistants and the chats on disk (a chat it didn't
 /// start is never taken over).
-pub fn add(name: &str, about: &str, instructions: &str, welcome: &str, effort: Effort) -> Result<Assistant, String> {
+pub fn add(
+  name: &str,
+  about: &str,
+  instructions: &str,
+  welcome: &str,
+  effort: Effort,
+  model: Model,
+) -> Result<Assistant, String> {
   let _filing = FILING.lock();
   let name = name.trim();
   if name.is_empty() {
@@ -195,6 +204,7 @@ pub fn add(name: &str, about: &str, instructions: &str, welcome: &str, effort: E
     instructions: instructions.trim().into(),
     welcome: welcome.trim().into(),
     effort,
+    model,
     archived: false,
   };
   let mut mine = saved();

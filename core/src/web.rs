@@ -1,7 +1,6 @@
 //! Web
 //! ===
-//! The tools that read the web: web_search and web_fetch (TOOLS), through
-//! DeepSeek's Search and Fetch APIs, on the same key as its model. Busy
+//! The tools that read the web: web_search and web_fetch through Exa. Busy
 //! (408, 429, 5xx) is tried again after a wait; any other error answers at
 //! once. A stop ends the wait and the request. A plugin's http (`luau`) goes
 //! through the same `request`; its errors never name the url, which may hold
@@ -12,6 +11,7 @@ use crate::clip;
 use crate::config;
 use reqwest::{Response, StatusCode, Url};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,8 +19,9 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt as _;
 use tokio_util::sync::CancellationToken;
 
-pub const SEARCH: &str = "https://api.deepseek.com/v1/tools/search";
-pub const FETCH: &str = "https://api.deepseek.com/v1/tools/fetch";
+const SEARCH: &str = "https://api.exa.ai/search";
+const FETCH: &str = "https://api.exa.ai/contents";
+pub const KEY_VAR: &str = "EXA_API_KEY";
 
 /// Tries of a busy request, the first wait, doubled after each.
 const TRIES: u32 = 4;
@@ -51,11 +52,16 @@ pub async fn run(name: &str, input: &Value, cancel: CancellationToken) -> Out {
       if query.is_empty() {
         return Out::fail("Give a query.");
       }
-      let mut body = json!({"query": query, "count": input["count"].as_u64().unwrap_or(10).clamp(1, 50)});
-      let question: String = str("question").chars().take(128).collect();
-      if !question.is_empty() {
-        body["ori_question"] = json!(question);
-      }
+      let question = str("question");
+      let query = if question.is_empty() {
+        query
+      } else {
+        format!("{query}\nQuestion: {question}")
+      };
+      let body = json!({
+        "query": query, "numResults": input["count"].as_u64().unwrap_or(10).clamp(1, 50),
+        "contents": {"highlights": true}
+      });
       match post(SEARCH, &body, &cancel).await {
         Ok(got) => Out::ok(results(&got)),
         Err(why) => Out::fail(why),
@@ -66,16 +72,15 @@ pub async fn run(name: &str, input: &Value, cancel: CancellationToken) -> Out {
       if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Out::fail("Give an http or https url.");
       }
-      match post(FETCH, &json!({"url": url}), &cancel).await {
-        Ok(got) => {
-          let title = got["title"].as_str().unwrap_or_default();
-          let page = format!(
-            "# {}\n{url}\n\n{}",
-            if title.is_empty() { "(no title)" } else { title },
-            got["content"].as_str().unwrap_or_default()
-          );
-          Out::ok(clip::page(&page, input["at"].as_u64().unwrap_or(0) as usize))
-        }
+      let at = input["at"].as_u64().unwrap_or(0) as usize;
+      let version = input["version"].as_str();
+      let fresh = input["fresh"] == true || version.is_some();
+      if fresh && at > 0 && version.is_none() {
+        return Out::fail("Continue a fresh read with the version from its previous page.");
+      }
+      let body = contents_body(&url, fresh);
+      match post(FETCH, &body, &cancel).await {
+        Ok(got) => page(&got, &url, at, fresh, version),
         Err(why) => Out::fail(why),
       }
     }
@@ -83,68 +88,91 @@ pub async fn run(name: &str, input: &Value, cancel: CancellationToken) -> Out {
   }
 }
 
-/// A search's results as text, one block each.
-pub fn results(got: &Value) -> String {
-  let all = got["results"].as_array().cloned().unwrap_or_default();
-  if all.is_empty() {
-    return "No results.".into();
+fn contents_body(url: &str, fresh: bool) -> Value {
+  let mut body = json!({"urls": [url], "text": true});
+  if fresh {
+    body["maxAgeHours"] = json!(0);
   }
-  let str = |r: &Value, k: &str| r[k].as_str().unwrap_or_default().trim().to_string();
+  body
+}
+
+fn page(got: &Value, url: &str, at: usize, fresh: bool, expected: Option<&str>) -> Out {
+  let Some(text) = got["results"][0]["text"].as_str() else {
+    let why = got["statuses"][0]["error"]["tag"].as_str().unwrap_or("no content");
+    return Out::fail(format!("fetch {url}: {why}"));
+  };
+  let title = got["results"][0]["title"].as_str().unwrap_or("(no title)");
+  let text = format!("# {title}\n{url}\n\n{text}");
+  if !fresh {
+    return Out::ok(clip::page(&text, at));
+  }
+  let hash = Sha256::digest(text.as_bytes());
+  let version: String = hash[..16].iter().map(|b| format!("{b:02x}")).collect();
+  if expected.is_some_and(|expected| expected != version) {
+    return Out::fail("The page changed during this fresh read. Start again at the beginning.");
+  }
+  Out::ok(clip::page_with(&text, at, &format!(" and version \"{version}\"")))
+}
+
+/// A search's results as text, one block each.
+fn results(got: &Value) -> String {
+  let Some(all) = got["results"].as_array().filter(|all| !all.is_empty()) else {
+    return "No results.".into();
+  };
   all
     .iter()
     .enumerate()
     .map(|(i, r)| {
-      let date = str(r, "date");
-      let date = date.get(..10).unwrap_or(&date);
-      let site = [str(r, "site_name"), date.to_string()]
+      let url = r["url"].as_str().unwrap_or_default();
+      let title = r["title"].as_str().unwrap_or("(no title)");
+      let date = r["publishedDate"]
+        .as_str()
+        .and_then(|s| s.get(..10))
+        .map_or_else(String::new, |s| format!(" ({s})"));
+      let text = r["highlights"]
+        .as_array()
         .into_iter()
-        .filter(|s| !s.is_empty())
+        .flatten()
+        .filter_map(Value::as_str)
         .collect::<Vec<_>>()
-        .join(", ");
-      let site = if site.is_empty() {
-        String::new()
-      } else {
-        format!(" ({site})")
-      };
-      let text = Some(str(r, "summary"))
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| str(r, "snippet"));
-      format!("{}. {}{site}\n{}\n{text}", i + 1, str(r, "title"), str(r, "url"))
+        .join(" … ");
+      format!("{}. {title}{date}\n{url}\n{text}", i + 1)
     })
     .collect::<Vec<_>>()
     .join("\n\n")
 }
 
-/// A JSON request to one of the APIs; its JSON, or why it failed.
 async fn post(url: &str, body: &Value, cancel: &CancellationToken) -> Result<Value, String> {
-  api(url, "application/json", body.to_string().into_bytes(), TIMEOUT, cancel).await
+  let key = config::secret(KEY_VAR)?;
+  post_json(url, "x-api-key", &key, body, TIMEOUT, cancel).await
 }
 
-/// A POST to one of DeepSeek's APIs, on its key, of a body of a type; its
-/// JSON, or why it failed.
-pub async fn api(
+pub(crate) async fn post_json(
   url: &str,
-  kind: &str,
-  body: Vec<u8>,
+  key_header: &str,
+  key: &str,
+  body: &Value,
   timeout: Duration,
   cancel: &CancellationToken,
 ) -> Result<Value, String> {
-  let key = &config::get().key;
-  if key.is_empty() {
-    return Err(format!("no API key: set {}", config::KEY_VAR));
-  }
   let req = Req {
     method: "POST".into(),
     url: url.into(),
     query: Vec::new(),
     headers: vec![
-      ("authorization".into(), format!("Bearer {key}")),
-      ("content-type".into(), kind.into()),
+      (key_header.into(), key.into()),
+      ("content-type".into(), "application/json".into()),
     ],
-    body: Some(body),
+    body: Some(body.to_string().into_bytes()),
     timeout,
   };
-  let bytes = read(request(&req, cancel).await?, cancel).await?;
+  let bytes = read(
+    request(&req, cancel)
+      .await
+      .map_err(|err| err.replace(key, crate::ai::PURGED))?,
+    cancel,
+  )
+  .await?;
   serde_json::from_slice(&bytes).map_err(|err| err.to_string())
 }
 
@@ -335,14 +363,46 @@ mod tests {
   #[test]
   fn results_read_as_numbered_blocks() {
     let got = json!({"results": [
-        {"title": "V4", "url": "https://a.com/v4", "snippet": "short", "summary": "long", "site_name": "A", "date": "2026-06-01T00:00:00+00:00"},
-        {"title": "B", "url": "https://b.com", "snippet": "only a snippet", "summary": "", "site_name": null, "date": null},
+        {"title": "V4", "url": "https://a.com/v4", "highlights": ["first", "second"], "publishedDate": "2026-06-01T00:00:00+00:00"},
+        {"title": "B", "url": "https://b.com", "highlights": ["only one"], "publishedDate": null},
     ]});
     assert_eq!(
       results(&got),
-      "1. V4 (A, 2026-06-01)\nhttps://a.com/v4\nlong\n\n2. B\nhttps://b.com\nonly a snippet"
+      "1. V4 (2026-06-01)\nhttps://a.com/v4\nfirst … second\n\n2. B\nhttps://b.com\nonly one"
     );
     assert_eq!(results(&json!({"results": []})), "No results.");
+  }
+
+  #[test]
+  fn contents_reads_markdown_and_reports_per_url_errors() {
+    let url = "https://example.com";
+    assert!(contents_body(url, false).get("maxAgeHours").is_none());
+    assert_eq!(contents_body(url, true)["maxAgeHours"], 0);
+    let got = json!({"results": [{"title": "Example", "text": "A **page**"}]});
+    assert_eq!(
+      page(&got, url, 0, false, None).text,
+      "# Example\nhttps://example.com\n\nA **page**"
+    );
+    let got = json!({"results": [], "statuses": [{"status": "error", "error": {"tag": "CRAWL_NOT_FOUND"}}]});
+    let out = page(&got, url, 0, false, None);
+    assert!(out.fail);
+    assert_eq!(out.text, "fetch https://example.com: CRAWL_NOT_FOUND");
+  }
+
+  #[test]
+  fn a_fresh_continuation_refuses_an_offset_into_changed_content() {
+    let url = "https://example.com";
+    let page_of = |prefix: &str| json!({"results": [{"text": format!("{prefix}\n{}\n{}", "a".repeat(clip::CAP - 100), "b".repeat(200))}]});
+    let original = page_of("old");
+    let first = page(&original, url, 0, true, None);
+    let (advance, version) = first.text.rsplit_once(" and version \"").unwrap();
+    let at = advance.rsplit_once(" with at ").unwrap().1.parse().unwrap();
+    let version = version.strip_suffix("\"]").unwrap();
+    let next = page(&original, url, at, true, Some(version));
+    assert!(!next.fail);
+    assert_eq!(next.text, "b".repeat(200));
+    let changed = page(&page_of("new and longer"), url, at, true, Some(version));
+    assert!(changed.fail && changed.text.contains("changed"));
   }
 
   /// A server answering each connection with the next of `replies`, whole;
@@ -540,13 +600,13 @@ mod tests {
   }
 
   /// Searches and fetches for real; run with `cargo test -- --ignored`
-  /// and DEEPSEEK_API_KEY.
+  /// and EXA_API_KEY.
   #[tokio::test]
   #[ignore]
   async fn search_and_fetch_read_the_web() {
     let found = run(
       "web_search",
-      &json!({"query": "rust-lang site:github.com", "count": 3}),
+      &json!({"query": "The official Rust programming language source repository on GitHub", "count": 3}),
       CancellationToken::new(),
     )
     .await;
