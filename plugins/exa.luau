@@ -22,8 +22,12 @@ local function search(query, opts)
 	return if #blocks == 0 then "No results." else table.concat(blocks, "\n\n")
 end
 
-local function fetch(url)
-	local got = post("/contents", { urls = { url }, text = true })
+local function fetch(url, opts)
+	local body = { urls = { url }, text = true }
+	if opts and opts.fresh then
+		body.maxAgeHours = 0
+	end
+	local got = post("/contents", body)
 	for _, s in got.statuses or {} do
 		if s.status == "error" then
 			error("fetch " .. url .. ": " .. (s.error and s.error.tag or "failed"), 0)
@@ -42,7 +46,7 @@ return {
 		value = search,
 	},
 	web_fetch = {
-		doc = "web_fetch(url: string): string   -- a page's title and whole text, by Exa: print a slice of a long one",
+		doc = "web_fetch(url: string, opts?: {fresh: boolean?}): string   -- a page's title and whole text, by Exa: print a slice of a long one. Exa can serve cached text by default. Set fresh=true for time-sensitive pages",
 		value = fetch,
 	},
 }

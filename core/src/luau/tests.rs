@@ -669,12 +669,16 @@ async fn exa_searches_and_fetches() {
   lab.file("exa.luau", &shipped(EXA_FILE, &at));
   assert!(
     lab
-      .go("web_fetch('https://a.com')")
+      .go("web_fetch('https://a.com', {fresh = true})")
       .await
       .text
       .contains("# T\nhttps://a.com\n\nbody")
   );
-  assert!(seen.await.unwrap().starts_with("POST /contents "));
+  let seen = seen.await.unwrap();
+  assert!(
+    seen.starts_with("POST /contents ") && seen.contains("\"maxAgeHours\":0"),
+    "{seen}"
+  );
   let (at, _) =
     server(r#"{"results":[],"statuses":[{"id":"u","status":"error","error":{"tag":"CRAWL_NOT_FOUND"}}]}"#).await;
   lab.file("exa.luau", &shipped(EXA_FILE, &at));

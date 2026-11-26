@@ -71,13 +71,22 @@ pub async fn run(name: &str, input: &Value, cancel: CancellationToken) -> Out {
       if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Out::fail("Give an http or https url.");
       }
-      match post(FETCH, &json!({"urls": [url], "text": true}), &cancel).await {
+      let body = contents_body(&url, input["fresh"] == true);
+      match post(FETCH, &body, &cancel).await {
         Ok(got) => page(&got, &url, input["at"].as_u64().unwrap_or(0) as usize),
         Err(why) => Out::fail(why),
       }
     }
     _ => Out::fail(format!("No tool {name}.")),
   }
+}
+
+fn contents_body(url: &str, fresh: bool) -> Value {
+  let mut body = json!({"urls": [url], "text": true});
+  if fresh {
+    body["maxAgeHours"] = json!(0);
+  }
+  body
 }
 
 fn page(got: &Value, url: &str, at: usize) -> Out {
@@ -351,6 +360,8 @@ mod tests {
   #[test]
   fn contents_reads_markdown_and_reports_per_url_errors() {
     let url = "https://example.com";
+    assert!(contents_body(url, false).get("maxAgeHours").is_none());
+    assert_eq!(contents_body(url, true)["maxAgeHours"], 0);
     let got = json!({"results": [{"title": "Example", "text": "A **page**"}]});
     assert_eq!(page(&got, url, 0).text, "# Example\nhttps://example.com\n\nA **page**");
     let got = json!({"results": [], "statuses": [{"status": "error", "error": {"tag": "CRAWL_NOT_FOUND"}}]});
