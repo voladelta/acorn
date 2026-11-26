@@ -10,9 +10,6 @@
 use crate::{Kind, Spend};
 use serde::{Deserialize, Serialize};
 
-/// The one model every call runs on (DeepSeek Flash; `ai::deepseek`).
-pub const MODEL: &str = "deepseek-flash";
-
 /// The n messages from id on (n a power of two).
 pub type Seg = (u64, u64);
 
@@ -87,6 +84,8 @@ pub enum Wait {
 pub struct State {
   pub busy: bool,
   pub wait: Wait,
+  #[serde(default)]
+  pub model: crate::model::Model,
   pub agents: Vec<String>,
   pub pins: Vec<String>,
   pub importing: Option<Progress>,

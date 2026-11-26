@@ -188,7 +188,8 @@ async fn view(lua: Lua, who: Caller, path: String) -> Told {
 async fn ocr_text(lua: Lua, who: Caller, path: String) -> Told {
   let call = Call::start(&who.run, "ocr", &path);
   let cancel = call.cancel.clone();
-  let got = ocr::read(&who.dir.join(&path), &cancel).await;
+  let meter = who.run.lock().meter.clone();
+  let got = ocr::read(&who.dir.join(&path), meter.as_ref(), &cancel).await;
   call.end(&lua, got.map_err(|e| format!("ocr {e}")))
 }
 

@@ -408,6 +408,7 @@ impl Chat {
       + &asks
       + &crate::facts::prompt(&self.me.id);
     ai::Ask {
+      model: self.me.model,
       effort: self.me.effort,
       system: crate::tools::system(&head),
       blocks: Vec::new(),

@@ -15,7 +15,7 @@
 import * as call from './call.ts';
 import type { Call } from './call.ts';
 import { flat, progressShow } from './text.ts';
-import { type Command, type Entry, type Event, type Kind, type Live, livePush, MODEL, type Node, type Seg, type Spend, type State } from './wire.ts';
+import { type Command, type Entry, type Event, type Kind, type Live, livePush, type Node, type Seg, type Spend, type State } from './wire.ts';
 
 const WAIT = 'summarizing…';
 const SUMS = 'summarizing earlier messages…';
@@ -314,7 +314,7 @@ export function tail(m: Model): Row[] {
   const load: Row[] = m.page === null && importing ? [{ t: 'cap', text: progressShow(importing) }] : [];
   const wait = m.state?.wait ?? 'None';
   if (m.page !== null || rows.length || wait === 'None') return [...rows, ...load];
-  const cap = wait === 'Summaries' ? SUMS : `waiting for ${MODEL}…`;
+  const cap = wait === 'Summaries' ? SUMS : `waiting for ${m.state?.model ?? 'the model'}…`;
   return [{ t: 'cap', text: cap }, ...load];
 }
 

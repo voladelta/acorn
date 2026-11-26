@@ -4,6 +4,7 @@
 
 use acorn_core::assistant::{self, Assistant};
 use acorn_core::effort::Effort;
+use acorn_core::model::Model;
 
 #[test]
 fn made_assistants_are_saved_and_listed() {
@@ -24,6 +25,7 @@ fn made_assistants_are_saved_and_listed() {
     "Help me with xyz.",
     " Hello! This is Abc.\n\nShow me your closet. ",
     Effort::Low,
+    Model::Hydrogen,
   )
   .unwrap();
   assert_eq!(abc.id, "abc-2", "a chat on disk it didn't start is never taken");
@@ -45,16 +47,16 @@ fn made_assistants_are_saved_and_listed() {
   );
   assert!(abc.asking().contains("your thread with Abc (Personal stylist)"));
   assert!(
-    assistant::add("abc", "Stylist", "", "", Effort::High).is_err(),
+    assistant::add("abc", "Stylist", "", "", Effort::High, Model::Neon).is_err(),
     "names are unique"
   );
-  assert!(assistant::add("  ", "Stylist", "", "", Effort::High).is_err());
+  assert!(assistant::add("  ", "Stylist", "", "", Effort::High, Model::Neon).is_err());
   assert!(
-    assistant::add("Doug", " ", "", "", Effort::High).is_err(),
+    assistant::add("Doug", " ", "", "", Effort::High, Model::Neon).is_err(),
     "everyone says who they are"
   );
 
-  let max = assistant::add("Max Two", "Second opinion", "", "", Effort::Max).unwrap();
+  let max = assistant::add("Max Two", "Second opinion", "", "", Effort::Max, Model::Neon).unwrap();
   assert_eq!(max.id, "maxtwo");
   assert!(
     max.hello().0.starts_with("Hello! This is Max Two.\n\n"),
@@ -79,6 +81,14 @@ fn made_assistants_are_saved_and_listed() {
   );
   assert_eq!(names(assistant::all()), ["Acorn", "Max", "Abc", "Max Two"]);
   assert_eq!(assistant::all()[2], abc, "as saved, read back");
+  assert_eq!(assistant::all()[2].model, Model::Hydrogen);
+  assert_eq!(Assistant::acorn().model, Model::Neon);
+  assert_eq!(Assistant::max().model, Model::Carbon);
+  let old: Assistant = serde_json::from_value(serde_json::json!({
+    "id": "old", "name": "Old", "effort": "high"
+  }))
+  .unwrap();
+  assert_eq!(old.model, Model::Neon);
   assert!(Assistant::acorn().personality().is_empty() && Assistant::acorn().work().ends_with("home/work"));
   assert_eq!(
     (Assistant::acorn().about, Assistant::max().about),
@@ -102,7 +112,7 @@ fn made_assistants_are_saved_and_listed() {
   assert!(chat.is_dir(), "nothing deleted");
   assert!(assistant::archive("abc", "max").is_err(), "archived already");
   assert!(
-    assistant::add("Abc", "Another", "", "", Effort::Low)
+    assistant::add("Abc", "Another", "", "", Effort::Low, Model::Neon)
       .unwrap_err()
       .contains("archived"),
     "its name held"

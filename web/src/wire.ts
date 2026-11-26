@@ -51,6 +51,7 @@ export type Wait = 'None' | 'Summaries' | 'Model';
 export interface State {
   busy: boolean;
   wait: Wait;
+  model?: string;
   agents: string[];
   pins: string[];
   importing: Progress | null;
@@ -62,6 +63,7 @@ export interface Assistant {
   name: string;
   about: string;
   effort?: string;
+  model?: string;
   archived?: boolean;
 }
 
@@ -86,9 +88,6 @@ export type Command =
   | { Zoom: Seg }
   | 'Root'
   | { Agent: string };
-
-/** The one model every call runs on. */
-export const MODEL = 'deepseek-flash';
 
 /** A piece joins the message streaming, if of its kind, unless it starts
  * one (fresh: a tool call, as two calls never join). */

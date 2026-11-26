@@ -120,24 +120,28 @@ fn day(secs: u64) -> String {
   format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// `<data>/config.json`: the DeepSeek key (DEEPSEEK_API_KEY wins) and each
+/// `<data>/config.json`: provider keys (environment wins) and each
 /// person's budget, USD a day.
-fn config(data: &Path) -> (String, f64) {
+fn config(data: &Path) -> (String, String, f64) {
   let file = data.join("config.json");
   let conf: HashMap<String, serde_json::Value> = match std::fs::read_to_string(&file) {
     Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("{}: {e}", file.display()))),
     Err(_) => HashMap::new(),
   };
-  let key = std::env::var("DEEPSEEK_API_KEY")
-    .ok()
-    .filter(|k| !k.trim().is_empty())
-    .or_else(|| {
-      conf
-        .get("deepseek_api_key")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-    })
-    .unwrap_or_default();
+  let key = |name: &str| {
+    std::env::var(name)
+      .ok()
+      .filter(|k| !k.trim().is_empty())
+      .unwrap_or_else(|| {
+        conf
+          .get(&name.to_ascii_lowercase())
+          .and_then(|v| v.as_str())
+          .unwrap_or("")
+          .into()
+      })
+      .trim()
+      .to_string()
+  };
   let budget = match conf.get("budget") {
     None => 1.0,
     Some(v) => v
@@ -146,7 +150,7 @@ fn config(data: &Path) -> (String, f64) {
       .filter(|b| *b >= 0.0)
       .unwrap_or_else(|| fail(format!("{}: budget is USD a day, as 1 or 0.5", file.display()))),
   };
-  (key.trim().to_string(), budget)
+  (key("GEMINI_API_KEY"), key("EXA_API_KEY"), budget)
 }
 
 /// Next to this binary, else `name` on PATH.
@@ -168,10 +172,10 @@ fn serve(a: Args) {
   let web = web(&a, &server);
   walled(&a);
   store::make_dir(&a.data).unwrap_or_else(|e| fail(e));
-  let (key, budget) = config(&a.data);
+  let (key, exa_key, budget) = config(&a.data);
   if key.is_empty() {
     eprintln!(
-      "acorn-host: no DeepSeek key (DEEPSEEK_API_KEY, or deepseek_api_key in {}/config.json)",
+      "acorn-host: no Gemini key (GEMINI_API_KEY, or gemini_api_key in {}/config.json)",
       a.data.display()
     );
   }
@@ -185,6 +189,7 @@ fn serve(a: Args) {
       web,
       sandbox: a.sandbox,
       key,
+      exa_key,
       budget,
     },
     secure: a.public.as_deref().is_some_and(|p| p.starts_with("https://")),

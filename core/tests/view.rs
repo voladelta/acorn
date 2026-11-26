@@ -15,7 +15,7 @@ async fn what_is_asked_for_again_is_told_again() {
   unsafe {
     std::env::set_var("ACORN_DIR", dir.path().join("home"));
     std::env::set_var("ACORN_CHATS", dir.path().join("chats"));
-    std::env::remove_var("DEEPSEEK_API_KEY");
+    std::env::remove_var("GEMINI_API_KEY");
   }
   let (tx, mut heard) = tokio::sync::mpsc::unbounded_channel();
   assert!(hub::listen(tx));

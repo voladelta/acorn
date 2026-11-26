@@ -14,6 +14,7 @@
 //! (`restore_assistant`).
 
 use crate::effort::Effort;
+use crate::model::Model;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "engine")]
@@ -49,6 +50,8 @@ pub struct Assistant {
   #[serde(default, skip_serializing_if = "String::is_empty")]
   pub welcome: String,
   pub effort: Effort,
+  #[serde(default)]
+  pub model: Model,
   #[serde(default, skip_serializing_if = "std::ops::Not::not")]
   pub archived: bool,
 }
@@ -62,6 +65,7 @@ impl Assistant {
       instructions: MAX_WAY.into(),
       welcome: MAX_HELLO.into(),
       effort: Effort::Max,
+      model: Model::Carbon,
       archived: false,
     }
   }

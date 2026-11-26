@@ -1,6 +1,6 @@
 //! A live probe, not a test of the code: 16 long messages, one hard fact
 //! each, built into a tree by the real compactor; then which facts each
-//! level's lines still name, and what it cost. Run with DEEPSEEK_API_KEY:
+//! level's lines still name, and what it cost. Run with GEMINI_API_KEY:
 //! cargo test -p acorn-core --test live_compactor -- --ignored --nocapture
 
 use acorn_core::chat::hub;

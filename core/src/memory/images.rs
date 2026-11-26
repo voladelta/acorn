@@ -42,7 +42,11 @@ impl Memory {
             format!("image/{}", name.rsplit('.').next().unwrap_or("png")),
           )
         };
-        let data = base64::engine::general_purpose::STANDARD.encode(fs::read(file).ok()?);
+        let bytes = fs::read(file).ok()?;
+        if mime == "image/gif" {
+          return image_for_model(&bytes).ok().map(|(img, _)| img);
+        }
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
         Some(Img { mime, data })
       })
       .collect()
@@ -155,8 +159,8 @@ struct Fitted {
   size: (u32, u32),
 }
 
-/// An image read, its copy for models scaled to FIT, as a JPEG, when
-/// larger than that or IMAGE bytes (and no more than PIXELS decoded; a
+/// An image read, its copy for models scaled to FIT, as a JPEG, for GIFs
+/// or when larger than that or IMAGE bytes (and no more than PIXELS decoded; a
 /// larger one goes as is).
 fn fitted(bytes: &[u8]) -> Result<Fitted> {
   let kind = image_kind(bytes).context(IMAGES_ARE)?;
@@ -176,7 +180,7 @@ fn fitted(bytes: &[u8]) -> Result<Fitted> {
   }
   let img = image::load_from_memory(bytes).context(IMAGES_ARE)?;
   let k = (FIT / f64::from(w.max(h))).min(1.0);
-  if !(k < 1.0 || bytes.len() > IMAGE) {
+  if !(k < 1.0 || bytes.len() > IMAGE || kind == "image/gif") {
     return Ok(as_is);
   }
   let small = img.resize_exact(
@@ -197,6 +201,10 @@ fn fitted(bytes: &[u8]) -> Result<Fitted> {
 /// and height. Blocking.
 pub fn image_for_model(bytes: &[u8]) -> Result<(Img, (u32, u32))> {
   let Fitted { kind, small, size } = fitted(bytes)?;
+  anyhow::ensure!(
+    kind != "image/gif" || small.is_some(),
+    "GIF dimensions exceed the model's image limit"
+  );
   let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
   let img = match small {
     Some(jpeg) => Img {
@@ -268,6 +276,17 @@ mod tests {
     let fitted = fitted(&png).unwrap();
     assert_eq!(fitted.size, (40000, 40000));
     assert!(fitted.small.is_none());
+  }
+
+  #[test]
+  fn gifs_are_sent_as_jpegs() {
+    let mut gif = Vec::new();
+    image::RgbaImage::new(4, 3)
+      .write_to(&mut std::io::Cursor::new(&mut gif), image::ImageFormat::Gif)
+      .unwrap();
+    let (img, size) = image_for_model(&gif).unwrap();
+    assert_eq!(img.mime, "image/jpeg");
+    assert_eq!(size, (4, 3));
   }
 
   #[test]

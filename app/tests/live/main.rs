@@ -8,7 +8,7 @@
 //! CPU).
 //!
 //! `cargo test -p acorn --test live -- --ignored [NAME…] [--jobs N]`, with
-//! DEEPSEEK_API_KEY: every scenario (or those whose name holds a NAME),
+//! GEMINI_API_KEY: every scenario (or those whose name holds a NAME),
 //! N at a time (default 4, or $ACORN_LIVE_JOBS). Each one's transcript and
 //! output go to $ACORN_LIVE_OUT (default: the temp dir's acorn-live).
 //! Without `--ignored` they are listed, not run, as a plain `cargo test`
@@ -27,7 +27,7 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// A scenario: its name, what it runs, the keys it needs beyond DeepSeek's.
+/// A scenario: its name, what it runs, the keys it needs beyond Gemini's.
 pub struct Scenario {
   pub name: &'static str,
   pub run: fn(),
@@ -50,7 +50,11 @@ const SCENARIOS: &[Scenario] = &[
   scenario("deep_memory", memory::deep_memory),
   scenario("tools", work::tools),
   scenario("delegate", work::delegate),
-  scenario("web", work::web),
+  Scenario {
+    name: "web",
+    run: work::web,
+    needs: &["EXA_API_KEY"],
+  },
   scenario("luau_jobs", luau::jobs),
   scenario("luau_image", luau::image),
   Scenario {
@@ -119,8 +123,8 @@ fn main() {
     );
     return;
   }
-  if std::env::var_os("DEEPSEEK_API_KEY").is_none() {
-    eprintln!("live: DEEPSEEK_API_KEY is not set");
+  if std::env::var_os("GEMINI_API_KEY").is_none() {
+    eprintln!("live: GEMINI_API_KEY is not set");
     std::process::exit(1);
   }
   let jobs = jobs

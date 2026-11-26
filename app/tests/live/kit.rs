@@ -1,7 +1,7 @@
 //! Kit
 //! ===
 //! What every scenario needs: a window, headless, on the real engine and
-//! DeepSeek, over dirs of its own (`Live`); words sent and the turn
+//! Gemini, over dirs of its own (`Live`); words sent and the turn
 //! waited out by the chat's own record (`turns`), never by a sleep or by
 //! words on the screen; what the turn did, read from the chat's db
 //! (`Turn`); and the exchange written down as it goes, the whole log

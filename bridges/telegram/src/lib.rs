@@ -616,6 +616,7 @@ impl Bridge for Tg {
       instructions: WAY.into(),
       welcome: HELLO.into(),
       effort: config::get().pick,
+      model: Default::default(),
       archived: false,
     }
   }

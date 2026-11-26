@@ -5,7 +5,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 /// `eval`, with no plugins, whatever this machine has.
 async fn eval(cwd: PathBuf, code: &str, budget: Duration, cancel: CancellationToken) -> Out {
-  eval_with(Path::new("/nonexistent"), cwd, code, budget, cancel).await
+  eval_with(Path::new("/nonexistent"), cwd, code, budget, cancel, None).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -13,7 +13,7 @@ async fn a_new_callers_dir_is_made_first() {
   let dir = tempfile::tempdir().unwrap();
   let cwd = dir.path().join("work/main");
   let input = json!({"description": "List the dir", "code": "sh('ls').code"});
-  let out = run(&input, cwd, CancellationToken::new()).await;
+  let out = run(&input, cwd, CancellationToken::new(), std::sync::Arc::new(|_| {})).await;
   assert!(out.text.starts_with("=> 0\n[calls: sh \"ls\"]"), "{}", out.text);
 }
 
@@ -317,6 +317,7 @@ impl Lab {
       code,
       CHUNK,
       CancellationToken::new(),
+      None,
     )
     .await
   }
@@ -490,7 +491,15 @@ async fn a_stop_while_loading_leaves_the_layer_to_be_built_again() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     stop.cancel();
   });
-  let out = eval_with(lab.plugins.path(), lab.cwd.path().to_path_buf(), "1", CHUNK, cancel).await;
+  let out = eval_with(
+    lab.plugins.path(),
+    lab.cwd.path().to_path_buf(),
+    "1",
+    CHUNK,
+    cancel,
+    None,
+  )
+  .await;
   assert!(out.fail && out.text == "stopped", "{}", out.text);
   lab.file("slow.luau", EXA);
   assert!(lab.go("web_search('q')").await.text.starts_with("=> exa:q"));

@@ -312,8 +312,11 @@ fn interrupted_message_and_agent_log() {
   assert_eq!(mem.message(count).unwrap().text, "next");
 
   // an agent's log
-  let name = mem.agent_new(Some(Effort::Low)).unwrap();
-  assert_eq!(mem.agent_effort(&name), Some(Effort::Low));
+  use acorn_core::model::Model;
+  let name = mem.agent_new(Some(Effort::Low), Model::Hydrogen).unwrap();
+  drop(mem);
+  let mut mem = Memory::load(&dir).unwrap();
+  assert_eq!(mem.agent_settings(&name), (Some(Effort::Low), Model::Hydrogen));
   mem.agent_push(&name, Kind::Note, "subagent").unwrap();
   mem
     .agent_push(&name, Kind::Echo, &format!("cat .env: {SECRET}"))
@@ -342,7 +345,8 @@ fn legacy_agent_schema_and_view_lines() {
     .execute_batch("create table agents (name text primary key) without rowid; insert into agents values ('Ann');")
     .unwrap();
   let was = Memory::load(&old).unwrap();
-  assert!(was.agent("Ann").is_some() && was.agent_effort("Ann").is_none());
+  assert!(was.agent("Ann").is_some());
+  assert_eq!(was.agent_settings("Ann"), (None, acorn_core::model::Model::Neon));
 
   // a view's last lines: messages not summarized yet as their kind and text
   let mut thread = Memory::load(&home.path().join("chats/max/with/main")).unwrap();

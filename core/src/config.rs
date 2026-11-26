@@ -3,8 +3,8 @@
 //! Acorn's settings. Its dir ($ACORN_DIR, default ~/.acorn) holds
 //! config.json; the chats are in `chats`/<id> (default <dir>/chats). Each
 //! key of config.json may be set as ACORN_<KEY> instead; a path may start
-//! with "~/". The API key is DEEPSEEK_API_KEY, else config.json's
-//! `deepseek_api_key` (an app opened from the Finder has no shell's
+//! with "~/". The API key is GEMINI_API_KEY, else config.json's
+//! `gemini_api_key` (an app opened from the Finder has no shell's
 //! variables); no program the agent runs inherits it (`machine`). The
 //! `budget` caps what every chat's calls spend a day (`chat::usage`).
 
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// The bytes past which a chat's view merges to half (`memory` HIGH): 2 MB
-/// at most, ~500k tokens, fits DeepSeek's 1M context (a recall eval: 83% at
+/// at most, ~500k tokens, fits Gemini 4's 1M context (a recall eval: 83% at
 /// 128 KB, 100% at 2 MB); less, if set, down to 32 KB: a line is up to
 /// `memory::NODE` bytes and a view merges whole lines only, so one set to
 /// a few lines' bytes would stay over them.
@@ -30,7 +30,7 @@ fn view(set: &str) -> usize {
 
 /// The variable the API key is read from, kept out of every job's
 /// environment.
-pub const KEY_VAR: &str = "DEEPSEEK_API_KEY";
+pub const KEY_VAR: &str = "GEMINI_API_KEY";
 /// The web server's token, when its host hands one in (`acorn-host`).
 pub const TOKEN_VAR: &str = "ACORN_TOKEN";
 
@@ -98,7 +98,7 @@ impl Config {
     let key = std::env::var(KEY_VAR)
       .ok()
       .filter(|k| !k.trim().is_empty())
-      .unwrap_or_else(|| get("deepseek_api_key", ""));
+      .unwrap_or_else(|| get("gemini_api_key", ""));
     Ok(Config {
       chats: expand(&get("chats", &format!("{}/chats", dir.display()))),
       work: expand(&get("work", &format!("{}/work", dir.display()))),
@@ -121,10 +121,18 @@ impl Config {
 }
 
 /// The variables Acorn's own keys may be in, kept from every program the
-/// agent runs (`machine`): DeepSeek's, Jev's, the server's token, and each
+/// agent runs (`machine`): Gemini's, Jev's, the server's token, and each
 /// bridge's.
 pub fn hidden() -> Vec<&'static str> {
-  let mut all = vec![KEY_VAR, crate::decide::KEY_VAR, TOKEN_VAR];
+  let mut all = vec![
+    KEY_VAR,
+    "ACORN_GEMINI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "ACORN_DEEPSEEK_API_KEY",
+    crate::decide::KEY_VAR,
+    crate::web::KEY_VAR,
+    TOKEN_VAR,
+  ];
   all.extend(crate::bridge::all().iter().flat_map(|b| b.secrets()));
   all
 }
@@ -176,12 +184,9 @@ fn budget(text: &str) -> Result<Option<f64>, String> {
   }
 }
 
-/// `model:effort` or `effort`, the only model being deepseek-flash.
+/// Old configs could prefix an effort with the previous provider's model.
 fn run(key: &str, text: &str) -> Result<Effort, String> {
-  let (model, effort) = text.split_once(':').map_or((None, text), |(m, e)| (Some(m), e));
-  if model.is_some_and(|m| m != crate::ai::deepseek::MODEL) {
-    return Err(format!("{key} is no model:effort offered here: {text}"));
-  }
+  let effort = text.strip_prefix("deepseek-flash:").unwrap_or(text);
   Effort::parse(effort).ok_or_else(|| format!("{key} is no effort offered here: {text}"))
 }
 

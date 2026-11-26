@@ -86,15 +86,15 @@ fn base_docs() -> BTreeMap<String, String> {
       "sh(cmd: string, opts?: {{timeout: number?, cwd: string?}}): {{stdout: string, stderr: string, code: number, timed_out: boolean, truncated: boolean, full: string?, full_err: string?}}   -- runs bash -c; timeout in seconds, {SH_TIMEOUT} by default, at most {SH_TIMEOUT_MAX}; a stream past {OUT} KB keeps only its last {OUT} KB (truncated), the whole of it in the file full (stdout) or full_err (stderr)",
       OUT = machine::OUTPUT_BYTES / 1000,
     )),
-    ("web_search", "web_search(query: string, opts?: {count: number?, question: string?}): string   -- each result's title, url, site, date and summary, best first. query: 1 to 128 characters, with operators: site:github.com (several joined with OR), -site:, -word, \"exact phrase\", -\"phrase\", lang:en,zh, after:2025-01-01, before:2026. count: 1 to 50 (10 by default). question: the user's question that led to it".to_string()),
+    ("web_search", "web_search(query: string, opts?: {count: number?, question: string?}): string   -- search Exa with a natural-language query. Returns titles, URLs, dates and relevant passages. Count is 1 to 50 (default 10). Optionally supply the question behind the search. Needs EXA_API_KEY".to_string()),
     ("web_fetch", format!(
-      "web_fetch(url: string, opts?: {{at: number?}}): string   -- a page's title and content as Markdown; past {CAP} characters it comes in pages from character at, saying where to go on",
+      "web_fetch(url: string, opts?: {{at: number?}}): string   -- read a page through Exa Contents. Returns the title and Markdown, paginated after {CAP} characters. Use at to continue from the given character offset. Needs EXA_API_KEY",
       CAP = crate::clip::CAP,
     )),
     ("decide", "decide(state: any, questions: {[name]: {type: \"noul\" | \"choice\" | \"score\", instructions: string | table, criteria: table?}}): {[name]: answer}   -- judgments from TypeSafe's Jev, all in one pass: a noul answers .noul, the probability of yes (code decides: about >= 0.7 yes, <= 0.3 no, between unsettled); a choice (criteria: option -> description) .choice, .confidence and .probabilities; a score (criteria: levels, lowest first) .score and .probabilities. Ask one narrow judgment per question, naming parts of state by path in backticks (`items.h1`). Needs TYPESAFE_API_KEY".to_string()),
     ("relevant", "relevant(items: {string} | string, about: string, opts?: {split: (\"lines\" | \"paragraphs\" | \"sections\" | number)?, keep: number?}): ({string}, string, {number})   -- the items Jev judges relevant to about, in their order; a note of how many were left out, with the nearly-kept ones' first lines, and those held out for trying to give orders to an AI reading them (prompts and docs written for a model are not); and each item's probability of relevance. Put a big output (grep hits, search results, a log, a page) through it and print what is kept: it reads for meaning, so it drops a word used in another sense. A string is split by lines (the default: grep hits, a log), paragraphs, sections (a page or doc: each heading and what follows it, the way to read one) or windows of n lines (code). keep: 0.5 by default. Needs TYPESAFE_API_KEY".to_string()),
     ("view", format!("view(path: string): string   -- attaches a png, jpeg, gif or webp image (scaled to fit) to this call's result, so you see it on your next step; at most {PICS} a call")),
-    ("ocr", "ocr(path: string): string   -- the text of a PDF, Word or PowerPoint document or an image, recognized by DeepSeek page by page, each page under a \"--- page n ---\" line when there are several (a PDF read for its layout: headings, tables), raw: text read off a page keeps DeepSeek's <｜ref｜>label<｜/ref｜><｜box｜>[[x1, y1, x2, y2]]<｜/box｜> marks, corners from 0 to 1000 of the page's width and height; for code to search, slice, save or put through relevant".to_string()),
+    ("ocr", "ocr(path: string): string   -- transcribes a PDF, Word or PowerPoint document or image with Gemini, preserving headings, lists and tables in Markdown, with a \"--- page n ---\" line per page when there are several".to_string()),
     ("json", "json.encode(v): string, json.decode(s: string): any".to_string()),
     ("vars", "vars(): your globals, by name".to_string()),
   ]
@@ -281,6 +281,7 @@ struct Run {
   waiting: usize,
   imgs: Vec<Img>,
   cancel: CancellationToken,
+  meter: Option<crate::ai::Meter>,
   /// A plugin is loading: no tool may act.
   loading: bool,
 }
@@ -315,7 +316,7 @@ static RUNS: AtomicU64 = AtomicU64::new(1);
 static VMS: LazyLock<Mutex<HashMap<PathBuf, Arc<Slot>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A luau call, run in its caller's VM.
-pub async fn run(input: &Json, cwd: PathBuf, cancel: CancellationToken) -> Out {
+pub async fn run(input: &Json, cwd: PathBuf, cancel: CancellationToken, meter: crate::ai::Meter) -> Out {
   let text = |k: &str| input[k].as_str().unwrap_or_default();
   if text("description").trim().is_empty() {
     return Out::fail("invalid description: expected a non-empty string");
@@ -326,16 +327,18 @@ pub async fn run(input: &Json, cwd: PathBuf, cancel: CancellationToken) -> Out {
   if let Err(err) = std::fs::create_dir_all(&cwd) {
     return Out::fail(err.to_string());
   }
-  eval(cwd, text("code"), CHUNK, cancel).await
+  eval_with(&plugins::dir(), cwd, text("code"), CHUNK, cancel, Some(meter)).await
 }
 
-/// `code` run in the VM of the caller in `cwd`, with `budget` of Luau time.
-async fn eval(cwd: PathBuf, code: &str, budget: Duration, cancel: CancellationToken) -> Out {
-  eval_with(&plugins::dir(), cwd, code, budget, cancel).await
-}
-
-/// `eval`, with the plugins in `dir`.
-async fn eval_with(dir: &Path, cwd: PathBuf, code: &str, budget: Duration, cancel: CancellationToken) -> Out {
+/// Run the caller's code with the plugins in `dir`.
+async fn eval_with(
+  dir: &Path,
+  cwd: PathBuf,
+  code: &str,
+  budget: Duration,
+  cancel: CancellationToken,
+  meter: Option<crate::ai::Meter>,
+) -> Out {
   let slot = {
     let mut vms = VMS.lock();
     vms.retain(|_, s| Arc::strong_count(s) > 1 || s.used.lock().elapsed() < IDLE);
@@ -360,7 +363,7 @@ async fn eval_with(dir: &Path, cwd: PathBuf, code: &str, budget: Duration, cance
     }
   }
   let vm = held.as_mut().expect("made above");
-  let out = vm.eval(code, budget, cancel).await;
+  let out = vm.eval(code, budget, cancel, meter).await;
   *slot.used.lock() = Instant::now();
   out
 }
@@ -566,10 +569,17 @@ impl Vm {
     load(code)
   }
 
-  async fn eval(&mut self, code: &str, budget: Duration, cancel: CancellationToken) -> Out {
+  async fn eval(
+    &mut self,
+    code: &str,
+    budget: Duration,
+    cancel: CancellationToken,
+    meter: Option<crate::ai::Meter>,
+  ) -> Out {
     *self.run.lock() = Run {
       id: RUNS.fetch_add(1, Ordering::Relaxed),
       cancel,
+      meter,
       ..Run::default()
     };
     let changed = match self.refresh() {

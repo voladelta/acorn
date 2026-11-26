@@ -1,11 +1,10 @@
 //! Effort
 //! ======
-//! How hard a call thinks: all a call picks, DeepSeek Flash being the one
-//! model (`ai::deepseek`). An assistant's is part of who it is.
+//! How hard a call thinks. An assistant's effort is part of who it is.
 
 use serde::{Deserialize, Serialize};
 
-/// The thinking efforts DeepSeek's Responses API takes.
+/// The stored thinking preferences, mapped to the selected model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Effort {

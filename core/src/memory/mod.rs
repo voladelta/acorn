@@ -55,6 +55,7 @@ pub use purge::{GRACE, erase, wipe};
 
 use crate::clip;
 use crate::effort::Effort;
+use crate::model::Model;
 use crate::{Img, Kind, Served, config, disk, names};
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
@@ -93,7 +94,7 @@ const SCHEMA: &str = "pragma journal_mode = wal; pragma synchronous = normal; pr
 create table if not exists msgs (log text not null, i integer not null, kind text not null, text text not null, date text not null,
     images text not null, imported integer not null, line text, more integer not null, size integer not null, primary key (log, i)) without rowid;
 create table if not exists nodes (slot integer primary key, text text not null);
-create table if not exists agents (name text primary key, effort text) without rowid;
+create table if not exists agents (name text primary key, effort text, model text) without rowid;
 create table if not exists state (id integer primary key check (id = 1), json text not null);
 create table if not exists import_batch (id integer primary key check (id = 1), a integer not null, b integer not null,
     said integer not null, spent real not null, paused integer not null);
@@ -411,13 +412,15 @@ impl Memory {
     db.busy_timeout(std::time::Duration::from_secs(600))?;
     db.execute_batch(SCHEMA)?;
     purge::tables(&db)?;
-    let efforts: bool = db.query_row(
-      "select exists (select 1 from pragma_table_info('agents') where name = 'effort')",
-      [],
-      |r| r.get(0),
-    )?;
-    if !efforts {
-      db.execute("alter table agents add column effort text", [])?;
+    for column in ["effort", "model"] {
+      let exists: bool = db.query_row(
+        "select exists (select 1 from pragma_table_info('agents') where name = ?)",
+        [column],
+        |r| r.get(0),
+      )?;
+      if !exists {
+        db.execute(&format!("alter table agents add column {column} text"), [])?;
+      }
     }
     db.execute(
       "insert into search (log, i, text) select log, i, text from msgs where not exists (select 1 from search)",
@@ -862,15 +865,14 @@ impl Memory {
     names.unwrap_or_default()
   }
 
-  /// A new agent, at its effort (none: the run's).
-  pub fn agent_new(&mut self, effort: Option<Effort>) -> Result<String> {
+  pub fn agent_new(&mut self, effort: Option<Effort>, model: Model) -> Result<String> {
     loop {
       let name = names::random();
       let effort = effort.map(Effort::as_str);
-      if self
-        .db
-        .execute("insert or ignore into agents values (?, ?)", params![name, effort])?
-        == 1
+      if self.db.execute(
+        "insert or ignore into agents (name, effort, model) values (?, ?, ?)",
+        params![name, effort, model.name()],
+      )? == 1
       {
         self.agents.insert(name.clone(), 0);
         return Ok(name);
@@ -886,14 +888,17 @@ impl Memory {
     }
   }
 
-  /// An agent's effort; None: the run's (or no such agent).
-  pub fn agent_effort(&self, name: &str) -> Option<Effort> {
-    let effort: Option<String> = self
+  pub fn agent_settings(&self, name: &str) -> (Option<Effort>, Model) {
+    let (effort, model): (Option<String>, Option<String>) = self
       .db
-      .query_row("select effort from agents where name = ?", [name], |r| r.get(0))
-      .optional()
-      .ok()??;
-    Effort::parse(&effort?)
+      .query_row("select effort, model from agents where name = ?", [name], |r| {
+        Ok((r.get(0)?, r.get(1)?))
+      })
+      .unwrap_or_default();
+    (
+      effort.as_deref().and_then(Effort::parse),
+      model.as_deref().and_then(Model::parse).unwrap_or_default(),
+    )
   }
 
   /// A message to an agent's log: its length read once, then counted.
@@ -1165,7 +1170,7 @@ mod tests {
   fn an_agents_log_is_read_within_bounds() {
     let dir = tempfile::tempdir().unwrap();
     let mut mem = Memory::load(dir.path()).unwrap();
-    let name = mem.agent_new(None).unwrap();
+    let name = mem.agent_new(None, super::Model::Neon).unwrap();
     let push = |mem: &mut Memory, kind, size: usize| mem.agent_push(&name, kind, &"x".repeat(size)).unwrap();
     push(&mut mem, Kind::User, 3000); // its task
     push(&mut mem, Kind::Acorn, 100);
